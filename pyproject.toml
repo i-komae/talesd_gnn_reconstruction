@@ -1,0 +1,28 @@
+[project]
+name = "talesd-gnn-reconstruction"
+version = "0.1.0"
+description = "GNN-based reconstruction prototype for TALE-SD events"
+readme = "README.md"
+authors = [
+    { name = "Ichiro Komae", email = "i.komae@cosmicray-ocu.jp" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "dstio",
+    "h5py>=3.10",
+    "matplotlib>=3.8",
+    "numpy>=2.0",
+    "torch>=2.3",
+    "tqdm>=4.66",
+]
+
+[project.scripts]
+talesd-gnn = "talesd_gnn_reconstruction.cli:main"
+talesd-gnn-reconstruction = "talesd_gnn_reconstruction.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.4,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+dstio = { path = "../dstio", editable = true }
