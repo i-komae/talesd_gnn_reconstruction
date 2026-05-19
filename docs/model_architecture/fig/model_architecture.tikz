@@ -1,0 +1,117 @@
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={draw, rounded corners=1.5pt, align=center, minimum height=9mm, inner xsep=5pt, inner ysep=4pt},
+  input/.style={box, fill=blue!7},
+  enc/.style={box, fill=green!8},
+  gnn/.style={box, fill=orange!10},
+  output/.style={box, fill=red!7},
+  note/.style={align=left, font=\scriptsize},
+  arrow/.style={-{Latex[length=2.5mm]}, thick}
+]
+
+\node[input, text width=36mm] (x) {
+  Node physics features\\
+  $\mathbf{X}\in\mathbb{R}^{N_v\times F_{\mathrm{node}}}$\\
+  \scriptsize position, elevation, local density, timing, signal, calibration
+};
+\node[input, text width=36mm, below=7mm of x] (w) {
+  Waveform traces\\
+  $\mathbf{W}\in\mathbb{R}^{N_v\times4\times128}$\\
+  \scriptsize raw window + accepted-pulse compact trace
+};
+\node[input, text width=36mm, below=7mm of w] (p) {
+  Accepted pulse features\\
+  $\mathbf{P}\in\mathbb{R}^{N_p\times F_{\mathrm{pulse}}}$\\
+  \scriptsize onset time, charge, order
+};
+\node[input, text width=36mm, below=7mm of p] (e) {
+  Graph edges\\
+  $\mathbf{A}\in\mathbb{R}^{N_e\times F_{\mathrm{edge}}}$\\
+  \scriptsize $\Delta x,\Delta t,d,\log\rho$ ratio, Ising weights
+};
+
+\node[enc, text width=34mm, right=16mm of w] (wenc) {
+  Waveform encoder\\
+  Conv1D $\rightarrow$ SiLU\\
+  Conv1D $\rightarrow$ GRU\\
+  or Transformer\\
+  $N_v\times D_w$
+};
+\node[enc, text width=34mm, right=16mm of p] (penc) {
+  Pulse encoder\\
+  MLP + node-wise\\
+  mean/max pooling\\
+  $N_v\times2H$
+};
+\node[enc, text width=34mm, right=16mm of x] (xenc) {
+  Node encoder\\
+  MLP on\\
+  $[\mathbf{X},\mathbf{w},\mathbf{p}]$\\
+  $N_v\times H$
+};
+
+\node[gnn, text width=42mm, right=17mm of xenc] (mp) {
+  $L_g$ gated edge-message layers\\
+  \vspace{1mm}
+  $m_{ij}=\mathrm{MLP}([h_i,h_j,a_{ij}])$\\
+  gate$(m_{ij})$, mean/max aggregation\\
+  residual + LayerNorm + FFN\\
+  $N_v\times H$
+};
+
+\node[gnn, text width=38mm, right=16mm of mp] (pool) {
+  Graph readout\\
+  mean pool\\
+  max pool\\
+  $K$ attentive heads\\
+  $\mathbf{g}\in\mathbb{R}^{H(2+K)}$
+};
+
+\node[enc, text width=30mm, right=14mm of pool] (shared) {
+  Shared MLP\\
+  $H(2+K)\rightarrow2H\rightarrow H$
+};
+
+\node[output, text width=30mm, above right=0mm and 13mm of shared] (energy) {
+  Energy head\\
+  $\log_{10}(E/\mathrm{eV})$
+};
+\node[output, text width=30mm, right=13mm of shared] (core) {
+  Core head\\
+  $(x_c,y_c,z_c)$ km
+};
+\node[output, text width=30mm, below right=0mm and 13mm of shared] (dir) {
+  Direction head\\
+  $(\hat n_x,\hat n_y,\hat n_z)$
+};
+\node[output, text width=30mm, below=8mm of dir] (mass) {
+  Optional mass head\\
+  $p(\mathrm{Fe})$
+};
+
+\draw[arrow] (w) -- (wenc);
+\draw[arrow] (p) -- (penc);
+\draw[arrow] (x) -- (xenc);
+\draw[arrow] (wenc.north) -- (xenc.south);
+\draw[arrow] (penc.east) -- ++(7mm,0) |- ([yshift=-2.5mm]xenc.east);
+\draw[arrow] (xenc) -- (mp);
+\draw[arrow] (e) -| (mp);
+\draw[arrow] (mp) -- (pool);
+\draw[arrow] (pool) -- (shared);
+\draw[arrow] (shared) -- (energy);
+\draw[arrow] (shared) -- (core);
+\draw[arrow] (shared) -- (dir);
+\draw[arrow] (shared) |- (mass);
+
+\node[note, below=6mm of e, text width=70mm] (idnote) {
+  No arbitrary detector-ID embedding is used in the default model. Station-dependent roles enter through physical geometry, local detector spacing, calibration/noise values, and waveform response.
+};
+
+\begin{scope}[on background layer]
+  \node[draw=gray!50, rounded corners=2pt, fit=(x)(w)(p)(e), inner sep=4mm, label={[font=\small]above:Inputs}] {};
+  \node[draw=gray!50, rounded corners=2pt, fit=(wenc)(penc)(xenc), inner sep=4mm, label={[font=\small]above:Per-node encoders}] {};
+  \node[draw=gray!50, rounded corners=2pt, fit=(mp)(pool), inner sep=4mm, label={[font=\small]above:Graph network}] {};
+  \node[draw=gray!50, rounded corners=2pt, fit=(shared)(energy)(core)(dir)(mass), inner sep=4mm, label={[font=\small]above:Outputs}] {};
+\end{scope}
+
+\end{tikzpicture}

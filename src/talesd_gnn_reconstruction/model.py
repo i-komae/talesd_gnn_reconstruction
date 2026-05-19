@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 from torch import nn
 
@@ -13,6 +15,38 @@ def _make_mlp(in_dim: int, hidden_dim: int, out_dim: int, dropout: float) -> nn.
     )
 
 
+def _scatter_mean(values: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
+    out = torch.zeros(num_graphs, values.shape[1], dtype=values.dtype, device=values.device)
+    out.index_add_(0, batch, values)
+    counts = torch.zeros(num_graphs, 1, dtype=values.dtype, device=values.device)
+    counts.index_add_(0, batch, torch.ones(values.shape[0], 1, dtype=values.dtype, device=values.device))
+    return out / counts.clamp_min(1.0)
+
+
+def _scatter_max(values: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
+    out = torch.full((num_graphs, values.shape[1]), -torch.inf, dtype=values.dtype, device=values.device)
+    if hasattr(out, "scatter_reduce_"):
+        index = batch[:, None].expand(-1, values.shape[1])
+        out.scatter_reduce_(0, index, values, reduce="amax", include_self=True)
+        return torch.where(torch.isfinite(out), out, torch.zeros_like(out))
+    rows = []
+    for graph_index in range(num_graphs):
+        graph_values = values[batch == graph_index]
+        rows.append(torch.max(graph_values, dim=0).values if graph_values.numel() else torch.zeros(values.shape[1], dtype=values.dtype, device=values.device))
+    return torch.stack(rows, dim=0)
+
+
+def _scatter_softmax(scores: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
+    if scores.ndim == 1:
+        scores = scores[:, None]
+    max_values = _scatter_max(scores, batch, num_graphs)
+    stable = scores - max_values[batch]
+    weights = torch.exp(torch.clamp(stable, min=-80.0, max=40.0))
+    denom = torch.zeros(num_graphs, scores.shape[1], dtype=scores.dtype, device=scores.device)
+    denom.index_add_(0, batch, weights)
+    return weights / denom[batch].clamp_min(1.0e-12)
+
+
 class EdgeMessageLayer(nn.Module):
     def __init__(self, hidden_dim: int, edge_dim: int, dropout: float = 0.05):
         super().__init__()
@@ -20,20 +54,249 @@ class EdgeMessageLayer(nn.Module):
         self.update = _make_mlp(hidden_dim * 2, hidden_dim, hidden_dim, dropout)
         self.norm = nn.LayerNorm(hidden_dim)
 
-    def forward(self, node: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
-        if edge_index.numel() == 0:
+    def forward(
+        self,
+        node: torch.Tensor,
+        src: torch.Tensor | None,
+        dst: torch.Tensor | None,
+        edge_attr: torch.Tensor,
+        degree: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if src is None or dst is None or degree is None:
             aggregate = torch.zeros_like(node)
         else:
-            src = edge_index[0]
-            dst = edge_index[1]
             message_input = torch.cat([node[src], node[dst], edge_attr], dim=-1)
             messages = self.message(message_input)
             aggregate = torch.zeros_like(node)
             aggregate.index_add_(0, dst, messages)
-            degree = torch.zeros(node.shape[0], 1, dtype=node.dtype, device=node.device)
-            degree.index_add_(0, dst, torch.ones(messages.shape[0], 1, dtype=node.dtype, device=node.device))
             aggregate = aggregate / degree.clamp_min(1.0)
         return self.norm(node + self.update(torch.cat([node, aggregate], dim=-1)))
+
+
+class GatedEdgeMessageLayer(nn.Module):
+    def __init__(self, hidden_dim: int, edge_dim: int, dropout: float = 0.05):
+        super().__init__()
+        self.message = _make_mlp(hidden_dim * 2 + edge_dim, hidden_dim, hidden_dim, dropout)
+        self.gate = nn.Sequential(nn.Linear(hidden_dim * 2 + edge_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, 1))
+        self.update = nn.Sequential(
+            nn.Linear(hidden_dim * 3, hidden_dim * 2),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+        )
+        self.ffn = nn.Sequential(
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim * 2),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+        )
+        self.norm = nn.LayerNorm(hidden_dim)
+
+    def forward(
+        self,
+        node: torch.Tensor,
+        src: torch.Tensor | None,
+        dst: torch.Tensor | None,
+        edge_attr: torch.Tensor,
+        degree: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if src is None or dst is None or degree is None:
+            mean_aggregate = torch.zeros_like(node)
+            max_aggregate = torch.zeros_like(node)
+        else:
+            message_input = torch.cat([node[src], node[dst], edge_attr], dim=-1)
+            messages = self.message(message_input) * torch.sigmoid(self.gate(message_input))
+            mean_aggregate = torch.zeros_like(node)
+            mean_aggregate.index_add_(0, dst, messages)
+            mean_aggregate = mean_aggregate / degree.clamp_min(1.0)
+            max_aggregate = torch.full_like(node, -torch.inf)
+            if hasattr(max_aggregate, "scatter_reduce_"):
+                index = dst[:, None].expand(-1, messages.shape[1])
+                max_aggregate.scatter_reduce_(0, index, messages, reduce="amax", include_self=True)
+                max_aggregate = torch.where(torch.isfinite(max_aggregate), max_aggregate, torch.zeros_like(max_aggregate))
+            else:
+                max_aggregate = torch.zeros_like(node)
+                for node_index in torch.unique(dst).tolist():
+                    mask = dst == int(node_index)
+                    max_aggregate[int(node_index)] = torch.max(messages[mask], dim=0).values
+        node = self.norm(node + self.update(torch.cat([node, mean_aggregate, max_aggregate], dim=-1)))
+        return node + self.ffn(node)
+
+
+class AttentiveReadout(nn.Module):
+    def __init__(self, hidden_dim: int, heads: int = 4):
+        super().__init__()
+        self.heads = max(int(heads), 1)
+        self.score = nn.Linear(hidden_dim, self.heads)
+
+    def forward(self, node: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
+        scores = self.score(node)
+        weights = _scatter_softmax(scores, batch, num_graphs)
+        outputs = []
+        for head in range(self.heads):
+            weighted = node * weights[:, head : head + 1]
+            pooled = torch.zeros(num_graphs, node.shape[1], dtype=node.dtype, device=node.device)
+            pooled.index_add_(0, batch, weighted)
+            outputs.append(pooled)
+        return torch.cat(outputs, dim=-1)
+
+
+class DetectorIdEmbedding(nn.Module):
+    def __init__(self, detector_lids: Sequence[int] | None = None, embedding_dim: int = 0):
+        super().__init__()
+        self.embedding_dim = max(int(embedding_dim), 0)
+        raw_detector_lids = [] if detector_lids is None else detector_lids
+        lids = sorted({int(lid) for lid in raw_detector_lids if int(lid) >= 0})
+        self.register_buffer("detector_lid_values", torch.as_tensor(lids, dtype=torch.long), persistent=True)
+        self.unknown_index = len(lids)
+        self.embedding = nn.Embedding(len(lids) + 1, self.embedding_dim) if self.embedding_dim > 0 else None
+
+    @property
+    def output_dim(self) -> int:
+        return self.embedding_dim
+
+    def forward(
+        self,
+        detector_lids: torch.Tensor | None,
+        num_nodes: int,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if self.embedding is None:
+            return torch.zeros(num_nodes, 0, dtype=dtype, device=device)
+        if detector_lids is None:
+            indices = torch.full((num_nodes,), self.unknown_index, dtype=torch.long, device=device)
+            return self.embedding(indices).to(dtype=dtype)
+
+        lids = detector_lids.to(device=device, dtype=torch.long).reshape(-1)
+        if lids.numel() != num_nodes:
+            padded = torch.full((num_nodes,), -1, dtype=torch.long, device=device)
+            n_copy = min(int(lids.numel()), int(num_nodes))
+            if n_copy > 0:
+                padded[:n_copy] = lids[:n_copy]
+            lids = padded
+
+        values = self.detector_lid_values.to(device=device)
+        if values.numel() == 0:
+            indices = torch.full_like(lids, self.unknown_index)
+        else:
+            positions = torch.searchsorted(values, lids)
+            safe_positions = torch.clamp(positions, max=values.numel() - 1)
+            matched = (positions < values.numel()) & (values[safe_positions] == lids)
+            unknown = torch.full_like(positions, self.unknown_index)
+            indices = torch.where(matched, positions, unknown)
+        return self.embedding(indices).to(dtype=dtype)
+
+
+class WaveformEncoder(nn.Module):
+    def __init__(
+        self,
+        waveform_channels: int,
+        waveform_length: int,
+        embedding_dim: int,
+        mode: str = "cnn-gru",
+        dropout: float = 0.05,
+        transformer_heads: int = 4,
+        transformer_layers: int = 1,
+    ):
+        super().__init__()
+        self.mode = str(mode)
+        self.waveform_channels = max(int(waveform_channels), 0)
+        self.waveform_length = max(int(waveform_length), 0)
+        self.embedding_dim = max(int(embedding_dim), 0)
+        if self.mode == "none" or self.embedding_dim == 0:
+            self.mode = "none"
+        if self.mode != "none" and (self.waveform_channels <= 0 or self.waveform_length <= 0):
+            raise ValueError("waveform encoder requires waveform_channels > 0 and waveform_length > 0")
+
+        if self.mode == "none":
+            self.encoder = None
+            self.gru = None
+            self.proj = None
+            self.positional = None
+            self.transformer = None
+            return
+
+        conv_hidden = max(self.embedding_dim // 2, 16)
+        self.encoder = nn.Sequential(
+            nn.Conv1d(self.waveform_channels, conv_hidden, kernel_size=5, padding=2),
+            nn.SiLU(),
+            nn.LayerNorm([conv_hidden, self.waveform_length]),
+            nn.Conv1d(conv_hidden, self.embedding_dim, kernel_size=5, padding=2),
+            nn.SiLU(),
+        )
+        if self.mode == "cnn-gru":
+            gru_hidden = max(self.embedding_dim // 2, 1)
+            self.gru = nn.GRU(
+                input_size=self.embedding_dim,
+                hidden_size=gru_hidden,
+                num_layers=1,
+                batch_first=True,
+                bidirectional=True,
+            )
+            self.proj = nn.Sequential(
+                nn.Linear(gru_hidden * 2 + self.embedding_dim * 2, self.embedding_dim),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+            )
+            self.positional = None
+            self.transformer = None
+        elif self.mode == "transformer":
+            heads = max(int(transformer_heads), 1)
+            if self.embedding_dim % heads != 0:
+                heads = 1
+            layer = nn.TransformerEncoderLayer(
+                d_model=self.embedding_dim,
+                nhead=heads,
+                dim_feedforward=self.embedding_dim * 2,
+                dropout=dropout,
+                activation="gelu",
+                batch_first=True,
+                norm_first=True,
+            )
+            self.transformer = nn.TransformerEncoder(layer, num_layers=max(int(transformer_layers), 1))
+            self.positional = nn.Parameter(torch.zeros(1, self.waveform_length, self.embedding_dim))
+            self.proj = nn.Sequential(
+                nn.Linear(self.embedding_dim * 2, self.embedding_dim),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+            )
+            self.gru = None
+        elif self.mode == "cnn":
+            self.proj = nn.Sequential(
+                nn.Linear(self.embedding_dim * 2, self.embedding_dim),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+            )
+            self.gru = None
+            self.positional = None
+            self.transformer = None
+        else:
+            raise ValueError("waveform_encoder must be 'none', 'cnn', 'cnn-gru', or 'transformer'")
+
+    @property
+    def output_dim(self) -> int:
+        return 0 if self.mode == "none" else self.embedding_dim
+
+    def forward(self, waveform_x: torch.Tensor | None, num_nodes: int, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        if self.mode == "none":
+            return torch.zeros(num_nodes, 0, dtype=dtype, device=device)
+        if waveform_x is None:
+            raise ValueError("waveform encoder is enabled, but batch has no waveform_x")
+        waveform = waveform_x.to(device=device, dtype=dtype)
+        if waveform.ndim != 3 or waveform.shape[0] != num_nodes or waveform.shape[1] != self.waveform_channels:
+            raise ValueError("waveform_x shape does not match model waveform configuration")
+        encoded = self.encoder(waveform).transpose(1, 2)
+        if self.mode == "cnn-gru":
+            recurrent, _hidden = self.gru(encoded)
+            pooled = torch.cat([recurrent[:, -1], encoded.mean(dim=1), encoded.amax(dim=1)], dim=-1)
+            return self.proj(pooled)
+        if self.mode == "transformer":
+            transformed = self.transformer(encoded + self.positional.to(device=device, dtype=dtype))
+            return self.proj(torch.cat([transformed.mean(dim=1), transformed.amax(dim=1)], dim=-1))
+        return self.proj(torch.cat([encoded.mean(dim=1), encoded.amax(dim=1)], dim=-1))
 
 
 class TaleSdGNN(nn.Module):
@@ -43,28 +306,63 @@ class TaleSdGNN(nn.Module):
         edge_dim: int,
         pulse_dim: int = 0,
         target_dim: int = 7,
+        classification_dim: int = 0,
         hidden_dim: int = 128,
         num_layers: int = 4,
         dropout: float = 0.05,
+        detector_lids: Sequence[int] | None = None,
+        detector_embedding_dim: int = 0,
+        waveform_channels: int = 0,
+        waveform_length: int = 0,
+        waveform_encoder: str = "none",
+        waveform_embedding_dim: int = 64,
+        waveform_transformer_heads: int = 4,
+        waveform_transformer_layers: int = 1,
     ):
         super().__init__()
+        raw_detector_lids = [] if detector_lids is None else detector_lids
+        detector_lids_list = sorted({int(lid) for lid in raw_detector_lids if int(lid) >= 0})
         self.config = {
+            "architecture": "baseline",
             "node_dim": node_dim,
             "edge_dim": edge_dim,
             "pulse_dim": pulse_dim,
             "target_dim": target_dim,
+            "classification_dim": classification_dim,
             "hidden_dim": hidden_dim,
             "num_layers": num_layers,
             "dropout": dropout,
+            "detector_lids": detector_lids_list,
+            "detector_embedding_dim": int(detector_embedding_dim),
+            "waveform_channels": int(waveform_channels),
+            "waveform_length": int(waveform_length),
+            "waveform_encoder": str(waveform_encoder),
+            "waveform_embedding_dim": int(waveform_embedding_dim),
+            "waveform_transformer_heads": int(waveform_transformer_heads),
+            "waveform_transformer_layers": int(waveform_transformer_layers),
         }
         self.pulse_dim = int(pulse_dim)
         self.hidden_dim = int(hidden_dim)
+        self.target_dim = int(target_dim)
+        self.classification_dim = int(classification_dim)
+        self.detector_encoder = DetectorIdEmbedding(detector_lids_list, detector_embedding_dim)
+        self.waveform_encoder = WaveformEncoder(
+            waveform_channels=waveform_channels,
+            waveform_length=waveform_length,
+            embedding_dim=waveform_embedding_dim,
+            mode=waveform_encoder,
+            dropout=dropout,
+            transformer_heads=waveform_transformer_heads,
+            transformer_layers=waveform_transformer_layers,
+        )
         if self.pulse_dim > 0:
             self.pulse_encoder = _make_mlp(self.pulse_dim, hidden_dim, hidden_dim, dropout)
             node_input_dim = node_dim + hidden_dim * 2
         else:
             self.pulse_encoder = None
             node_input_dim = node_dim
+        node_input_dim += self.detector_encoder.output_dim
+        node_input_dim += self.waveform_encoder.output_dim
         self.node_encoder = nn.Sequential(nn.Linear(node_input_dim, hidden_dim), nn.SiLU(), nn.LayerNorm(hidden_dim))
         self.layers = nn.ModuleList(
             [EdgeMessageLayer(hidden_dim=hidden_dim, edge_dim=edge_dim, dropout=dropout) for _ in range(num_layers)]
@@ -77,6 +375,14 @@ class TaleSdGNN(nn.Module):
             nn.SiLU(),
             nn.Linear(hidden_dim // 2, target_dim),
         )
+        self.class_head = None
+        if self.classification_dim > 0:
+            self.class_head = nn.Sequential(
+                nn.Linear(hidden_dim * 2, hidden_dim // 2),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim // 2, self.classification_dim),
+            )
 
     def _pool(self, node: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
         mean = torch.zeros(num_graphs, node.shape[1], dtype=node.dtype, device=node.device)
@@ -85,14 +391,20 @@ class TaleSdGNN(nn.Module):
         counts.index_add_(0, batch, torch.ones(node.shape[0], 1, dtype=node.dtype, device=node.device))
         mean = mean / counts.clamp_min(1.0)
 
-        max_values = []
-        for graph_index in range(num_graphs):
-            graph_nodes = node[batch == graph_index]
-            if graph_nodes.numel() == 0:
-                max_values.append(torch.zeros(node.shape[1], dtype=node.dtype, device=node.device))
-            else:
-                max_values.append(torch.max(graph_nodes, dim=0).values)
-        max_pool = torch.stack(max_values, dim=0)
+        max_pool = torch.full_like(mean, -torch.inf)
+        if hasattr(max_pool, "scatter_reduce_"):
+            index = batch[:, None].expand(-1, node.shape[1])
+            max_pool.scatter_reduce_(0, index, node, reduce="amax", include_self=True)
+            max_pool = torch.where(torch.isfinite(max_pool), max_pool, torch.zeros_like(max_pool))
+        else:
+            max_values = []
+            for graph_index in range(num_graphs):
+                graph_nodes = node[batch == graph_index]
+                if graph_nodes.numel() == 0:
+                    max_values.append(torch.zeros(node.shape[1], dtype=node.dtype, device=node.device))
+                else:
+                    max_values.append(torch.max(graph_nodes, dim=0).values)
+            max_pool = torch.stack(max_values, dim=0)
         return torch.cat([mean, max_pool], dim=-1)
 
     def _pulse_pool(self, pulse_x: torch.Tensor, pulse_node_index: torch.Tensor, num_nodes: int) -> torch.Tensor:
@@ -122,6 +434,18 @@ class TaleSdGNN(nn.Module):
 
     def forward(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         x = batch["x"]
+        detector_embedding = self.detector_encoder(
+            batch.get("detector_lids"),
+            x.shape[0],
+            device=x.device,
+            dtype=x.dtype,
+        )
+        waveform_embedding = self.waveform_encoder(
+            batch.get("waveform_x"),
+            x.shape[0],
+            device=x.device,
+            dtype=x.dtype,
+        )
         if self.pulse_encoder is not None:
             pulse_summary = self._pulse_pool(
                 batch.get("pulse_x", x.new_zeros((0, self.pulse_dim))),
@@ -129,9 +453,229 @@ class TaleSdGNN(nn.Module):
                 x.shape[0],
             )
             x = torch.cat([x, pulse_summary], dim=-1)
+        if detector_embedding.shape[1] > 0:
+            x = torch.cat([x, detector_embedding], dim=-1)
+        if waveform_embedding.shape[1] > 0:
+            x = torch.cat([x, waveform_embedding], dim=-1)
 
         node = self.node_encoder(x)
+        edge_index = batch["edge_index"]
+        if edge_index.numel() == 0:
+            src = None
+            dst = None
+            degree = None
+        else:
+            src = edge_index[0]
+            dst = edge_index[1]
+            degree = batch.get("edge_dst_degree")
+            if degree is None:
+                degree = torch.zeros(node.shape[0], 1, dtype=node.dtype, device=node.device)
+                degree.index_add_(0, dst, torch.ones(dst.shape[0], 1, dtype=node.dtype, device=node.device))
+            else:
+                degree = degree.to(dtype=node.dtype)
         for layer in self.layers:
-            node = layer(node, batch["edge_index"], batch["edge_attr"])
+            node = layer(node, src, dst, batch["edge_attr"], degree)
         pooled = self._pool(node, batch["batch"], int(batch["num_graphs"]))
-        return self.head(pooled)
+        reconstruction = self.head(pooled)
+        if self.class_head is None:
+            return reconstruction
+        return torch.cat([reconstruction, self.class_head(pooled)], dim=-1)
+
+
+class PhysicsTaleSdGNN(nn.Module):
+    def __init__(
+        self,
+        node_dim: int,
+        edge_dim: int,
+        pulse_dim: int = 0,
+        target_dim: int = 7,
+        classification_dim: int = 0,
+        hidden_dim: int = 160,
+        num_layers: int = 5,
+        dropout: float = 0.05,
+        readout_heads: int = 4,
+        detector_lids: Sequence[int] | None = None,
+        detector_embedding_dim: int = 0,
+        waveform_channels: int = 0,
+        waveform_length: int = 0,
+        waveform_encoder: str = "none",
+        waveform_embedding_dim: int = 64,
+        waveform_transformer_heads: int = 4,
+        waveform_transformer_layers: int = 1,
+    ):
+        super().__init__()
+        raw_detector_lids = [] if detector_lids is None else detector_lids
+        detector_lids_list = sorted({int(lid) for lid in raw_detector_lids if int(lid) >= 0})
+        self.config = {
+            "architecture": "physics",
+            "node_dim": node_dim,
+            "edge_dim": edge_dim,
+            "pulse_dim": pulse_dim,
+            "target_dim": target_dim,
+            "classification_dim": classification_dim,
+            "hidden_dim": hidden_dim,
+            "num_layers": num_layers,
+            "dropout": dropout,
+            "readout_heads": readout_heads,
+            "detector_lids": detector_lids_list,
+            "detector_embedding_dim": int(detector_embedding_dim),
+            "waveform_channels": int(waveform_channels),
+            "waveform_length": int(waveform_length),
+            "waveform_encoder": str(waveform_encoder),
+            "waveform_embedding_dim": int(waveform_embedding_dim),
+            "waveform_transformer_heads": int(waveform_transformer_heads),
+            "waveform_transformer_layers": int(waveform_transformer_layers),
+        }
+        self.pulse_dim = int(pulse_dim)
+        self.hidden_dim = int(hidden_dim)
+        self.target_dim = int(target_dim)
+        self.classification_dim = int(classification_dim)
+        self.detector_encoder = DetectorIdEmbedding(detector_lids_list, detector_embedding_dim)
+        self.waveform_encoder = WaveformEncoder(
+            waveform_channels=waveform_channels,
+            waveform_length=waveform_length,
+            embedding_dim=waveform_embedding_dim,
+            mode=waveform_encoder,
+            dropout=dropout,
+            transformer_heads=waveform_transformer_heads,
+            transformer_layers=waveform_transformer_layers,
+        )
+        if self.pulse_dim > 0:
+            self.pulse_encoder = _make_mlp(self.pulse_dim, hidden_dim, hidden_dim, dropout)
+            node_input_dim = node_dim + hidden_dim * 2
+        else:
+            self.pulse_encoder = None
+            node_input_dim = node_dim
+        node_input_dim += self.detector_encoder.output_dim
+        node_input_dim += self.waveform_encoder.output_dim
+        self.node_encoder = nn.Sequential(
+            nn.Linear(node_input_dim, hidden_dim),
+            nn.SiLU(),
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+            nn.LayerNorm(hidden_dim),
+        )
+        self.layers = nn.ModuleList(
+            [GatedEdgeMessageLayer(hidden_dim=hidden_dim, edge_dim=edge_dim, dropout=dropout) for _ in range(num_layers)]
+        )
+        self.readout = AttentiveReadout(hidden_dim, heads=readout_heads)
+        pooled_dim = hidden_dim * (2 + readout_heads)
+        self.shared = nn.Sequential(
+            nn.Linear(pooled_dim, hidden_dim * 2),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.SiLU(),
+        )
+        self.energy_head = nn.Linear(hidden_dim, 1)
+        self.core_head = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, 3))
+        self.direction_head = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, 3))
+        self.class_head = None
+        if self.classification_dim > 0:
+            self.class_head = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim // 2, self.classification_dim),
+            )
+
+    def _pulse_pool(self, pulse_x: torch.Tensor, pulse_node_index: torch.Tensor, num_nodes: int) -> torch.Tensor:
+        if self.pulse_encoder is None:
+            return torch.zeros(num_nodes, 0, dtype=pulse_x.dtype, device=pulse_x.device)
+        if pulse_x.numel() == 0:
+            return torch.zeros(num_nodes, self.hidden_dim * 2, dtype=pulse_x.dtype, device=pulse_x.device)
+        encoded = self.pulse_encoder(pulse_x)
+        mean = torch.zeros(num_nodes, encoded.shape[1], dtype=encoded.dtype, device=encoded.device)
+        mean.index_add_(0, pulse_node_index, encoded)
+        counts = torch.zeros(num_nodes, 1, dtype=encoded.dtype, device=encoded.device)
+        counts.index_add_(0, pulse_node_index, torch.ones(encoded.shape[0], 1, dtype=encoded.dtype, device=encoded.device))
+        mean = mean / counts.clamp_min(1.0)
+        max_pool = torch.full_like(mean, -torch.inf)
+        if hasattr(max_pool, "scatter_reduce_"):
+            index = pulse_node_index[:, None].expand(-1, encoded.shape[1])
+            max_pool.scatter_reduce_(0, index, encoded, reduce="amax", include_self=True)
+            max_pool = torch.where(torch.isfinite(max_pool), max_pool, torch.zeros_like(max_pool))
+        else:
+            for node_index in torch.unique(pulse_node_index).tolist():
+                mask = pulse_node_index == int(node_index)
+                max_pool[int(node_index)] = torch.max(encoded[mask], dim=0).values
+            max_pool = torch.where(torch.isfinite(max_pool), max_pool, torch.zeros_like(max_pool))
+        return torch.cat([mean, max_pool], dim=-1)
+
+    def forward(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        x = batch["x"]
+        detector_embedding = self.detector_encoder(
+            batch.get("detector_lids"),
+            x.shape[0],
+            device=x.device,
+            dtype=x.dtype,
+        )
+        waveform_embedding = self.waveform_encoder(
+            batch.get("waveform_x"),
+            x.shape[0],
+            device=x.device,
+            dtype=x.dtype,
+        )
+        if self.pulse_encoder is not None:
+            pulse_summary = self._pulse_pool(
+                batch.get("pulse_x", x.new_zeros((0, self.pulse_dim))),
+                batch.get("pulse_node_index", torch.zeros(0, dtype=torch.long, device=x.device)),
+                x.shape[0],
+            )
+            x = torch.cat([x, pulse_summary], dim=-1)
+        if detector_embedding.shape[1] > 0:
+            x = torch.cat([x, detector_embedding], dim=-1)
+        if waveform_embedding.shape[1] > 0:
+            x = torch.cat([x, waveform_embedding], dim=-1)
+        node = self.node_encoder(x)
+        edge_index = batch["edge_index"]
+        if edge_index.numel() == 0:
+            src = None
+            dst = None
+            degree = None
+        else:
+            src = edge_index[0]
+            dst = edge_index[1]
+            degree = batch.get("edge_dst_degree")
+            if degree is None:
+                degree = torch.zeros(node.shape[0], 1, dtype=node.dtype, device=node.device)
+                degree.index_add_(0, dst, torch.ones(dst.shape[0], 1, dtype=node.dtype, device=node.device))
+            else:
+                degree = degree.to(dtype=node.dtype)
+        for layer in self.layers:
+            node = layer(node, src, dst, batch["edge_attr"], degree)
+        num_graphs = int(batch["num_graphs"])
+        pooled = torch.cat(
+            [
+                _scatter_mean(node, batch["batch"], num_graphs),
+                _scatter_max(node, batch["batch"], num_graphs),
+                self.readout(node, batch["batch"], num_graphs),
+            ],
+            dim=-1,
+        )
+        shared = self.shared(pooled)
+        reconstruction = torch.cat(
+            [
+                self.energy_head(shared),
+                self.core_head(shared),
+                self.direction_head(shared),
+            ],
+            dim=-1,
+        )
+        if self.target_dim != 7:
+            reconstruction = reconstruction[:, : self.target_dim]
+        if self.class_head is None:
+            return reconstruction
+        return torch.cat([reconstruction, self.class_head(shared)], dim=-1)
+
+
+def build_model_from_config(config: dict) -> nn.Module:
+    config = dict(config)
+    architecture = str(config.pop("architecture", "baseline"))
+    if architecture == "baseline":
+        config.pop("readout_heads", None)
+        return TaleSdGNN(**config)
+    if architecture == "physics":
+        return PhysicsTaleSdGNN(**config)
+    raise ValueError(f"unknown model architecture: {architecture}")

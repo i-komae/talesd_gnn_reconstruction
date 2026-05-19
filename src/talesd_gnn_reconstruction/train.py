@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import json
+import math
+import os
 import random
+import time
 from collections.abc import Sequence
+from functools import partial
+from math import ceil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from .dataset import H5GraphDataset, StandardScaler, collate_graphs, fit_scalers
-from .metrics import reconstruction_metrics
+from .dataset import H5GraphDataset, StandardScaler, collate_graph_arrays, fit_scalers
+from .diagnostics import save_training_diagnostics
+from .metrics import binary_classification_metrics, direction_to_angles, reconstruction_metrics
+from .progress import progress as _progress
+from .progress import write as _progress_write
 
 if TYPE_CHECKING:
     from .model import TaleSdGNN
@@ -20,8 +28,6 @@ def resolve_device(device: str = "auto") -> str:
 
     if device != "auto":
         return device
-    if torch.backends.mps.is_available():
-        return "mps"
     if torch.cuda.is_available():
         return "cuda"
     return "cpu"
@@ -32,6 +38,127 @@ def _batches(indices: list[int], batch_size: int, shuffle: bool) -> list[list[in
     if shuffle:
         random.shuffle(indices)
     return [indices[i : i + batch_size] for i in range(0, len(indices), batch_size)]
+
+
+def _collate_graph_batch(
+    samples: list[dict[str, Any]],
+    scalers: dict[str, StandardScaler],
+    require_target: bool,
+    backend: str,
+    num_threads: int,
+) -> dict[str, Any]:
+    return collate_graph_arrays(
+        samples,
+        scalers=scalers,
+        require_target=require_target,
+        backend=backend,
+        num_threads=num_threads,
+    )
+
+
+def _loader_worker_init(_worker_id: int) -> None:
+    import torch
+
+    torch.set_num_threads(1)
+
+
+def _resolve_collate_backend(backend: str, *, n_graphs: int, num_workers: int) -> str:
+    if backend == "auto":
+        return "python" if n_graphs < 1024 and num_workers == 0 else "cpp"
+    if backend in {"cpp", "python"}:
+        return backend
+    raise ValueError("collate_backend must be 'auto', 'cpp', or 'python'")
+
+
+class LocalityBatchSampler:
+    def __init__(self, indices: list[int], batch_size: int, shuffle_batches: bool, seed: int):
+        self.indices = sorted(indices)
+        self.batch_size = max(int(batch_size), 1)
+        self.shuffle_batches = shuffle_batches
+        self.seed = int(seed)
+        self.epoch = 0
+
+    def __iter__(self):
+        batches = [
+            self.indices[start : start + self.batch_size]
+            for start in range(0, len(self.indices), self.batch_size)
+        ]
+        if self.shuffle_batches:
+            rng = random.Random(self.seed + self.epoch)
+            rng.shuffle(batches)
+        self.epoch += 1
+        yield from batches
+
+    def __len__(self) -> int:
+        return ceil(len(self.indices) / self.batch_size)
+
+
+def _make_graph_loader(
+    dataset: H5GraphDataset,
+    indices: list[int],
+    scalers: dict[str, StandardScaler],
+    batch_size: int,
+    shuffle: bool,
+    require_target: bool,
+    num_workers: int,
+    prefetch_factor: int,
+    seed: int,
+    pin_memory: bool,
+    persistent_workers: bool,
+    collate_backend: str,
+    collate_threads: int,
+) -> Any:
+    import torch
+    from torch.utils.data import DataLoader
+
+    worker_count = min(max(int(num_workers), 0), max(len(indices), 1))
+    batch_sampler = LocalityBatchSampler(indices, batch_size=batch_size, shuffle_batches=shuffle, seed=seed)
+    kwargs: dict[str, Any] = {
+        "batch_sampler": batch_sampler,
+        "num_workers": worker_count,
+        "collate_fn": partial(
+            _collate_graph_batch,
+            scalers=scalers,
+            require_target=require_target,
+            backend=collate_backend,
+            num_threads=collate_threads,
+        ),
+        "pin_memory": pin_memory,
+    }
+    if worker_count > 0:
+        kwargs["multiprocessing_context"] = "spawn"
+        kwargs["persistent_workers"] = bool(persistent_workers)
+        kwargs["prefetch_factor"] = max(int(prefetch_factor), 1)
+        kwargs["worker_init_fn"] = _loader_worker_init
+    return DataLoader(dataset, **kwargs)
+
+
+def _batch_to_device(batch: dict[str, Any], device: str, non_blocking: bool = False) -> dict[str, Any]:
+    import torch
+
+    tensor_keys = {
+        "x",
+        "edge_index",
+        "edge_attr",
+        "edge_dst_degree",
+        "pulse_x",
+        "pulse_node_index",
+        "waveform_x",
+        "detector_lids",
+        "batch",
+        "y",
+        "mass_label",
+    }
+    return {
+        key: (
+            value.to(device, non_blocking=non_blocking)
+            if torch.is_tensor(value)
+            else torch.as_tensor(value, device=device)
+        )
+        if key in tensor_keys
+        else value
+        for key, value in batch.items()
+    }
 
 
 def split_indices(
@@ -61,171 +188,891 @@ def split_indices(
     return {"train": train_indices, "val": val_indices, "test": test_indices}
 
 
-def _predict_numpy(
-    model: "TaleSdGNN",
+def split_indices_by_source_path(
+    dataset: H5GraphDataset,
+    val_fraction: float = 0.1,
+    test_fraction: float = 0.5,
+    seed: int = 12345,
+    show_progress: bool = True,
+) -> dict[str, list[int]]:
+    source_to_indices: dict[str, list[int]] = {}
+    source_to_stratum: dict[str, str] = {}
+    iterator = _progress(range(len(dataset)), desc="scan source paths", total=len(dataset), enabled=show_progress)
+    for index in iterator:
+        source_path = dataset.source_path(index) or f"unknown:{index}"
+        source_to_indices.setdefault(source_path, []).append(index)
+        source_to_stratum.setdefault(source_path, str(Path(source_path).parent))
+
+    strata: dict[str, list[str]] = {}
+    for source_path, stratum in source_to_stratum.items():
+        strata.setdefault(stratum, []).append(source_path)
+
+    split = {"train": [], "val": [], "test": []}
+    rng = random.Random(seed)
+    for stratum_sources in strata.values():
+        sources = list(stratum_sources)
+        rng.shuffle(sources)
+        if len(sources) < 3:
+            for source_path in sources:
+                split["train"].extend(source_to_indices[source_path])
+            continue
+        n_test = max(1, int(round(len(sources) * test_fraction)))
+        n_test = min(n_test, len(sources) - 2)
+        remaining = len(sources) - n_test
+        n_val = max(1, int(round(len(sources) * val_fraction)))
+        n_val = min(n_val, remaining - 1)
+        test_sources = sources[:n_test]
+        val_sources = sources[n_test : n_test + n_val]
+        train_sources = sources[n_test + n_val :]
+        for source_path in train_sources:
+            split["train"].extend(source_to_indices[source_path])
+        for source_path in val_sources:
+            split["val"].extend(source_to_indices[source_path])
+        for source_path in test_sources:
+            split["test"].extend(source_to_indices[source_path])
+
+    for indices in split.values():
+        indices.sort()
+    if not split["train"] or not split["val"] or not split["test"]:
+        raise ValueError("source-path split produced an empty train/validation/test split")
+    return split
+
+
+def _finite_bin(value: float, width: float) -> str:
+    value = float(value)
+    if not math.isfinite(value):
+        return "nan"
+    return str(int(math.floor(value / max(float(width), 1.0e-12))))
+
+
+def _source_stratification_keys(source_path: str, target: np.ndarray | None, particle_label: float | None) -> dict[str, tuple[str, ...]]:
+    parent = str(Path(source_path).parent)
+    particle = "unknown"
+    if particle_label is not None and math.isfinite(float(particle_label)):
+        particle = "iron" if float(particle_label) >= 0.5 else "proton"
+    loge_bin = "nan"
+    zenith_bin = "nan"
+    if target is not None and target.shape[0] >= 7 and np.all(np.isfinite(target[[0, 4, 5, 6]])):
+        loge_bin = _finite_bin(float(target[0]), 0.1)
+        zenith, _azimuth = direction_to_angles(target[None, 4:7])
+        zenith_bin = _finite_bin(float(zenith[0]), 10.0)
+    return {
+        "fine": (parent, particle, loge_bin, zenith_bin),
+        "mid": (parent, particle, loge_bin),
+        "coarse": (parent, particle),
+        "broad": (parent,),
+    }
+
+
+def _assign_source_group(
+    split_sources: dict[str, list[str]],
+    sources: list[str],
+    val_fraction: float,
+    test_fraction: float,
+    rng: random.Random,
+) -> None:
+    sources = list(sources)
+    rng.shuffle(sources)
+    if len(sources) < 3:
+        split_sources["train"].extend(sources)
+        return
+    n_test = int(round(len(sources) * test_fraction))
+    n_val = int(round(len(sources) * val_fraction))
+    if n_test + n_val >= len(sources):
+        overflow = n_test + n_val - (len(sources) - 1)
+        n_val = max(0, n_val - overflow)
+        overflow = n_test + n_val - (len(sources) - 1)
+        n_test = max(0, n_test - overflow)
+    split_sources["test"].extend(sources[:n_test])
+    split_sources["val"].extend(sources[n_test : n_test + n_val])
+    split_sources["train"].extend(sources[n_test + n_val :])
+
+
+def split_indices_by_stratified_source_path(
+    dataset: H5GraphDataset,
+    val_fraction: float = 0.1,
+    test_fraction: float = 0.2,
+    seed: int = 12345,
+    show_progress: bool = True,
+    min_group_sources: int = 10,
+) -> dict[str, list[int]]:
+    source_to_indices: dict[str, list[int]] = {}
+    source_stats: dict[str, dict[str, Any]] = {}
+    iterator = _progress(
+        range(len(dataset)),
+        desc="scan stratified source paths",
+        total=len(dataset),
+        enabled=show_progress,
+    )
+    for index in iterator:
+        source_path = dataset.source_path(index) or f"unknown:{index}"
+        source_to_indices.setdefault(source_path, []).append(index)
+        stats = source_stats.setdefault(
+            source_path,
+            {
+                "target_sum": np.zeros(7, dtype=np.float64),
+                "target_count": 0,
+                "particle_label": dataset.particle_label(index),
+            },
+        )
+        target = dataset.target(index)
+        if target is not None and target.shape[0] >= 7 and np.all(np.isfinite(target[:7])):
+            stats["target_sum"] += target[:7].astype(np.float64)
+            stats["target_count"] += 1
+        if stats["particle_label"] is None:
+            stats["particle_label"] = dataset.particle_label(index)
+
+    source_keys: dict[str, dict[str, tuple[str, ...]]] = {}
+    for source_path, stats in source_stats.items():
+        target = None
+        if int(stats["target_count"]) > 0:
+            target = (stats["target_sum"] / int(stats["target_count"])).astype(np.float64)
+        source_keys[source_path] = _source_stratification_keys(
+            source_path,
+            target,
+            stats["particle_label"],
+        )
+
+    rng = random.Random(seed)
+    pending = list(source_to_indices)
+    split_sources = {"train": [], "val": [], "test": []}
+    for key_name in ("fine", "mid", "coarse", "broad"):
+        groups: dict[tuple[str, ...], list[str]] = {}
+        for source_path in pending:
+            groups.setdefault(source_keys[source_path][key_name], []).append(source_path)
+        next_pending: list[str] = []
+        for sources in groups.values():
+            if key_name == "broad" or len(sources) >= int(min_group_sources):
+                _assign_source_group(split_sources, sources, val_fraction, test_fraction, rng)
+            else:
+                next_pending.extend(sources)
+        pending = next_pending
+
+    if pending:
+        _assign_source_group(split_sources, pending, val_fraction, test_fraction, rng)
+
+    if not split_sources["val"] or not split_sources["test"]:
+        all_sources = list(source_to_indices)
+        split_sources = {"train": [], "val": [], "test": []}
+        _assign_source_group(split_sources, all_sources, val_fraction, test_fraction, rng)
+
+    split = {
+        name: sorted(index for source_path in sources for index in source_to_indices[source_path])
+        for name, sources in split_sources.items()
+    }
+    if not split["train"] or not split["val"] or not split["test"]:
+        raise ValueError("source-stratified split produced an empty train/validation/test split")
+    return split
+
+
+def _particle_labels_for_indices(
     dataset: H5GraphDataset,
     indices: list[int],
+    show_progress: bool = True,
+) -> np.ndarray:
+    labels = []
+    iterator = _progress(indices, desc="scan particle labels", total=len(indices), enabled=show_progress, leave=False)
+    for index in iterator:
+        label = dataset.particle_label(index)
+        labels.append(np.nan if label is None else float(label))
+    return np.asarray(labels, dtype=np.float32)
+
+
+def _detector_lids_for_indices(
+    dataset: H5GraphDataset,
+    indices: list[int],
+    show_progress: bool = True,
+) -> list[int]:
+    detector_lids: set[int] = set()
+    iterator = _progress(indices, desc="scan detector IDs", total=len(indices), enabled=show_progress, leave=False)
+    for index in iterator:
+        lids = dataset.detector_lids(index)
+        detector_lids.update(int(lid) for lid in lids if int(lid) >= 0)
+    return sorted(detector_lids)
+
+
+def _split_model_output(pred: Any, target_dim: int, mass_classification: bool) -> tuple[Any, Any | None]:
+    if not mass_classification:
+        return pred, None
+    return pred[:, :target_dim], pred[:, target_dim]
+
+
+def _target_scaler_tensors(
     scalers: dict[str, StandardScaler],
-    batch_size: int,
     device: str,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[Any, Any]:
     import torch
 
+    target_scaler = scalers["target"]
+    mean = torch.as_tensor(target_scaler.mean, dtype=torch.float32, device=device)
+    std = torch.as_tensor(target_scaler.std, dtype=torch.float32, device=device)
+    return mean, std
+
+
+def _inverse_scaled_target(values: Any, mean: Any, std: Any) -> Any:
+    return values * std + mean
+
+
+def _reconstruction_loss(
+    pred_scaled: Any,
+    target_scaled: Any,
+    *,
+    mode: str,
+    target_mean: Any,
+    target_std: Any,
+    energy_weight: float,
+    core_weight: float,
+    direction_weight: float,
+    core_scale_km: float,
+) -> Any:
+    import torch
+    import torch.nn.functional as F
+
+    if mode == "scaled-mse":
+        return F.mse_loss(pred_scaled, target_scaled)
+    if mode == "weighted-scaled-mse":
+        delta = pred_scaled - target_scaled
+        energy_loss = torch.mean(delta[:, 0] * delta[:, 0])
+        core_loss = torch.mean(torch.sum(delta[:, 1:4] * delta[:, 1:4], dim=1))
+        direction_loss = torch.mean(torch.sum(delta[:, 4:7] * delta[:, 4:7], dim=1))
+        return (
+            float(energy_weight) * energy_loss
+            + float(core_weight) * core_loss
+            + float(direction_weight) * direction_loss
+        ) / max(float(energy_weight) + float(core_weight) + float(direction_weight), 1.0e-12)
+
+    pred = _inverse_scaled_target(pred_scaled, target_mean, target_std)
+    target = _inverse_scaled_target(target_scaled, target_mean, target_std)
+    if mode == "hybrid-angle":
+        delta = pred_scaled - target_scaled
+        energy_loss = torch.mean(delta[:, 0] * delta[:, 0])
+        core_loss = torch.mean(torch.sum(delta[:, 1:4] * delta[:, 1:4], dim=1))
+        pred_dir = F.normalize(pred[:, 4:7], dim=1, eps=1.0e-8)
+        target_dir = F.normalize(target[:, 4:7], dim=1, eps=1.0e-8)
+        direction_loss = torch.mean(1.0 - torch.sum(pred_dir * target_dir, dim=1).clamp(-1.0, 1.0))
+        return (
+            float(energy_weight) * energy_loss
+            + float(core_weight) * core_loss
+            + float(direction_weight) * direction_loss
+        ) / max(float(energy_weight) + float(core_weight) + float(direction_weight), 1.0e-12)
+    if mode != "physics":
+        raise ValueError("loss_mode must be 'scaled-mse', 'weighted-scaled-mse', 'hybrid-angle', or 'physics'")
+
+    energy_loss = F.smooth_l1_loss(pred[:, 0] - target[:, 0], torch.zeros_like(target[:, 0]), beta=0.05)
+    core_scale = max(float(core_scale_km), 1.0e-6)
+    core_delta = (pred[:, 1:3] - target[:, 1:3]) / core_scale
+    core_loss = torch.mean(torch.sum(core_delta * core_delta, dim=1))
+    pred_dir = F.normalize(pred[:, 4:7], dim=1, eps=1.0e-8)
+    target_dir = F.normalize(target[:, 4:7], dim=1, eps=1.0e-8)
+    direction_loss = torch.mean(1.0 - torch.sum(pred_dir * target_dir, dim=1).clamp(-1.0, 1.0))
+    return (
+        float(energy_weight) * energy_loss
+        + float(core_weight) * core_loss
+        + float(direction_weight) * direction_loss
+    )
+
+
+def _predict_numpy(
+    model: "TaleSdGNN",
+    loader: Any,
+    scalers: dict[str, StandardScaler],
+    device: str,
+    non_blocking: bool = False,
+    desc: str = "predict",
+    show_progress: bool = True,
+    mass_classification: bool = False,
+    target_dim: int = 7,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
     model.eval()
     pred_rows: list[np.ndarray] = []
     target_rows: list[np.ndarray] = []
+    mass_logit_rows: list[np.ndarray] = []
+    mass_label_rows: list[np.ndarray] = []
+    import torch
+
     with torch.no_grad():
-        for batch_indices in _batches(indices, batch_size, shuffle=False):
-            samples = [dataset[i] for i in batch_indices]
-            batch = collate_graphs(samples, scalers=scalers, device=device, require_target=True)
-            pred_scaled = model(batch).detach().cpu().numpy()
+        for batch_cpu in _progress(loader, desc=desc, total=len(loader), enabled=show_progress, leave=False):
+            batch = _batch_to_device(batch_cpu, device, non_blocking=non_blocking)
+            pred_all = model(batch)
+            pred_scaled_tensor, mass_logit_tensor = _split_model_output(pred_all, target_dim, mass_classification)
+            pred_scaled = pred_scaled_tensor.detach().cpu().numpy()
             target_scaled = batch["y"].detach().cpu().numpy()
             pred_rows.append(scalers["target"].inverse_transform(pred_scaled))
             target_rows.append(scalers["target"].inverse_transform(target_scaled))
-    return np.concatenate(pred_rows, axis=0), np.concatenate(target_rows, axis=0)
+            if mass_classification and mass_logit_tensor is not None:
+                mass_logit_rows.append(mass_logit_tensor.detach().cpu().numpy())
+            if "mass_label" in batch:
+                mass_label_rows.append(batch["mass_label"].detach().cpu().numpy())
+    mass_logits = np.concatenate(mass_logit_rows, axis=0) if mass_logit_rows else None
+    mass_labels = np.concatenate(mass_label_rows, axis=0) if mass_label_rows else None
+    return np.concatenate(pred_rows, axis=0), np.concatenate(target_rows, axis=0), mass_logits, mass_labels
 
 
 def train_model(
     graphs_path: str | Path | Sequence[str | Path],
     output_path: str | Path,
     epochs: int = 80,
-    batch_size: int = 32,
+    batch_size: int = 128,
     learning_rate: float = 1.0e-3,
+    weight_decay: float = 1.0e-4,
     hidden_dim: int = 128,
     num_layers: int = 4,
     dropout: float = 0.05,
+    lr_scheduler: str = "none",
+    lr_factor: float = 0.5,
+    lr_patience: int = 2,
+    early_stopping_patience: int = 0,
+    model_architecture: str = "baseline",
+    readout_heads: int = 4,
+    detector_embedding_dim: int = 0,
+    waveform_encoder: str = "none",
+    waveform_embedding_dim: int = 64,
+    waveform_transformer_heads: int = 4,
+    waveform_transformer_layers: int = 1,
+    loss_mode: str = "scaled-mse",
+    energy_loss_weight: float = 1.0,
+    core_loss_weight: float = 1.0,
+    direction_loss_weight: float = 1.0,
+    core_loss_scale_km: float = 0.12,
     val_fraction: float = 0.1,
     test_fraction: float = 0.1,
+    split_mode: str = "event",
     seed: int = 12345,
     device: str = "auto",
-    sample_cache_size: int = 1024,
+    sample_cache_size: int = 0,
+    max_graphs: int | None = None,
+    particle_filter: str = "all",
+    num_workers: int = -1,
+    prefetch_factor: int = 2,
+    collate_backend: str = "auto",
+    collate_threads: int = 1,
+    mass_classification: bool = False,
+    mass_loss_weight: float = 0.1,
+    show_progress: bool = True,
+    save_diagnostics: bool = True,
+    diagnostic_energy_bin_width: float = 0.1,
+    diagnostic_min_bin_count: int = 20,
 ) -> dict[str, Any]:
     import torch
     from torch import nn
 
-    from .model import TaleSdGNN
+    from .model import PhysicsTaleSdGNN, TaleSdGNN
 
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
 
+    overall_started = time.perf_counter()
+    stage_seconds: dict[str, float] = {}
     device = resolve_device(device)
-    dataset = H5GraphDataset(graphs_path, require_target=True, cache_size=sample_cache_size)
+    prefetch_factor = max(int(prefetch_factor), 1)
+    collate_threads = max(int(collate_threads), 0)
+    pin_memory = device.startswith("cuda")
+    stage_started = time.perf_counter()
+    dataset = H5GraphDataset(
+        graphs_path,
+        require_target=True,
+        require_particle_label=mass_classification,
+        cache_size=sample_cache_size,
+        load_node_positions=False,
+        load_attrs=False,
+        load_particle_label=True,
+        load_detector_lids=int(detector_embedding_dim) > 0,
+        max_graphs=max_graphs,
+        particle_filter=particle_filter,
+    )
+    stage_seconds["dataset_init"] = time.perf_counter() - stage_started
     if len(dataset) < 2:
         raise ValueError("training needs at least two graphs with MC targets")
+    requested_num_workers = int(num_workers)
+    if requested_num_workers < 0:
+        cpu_count = os.cpu_count() or 2
+        num_workers = 0 if len(dataset) < 1024 else min(4, max(cpu_count // 2, 1))
+    else:
+        num_workers = max(requested_num_workers, 0)
+    requested_collate_backend = collate_backend
+    collate_backend = _resolve_collate_backend(collate_backend, n_graphs=len(dataset), num_workers=num_workers)
 
-    split = split_indices(
-        len(dataset),
-        val_fraction=val_fraction,
-        test_fraction=test_fraction,
-        seed=seed,
-    )
+    stage_started = time.perf_counter()
+    if split_mode == "event":
+        split = split_indices(
+            len(dataset),
+            val_fraction=val_fraction,
+            test_fraction=test_fraction,
+            seed=seed,
+        )
+    elif split_mode == "source-path":
+        split = split_indices_by_source_path(
+            dataset,
+            val_fraction=val_fraction,
+            test_fraction=test_fraction,
+            seed=seed,
+            show_progress=show_progress,
+        )
+    elif split_mode == "source-stratified":
+        split = split_indices_by_stratified_source_path(
+            dataset,
+            val_fraction=val_fraction,
+            test_fraction=test_fraction,
+            seed=seed,
+            show_progress=show_progress,
+        )
+    else:
+        raise ValueError("split_mode must be 'event', 'source-path', or 'source-stratified'")
+    stage_seconds["split"] = time.perf_counter() - stage_started
     train_indices = split["train"]
     val_indices = split["val"]
     test_indices = split["test"]
 
-    scalers = fit_scalers(dataset, train_indices)
+    detector_lids: list[int] = []
+    if int(detector_embedding_dim) > 0:
+        stage_started = time.perf_counter()
+        detector_lids = _detector_lids_for_indices(dataset, train_indices, show_progress=show_progress)
+        if not detector_lids:
+            raise ValueError("detector embedding requested, but no detector IDs were found in training graphs")
+        stage_seconds["scan_detector_ids"] = time.perf_counter() - stage_started
+
+    stage_started = time.perf_counter()
+    scalers = fit_scalers(dataset, sorted(train_indices), show_progress=show_progress)
+    stage_seconds["fit_scalers"] = time.perf_counter() - stage_started
+    stage_started = time.perf_counter()
     first = dataset[train_indices[0]]
-    model = TaleSdGNN(
-        node_dim=first["node_features"].shape[1],
-        edge_dim=first["edge_features"].shape[1],
-        pulse_dim=max(first["pulse_features"].shape[1] - 1, 0),
-        target_dim=first["target"].shape[0],
-        hidden_dim=hidden_dim,
-        num_layers=num_layers,
-        dropout=dropout,
-    ).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1.0e-4)
-    loss_fn = nn.MSELoss()
+    model_kwargs = {
+        "node_dim": first["node_features"].shape[1],
+        "edge_dim": first["edge_features"].shape[1],
+        "pulse_dim": max(first["pulse_features"].shape[1] - 1, 0),
+        "waveform_channels": first["waveform_features"].shape[1]
+        if first.get("waveform_features") is not None and first["waveform_features"].ndim == 3
+        else 0,
+        "waveform_length": first["waveform_features"].shape[2]
+        if first.get("waveform_features") is not None and first["waveform_features"].ndim == 3
+        else 0,
+        "waveform_encoder": waveform_encoder,
+        "waveform_embedding_dim": waveform_embedding_dim,
+        "waveform_transformer_heads": waveform_transformer_heads,
+        "waveform_transformer_layers": waveform_transformer_layers,
+        "target_dim": first["target"].shape[0],
+        "classification_dim": 1 if mass_classification else 0,
+        "hidden_dim": hidden_dim,
+        "num_layers": num_layers,
+        "dropout": dropout,
+        "detector_lids": detector_lids,
+        "detector_embedding_dim": max(int(detector_embedding_dim), 0),
+    }
+    if model_architecture == "baseline":
+        model = TaleSdGNN(**model_kwargs).to(device)
+    elif model_architecture == "physics":
+        model = PhysicsTaleSdGNN(**model_kwargs, readout_heads=readout_heads).to(device)
+    else:
+        raise ValueError("model_architecture must be 'baseline' or 'physics'")
+    if num_workers > 0:
+        dataset.close()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    scheduler = None
+    lr_scheduler = str(lr_scheduler).lower()
+    if lr_scheduler == "reduce-on-plateau":
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=float(lr_factor),
+            patience=max(int(lr_patience), 0),
+        )
+    elif lr_scheduler == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=max(int(epochs), 1),
+            eta_min=float(learning_rate) * 0.1,
+        )
+    elif lr_scheduler != "none":
+        raise ValueError("lr_scheduler must be 'none', 'reduce-on-plateau', or 'cosine'")
+    target_dim = int(first["target"].shape[0])
+    target_mean, target_std = _target_scaler_tensors(scalers, device)
+    bce_loss_fn = None
+    if mass_classification:
+        stage_started_labels = time.perf_counter()
+        train_mass_labels = _particle_labels_for_indices(dataset, train_indices, show_progress=show_progress)
+        finite_labels = train_mass_labels[np.isfinite(train_mass_labels)]
+        if finite_labels.size == 0:
+            raise ValueError("mass classification requested, but training labels are missing")
+        positives = float(np.sum(finite_labels >= 0.5))
+        negatives = float(np.sum(finite_labels < 0.5))
+        pos_weight = negatives / max(positives, 1.0)
+        bce_loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight, dtype=torch.float32, device=device))
+        stage_seconds["scan_particle_labels"] = time.perf_counter() - stage_started_labels
+
+    train_loader = _make_graph_loader(
+        dataset,
+        train_indices,
+        scalers=scalers,
+        batch_size=batch_size,
+        shuffle=True,
+        require_target=True,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
+        seed=seed,
+        pin_memory=pin_memory,
+        persistent_workers=True,
+        collate_backend=collate_backend,
+        collate_threads=collate_threads,
+    )
+    val_loader = _make_graph_loader(
+        dataset,
+        val_indices,
+        scalers=scalers,
+        batch_size=batch_size,
+        shuffle=False,
+        require_target=True,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
+        seed=seed,
+        pin_memory=pin_memory,
+        persistent_workers=True,
+        collate_backend=collate_backend,
+        collate_threads=collate_threads,
+    )
+    test_loader = _make_graph_loader(
+        dataset,
+        test_indices,
+        scalers=scalers,
+        batch_size=batch_size,
+        shuffle=False,
+        require_target=True,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
+        seed=seed,
+        pin_memory=pin_memory,
+        persistent_workers=False,
+        collate_backend=collate_backend,
+        collate_threads=collate_threads,
+    )
+    stage_seconds["model_and_loaders"] = time.perf_counter() - stage_started
+    print(
+        f"device={device} data_loader_workers={num_workers} "
+        f"prefetch_factor={prefetch_factor} collate_backend={collate_backend} "
+        f"collate_threads={collate_threads or 'auto'}"
+        + f" split_mode={split_mode} model_architecture={model_architecture}"
+        + f" detector_embedding_dim={max(int(detector_embedding_dim), 0)} detector_count={len(detector_lids)}"
+        + f" waveform_encoder={waveform_encoder} waveform_channels={model_kwargs['waveform_channels']}"
+        + f" loss_mode={loss_mode} mass_classification={mass_classification}"
+        + f" particle_filter={particle_filter}"
+        + (f" requested_collate_backend={requested_collate_backend}" if requested_collate_backend != collate_backend else ""),
+        flush=True,
+    )
 
     best_val = float("inf")
     best_state = None
+    epochs_without_improvement = 0
     history: list[dict[str, Any]] = []
 
-    for epoch in range(1, epochs + 1):
+    stage_started = time.perf_counter()
+    epoch_iter = _progress(range(1, epochs + 1), desc="epochs", total=epochs, enabled=show_progress, position=0)
+    for epoch in epoch_iter:
         model.train()
         train_losses = []
-        for batch_indices in _batches(train_indices, batch_size, shuffle=True):
-            samples = [dataset[i] for i in batch_indices]
-            batch = collate_graphs(samples, scalers=scalers, device=device, require_target=True)
-            pred = model(batch)
-            loss = loss_fn(pred, batch["y"])
+        train_reco_losses = []
+        train_mass_losses = []
+        train_desc = f"epoch {epoch}/{epochs} train"
+        for batch_cpu in _progress(
+            train_loader,
+            desc=train_desc,
+            total=len(train_loader),
+            enabled=show_progress,
+            leave=False,
+            position=1,
+        ):
+            batch = _batch_to_device(batch_cpu, device, non_blocking=pin_memory)
+            pred_all = model(batch)
+            pred, mass_logit = _split_model_output(pred_all, target_dim, mass_classification)
+            reco_loss = _reconstruction_loss(
+                pred,
+                batch["y"],
+                mode=loss_mode,
+                target_mean=target_mean,
+                target_std=target_std,
+                energy_weight=energy_loss_weight,
+                core_weight=core_loss_weight,
+                direction_weight=direction_loss_weight,
+                core_scale_km=core_loss_scale_km,
+            )
+            loss = reco_loss
+            mass_loss = None
+            if mass_classification and mass_logit is not None and bce_loss_fn is not None:
+                labels = batch["mass_label"].to(dtype=mass_logit.dtype)
+                mask = torch.isfinite(labels)
+                if torch.any(mask):
+                    mass_loss = bce_loss_fn(mass_logit[mask], labels[mask])
+                    loss = loss + float(mass_loss_weight) * mass_loss
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
             train_losses.append(float(loss.detach().cpu()))
+            train_reco_losses.append(float(reco_loss.detach().cpu()))
+            if mass_loss is not None:
+                train_mass_losses.append(float(mass_loss.detach().cpu()))
 
         model.eval()
         val_losses = []
+        val_reco_losses = []
+        val_mass_losses = []
         with torch.no_grad():
-            for batch_indices in _batches(val_indices, batch_size, shuffle=False):
-                samples = [dataset[i] for i in batch_indices]
-                batch = collate_graphs(samples, scalers=scalers, device=device, require_target=True)
-                val_losses.append(float(loss_fn(model(batch), batch["y"]).detach().cpu()))
+            val_desc = f"epoch {epoch}/{epochs} val"
+            for batch_cpu in _progress(
+                val_loader,
+                desc=val_desc,
+                total=len(val_loader),
+                enabled=show_progress,
+                leave=False,
+                position=1,
+            ):
+                batch = _batch_to_device(batch_cpu, device, non_blocking=pin_memory)
+                pred_all = model(batch)
+                pred, mass_logit = _split_model_output(pred_all, target_dim, mass_classification)
+                reco_loss = _reconstruction_loss(
+                    pred,
+                    batch["y"],
+                    mode=loss_mode,
+                    target_mean=target_mean,
+                    target_std=target_std,
+                    energy_weight=energy_loss_weight,
+                    core_weight=core_loss_weight,
+                    direction_weight=direction_loss_weight,
+                    core_scale_km=core_loss_scale_km,
+                )
+                loss = reco_loss
+                mass_loss = None
+                if mass_classification and mass_logit is not None and bce_loss_fn is not None:
+                    labels = batch["mass_label"].to(dtype=mass_logit.dtype)
+                    mask = torch.isfinite(labels)
+                    if torch.any(mask):
+                        mass_loss = bce_loss_fn(mass_logit[mask], labels[mask])
+                        loss = loss + float(mass_loss_weight) * mass_loss
+                val_losses.append(float(loss.detach().cpu()))
+                val_reco_losses.append(float(reco_loss.detach().cpu()))
+                if mass_loss is not None:
+                    val_mass_losses.append(float(mass_loss.detach().cpu()))
 
         epoch_row = {
             "epoch": epoch,
             "train_loss": float(np.mean(train_losses)),
             "val_loss": float(np.mean(val_losses)),
+            "train_reconstruction_loss": float(np.mean(train_reco_losses)),
+            "val_reconstruction_loss": float(np.mean(val_reco_losses)),
+            "lr": float(optimizer.param_groups[0]["lr"]),
         }
+        if train_mass_losses:
+            epoch_row["train_mass_loss"] = float(np.mean(train_mass_losses))
+        if val_mass_losses:
+            epoch_row["val_mass_loss"] = float(np.mean(val_mass_losses))
         history.append(epoch_row)
         if epoch_row["val_loss"] < best_val:
             best_val = epoch_row["val_loss"]
             best_state = {key: value.detach().cpu() for key, value in model.state_dict().items()}
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        if scheduler is not None:
+            if lr_scheduler == "reduce-on-plateau":
+                scheduler.step(epoch_row["val_loss"])
+            else:
+                scheduler.step()
+            epoch_row["next_lr"] = float(optimizer.param_groups[0]["lr"])
 
         if epoch == 1 or epoch % 5 == 0 or epoch == epochs:
-            print(
+            mass_text = f" mass_loss={epoch_row['val_mass_loss']:.6f}" if "val_mass_loss" in epoch_row else ""
+            lr_text = f" lr={epoch_row['lr']:.3g}"
+            if "next_lr" in epoch_row and epoch_row["next_lr"] != epoch_row["lr"]:
+                lr_text += f" next_lr={epoch_row['next_lr']:.3g}"
+            _progress_write(
                 f"epoch={epoch:04d} train_loss={epoch_row['train_loss']:.6f} "
-                f"val_loss={epoch_row['val_loss']:.6f}"
+                f"val_loss={epoch_row['val_loss']:.6f}{mass_text}{lr_text}",
             )
+        if hasattr(epoch_iter, "set_postfix"):
+            epoch_iter.set_postfix(
+                train_loss=f"{epoch_row['train_loss']:.4g}",
+                val_loss=f"{epoch_row['val_loss']:.4g}",
+            )
+        if early_stopping_patience > 0 and epochs_without_improvement >= int(early_stopping_patience):
+            _progress_write(
+                f"early stopping at epoch={epoch:04d} "
+                f"best_val_loss={best_val:.6f} patience={early_stopping_patience}",
+            )
+            break
+    stage_seconds["epochs"] = time.perf_counter() - stage_started
 
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    pred_val, target_val = _predict_numpy(model, dataset, val_indices, scalers, batch_size, device)
+    stage_started = time.perf_counter()
+    pred_val, target_val, mass_logit_val, mass_label_val = _predict_numpy(
+        model,
+        val_loader,
+        scalers,
+        device,
+        non_blocking=pin_memory,
+        desc="validation predict",
+        show_progress=show_progress,
+        mass_classification=mass_classification,
+        target_dim=target_dim,
+    )
     val_metrics = reconstruction_metrics(pred_val, target_val)
-    pred_test, target_test = _predict_numpy(model, dataset, test_indices, scalers, batch_size, device)
+    val_mass_metrics = (
+        binary_classification_metrics(mass_logit_val, mass_label_val)
+        if mass_classification and mass_logit_val is not None and mass_label_val is not None
+        else None
+    )
+    stage_seconds["validation_predict"] = time.perf_counter() - stage_started
+    stage_started = time.perf_counter()
+    pred_test, target_test, mass_logit_test, mass_label_test = _predict_numpy(
+        model,
+        test_loader,
+        scalers,
+        device,
+        non_blocking=pin_memory,
+        desc="test predict",
+        show_progress=show_progress,
+        mass_classification=mass_classification,
+        target_dim=target_dim,
+    )
     test_metrics = reconstruction_metrics(pred_test, target_test)
-    print("validation metrics:", json.dumps(val_metrics, sort_keys=True))
-    print("test metrics:", json.dumps(test_metrics, sort_keys=True))
+    test_mass_metrics = (
+        binary_classification_metrics(mass_logit_test, mass_label_test)
+        if mass_classification and mass_logit_test is not None and mass_label_test is not None
+        else None
+    )
+    stage_seconds["test_predict"] = time.perf_counter() - stage_started
+    _progress_write("validation metrics: " + json.dumps(val_metrics, sort_keys=True))
+    _progress_write("test metrics: " + json.dumps(test_metrics, sort_keys=True))
+    if val_mass_metrics is not None:
+        _progress_write("validation mass metrics: " + json.dumps(val_mass_metrics, sort_keys=True))
+    if test_mass_metrics is not None:
+        _progress_write("test mass metrics: " + json.dumps(test_mass_metrics, sort_keys=True))
 
     output = Path(output_path).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
+    diagnostics: dict[str, Any] = {}
+    if save_diagnostics:
+        stage_started = time.perf_counter()
+        diagnostics = save_training_diagnostics(
+            output,
+            history=history,
+            validation=(pred_val, target_val),
+            test=(pred_test, target_test),
+            validation_mass=(mass_logit_val, mass_label_val)
+            if mass_logit_val is not None and mass_label_val is not None
+            else None,
+            test_mass=(mass_logit_test, mass_label_test)
+            if mass_logit_test is not None and mass_label_test is not None
+            else None,
+            validation_particle_labels=mass_label_val,
+            test_particle_labels=mass_label_test,
+            energy_bin_width=diagnostic_energy_bin_width,
+            min_bin_count=diagnostic_min_bin_count,
+        )
+        stage_seconds["diagnostics"] = time.perf_counter() - stage_started
+    stage_seconds["total_before_save"] = time.perf_counter() - overall_started
     checkpoint = {
         "model_state": model.state_dict(),
         "model_config": model.config,
         "scalers": {name: scaler.to_dict() for name, scaler in scalers.items()},
         "history": history,
-        "metrics": {"validation": val_metrics, "test": test_metrics},
+        "metrics": {
+            "validation": val_metrics,
+            "test": test_metrics,
+            "validation_mass": val_mass_metrics,
+            "test_mass": test_mass_metrics,
+        },
+        "diagnostics": diagnostics,
         "train_indices": train_indices,
         "val_indices": val_indices,
         "test_indices": test_indices,
         "split": {
             "val_fraction": val_fraction,
             "test_fraction": test_fraction,
+            "split_mode": split_mode,
             "n_train": len(train_indices),
             "n_val": len(val_indices),
             "n_test": len(test_indices),
+            "particle_filter": particle_filter,
+        },
+        "runtime": {
+            "device": device,
+            "num_workers": num_workers,
+            "prefetch_factor": prefetch_factor,
+            "collate_backend": collate_backend,
+            "requested_collate_backend": requested_collate_backend,
+            "collate_threads": collate_threads,
+            "mass_classification": mass_classification,
+            "mass_loss_weight": mass_loss_weight,
+            "learning_rate": learning_rate,
+            "weight_decay": weight_decay,
+            "lr_scheduler": lr_scheduler,
+            "lr_factor": lr_factor,
+            "lr_patience": lr_patience,
+            "early_stopping_patience": early_stopping_patience,
+            "hidden_dim": hidden_dim,
+            "layers": num_layers,
+            "dropout": dropout,
+            "detector_embedding_dim": max(int(detector_embedding_dim), 0),
+            "detector_count": len(detector_lids),
+            "waveform_encoder": waveform_encoder,
+            "waveform_embedding_dim": waveform_embedding_dim,
+            "waveform_transformer_heads": waveform_transformer_heads,
+            "waveform_transformer_layers": waveform_transformer_layers,
+            "waveform_channels": model_kwargs["waveform_channels"],
+            "waveform_length": model_kwargs["waveform_length"],
+            "loss_mode": loss_mode,
+            "energy_loss_weight": energy_loss_weight,
+            "core_loss_weight": core_loss_weight,
+            "direction_loss_weight": direction_loss_weight,
+            "core_loss_scale_km": core_loss_scale_km,
+            "max_graphs": max_graphs,
+            "particle_filter": particle_filter,
+            "stage_seconds": {name: round(value, 3) for name, value in stage_seconds.items()},
         },
     }
+    stage_started = time.perf_counter()
     torch.save(checkpoint, output)
+    stage_seconds["save_checkpoint"] = time.perf_counter() - stage_started
+    checkpoint["runtime"]["stage_seconds"] = {name: round(value, 3) for name, value in stage_seconds.items()}
 
+    stage_started = time.perf_counter()
     metrics_path = output.with_suffix(output.suffix + ".metrics.json")
     metrics_path.write_text(
         json.dumps(
             {
                 "history": history,
-                "metrics": {"validation": val_metrics, "test": test_metrics},
+                "metrics": {
+                    "validation": val_metrics,
+                    "test": test_metrics,
+                    "validation_mass": val_mass_metrics,
+                    "test_mass": test_mass_metrics,
+                },
                 "split": checkpoint["split"],
+                "runtime": checkpoint["runtime"],
+                "diagnostics": diagnostics,
             },
             indent=2,
             sort_keys=True,
         )
     )
+    stage_seconds["save_metrics"] = time.perf_counter() - stage_started
+    stage_seconds["total"] = time.perf_counter() - overall_started
+    print(
+        "stage_seconds:",
+        json.dumps({name: round(value, 3) for name, value in stage_seconds.items()}, sort_keys=True),
+        flush=True,
+    )
     dataset.close()
     return {
         "checkpoint": str(output),
         "metrics_path": str(metrics_path),
-        "metrics": {"validation": val_metrics, "test": test_metrics},
+        "diagnostics": diagnostics,
+        "metrics": {
+            "validation": val_metrics,
+            "test": test_metrics,
+            "validation_mass": val_mass_metrics,
+            "test_mass": test_mass_metrics,
+        },
     }

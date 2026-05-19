@@ -6,14 +6,28 @@ COIN_TIME_WINDOW_USEC = 0.24
 FADC_BIN_WIDTH_USEC = 0.02
 FADC_PRETRIGGER_BINS = 29
 
-DEFAULT_EDGE_RADIUS_KM = 1.5
-DEFAULT_EDGE_K = 6
-DEFAULT_MIN_NODES = 3
+MAX_FADC_COUNT = 4095.0
+MIN_VALID_MIP = 0.3
+GEOM_MIN_POINTS = 4
+
+ISING_EDGE_MAX_DISTANCE_KM = 1.5
+ISING_EDGE_MAX_DT_USEC = 8.0
+ISING_SPACE_SCALE_KM = 0.8
+ISING_CAUSAL_TAU_USEC = 1.0
+ISING_CAUSAL_GRACE_USEC = 0.3
+ISING_SIGNAL_WEIGHT = 0.12
+ISING_CAUSAL_PENALTY_PER_USEC = 0.0
+ISING_EDGE_DEGREE_POWER = 0.70
+LIGHT_SPEED_KM_PER_USEC = 0.299792458
 
 NODE_FEATURE_COLUMNS = [
     "x_km",
     "y_km",
     "z_km",
+    "nearest_detector_distance_km",
+    "mean3_detector_distance_km",
+    "neighbor_count_1p5km",
+    "local_detector_density_1p5km2",
     "dx_from_bary_km",
     "dy_from_bary_km",
     "dz_from_bary_km",
@@ -34,6 +48,8 @@ NODE_FEATURE_COLUMNS = [
     "lower_ped",
     "upper_ped_sigma",
     "lower_ped_sigma",
+    "detector_pulse_order",
+    "is_first_detector_pulse",
 ]
 
 EDGE_FEATURE_COLUMNS = [
@@ -45,6 +61,11 @@ EDGE_FEATURE_COLUMNS = [
     "abs_dt_usec",
     "dt_per_km",
     "log10_rho_ratio",
+    "ising_weight",
+    "ising_weight_raw",
+    "ising_causal_excess_usec",
+    "ising_spatial",
+    "ising_causal",
 ]
 
 TARGET_COLUMNS = [
@@ -57,6 +78,9 @@ TARGET_COLUMNS = [
     "dir_z",
 ]
 
+PROTON_PARTTYPE = 14
+IRON_PARTTYPE = 5626
+
 PULSE_FEATURE_COLUMNS = [
     "node_index",
     "arrival_usec_rel",
@@ -65,4 +89,13 @@ PULSE_FEATURE_COLUMNS = [
     "sqrt_rho",
     "pulse_order",
     "is_first_pulse",
+]
+
+WAVEFORM_TRACE_BINS = 128
+WAVEFORM_PRE_PULSE_BINS = 32
+WAVEFORM_FEATURE_CHANNELS = [
+    "upper_raw_window_vem",
+    "lower_raw_window_vem",
+    "upper_accepted_compact_vem",
+    "lower_accepted_compact_vem",
 ]

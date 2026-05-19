@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .layout import DetectorPosition
+
+
+class DstUnitExhaustionError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -60,6 +65,7 @@ def _rusdmc_to_sim(rusdmc: dict[str, Any] | None) -> dict[str, Any]:
         "primaryCorePosX": _nested(rusdmc.get("corexyz"), 0, default=0.0) / 1.0e2,
         "primaryCorePosY": _nested(rusdmc.get("corexyz"), 1, default=0.0) / 1.0e2,
         "primaryCorePosZ": _nested(rusdmc.get("corexyz"), 2, default=0.0) / 1.0e2,
+        "primaryParticleId": int(rusdmc.get("parttype", -1)),
         "eventNum": int(rusdmc.get("event_num", -1)),
     }
 
@@ -141,12 +147,30 @@ def _bank_filter(kind: str) -> list[str]:
     return ["talesdcalibev", "talesdcalib", "rusdraw", "rusdmc"]
 
 
+def _is_dst_unit_exhaustion(exc: BaseException) -> bool:
+    if isinstance(exc, DstUnitExhaustionError):
+        return True
+    message = str(exc)
+    return "unit 1024" in message or "out of allowed range [0-1023]" in message
+
+
+def _raise_dst_unit_exhaustion(exc: BaseException) -> None:
+    raise DstUnitExhaustionError(
+        "DST unit handles were exhausted in this process. "
+        "For large exports, keep file-level worker recycling enabled with --worker-max-files."
+    ) from exc
+
+
 def iter_dst_banks(
     paths: Sequence[str | Path],
     detector_positions: dict[int, DetectorPosition] | None = None,
     kind: str = "auto",
     max_events: int | None = None,
     require_trigger_mode0: bool = True,
+    skip_errors: bool = False,
+    source_indices: set[int] | None = None,
+    open_retries: int = 1,
+    open_retry_delay: float = 1.0,
 ) -> Iterator[BankRecord]:
     """Stream TALE-SD-like calibev banks from data or MC DST files."""
 
@@ -158,25 +182,50 @@ def iter_dst_banks(
     emitted = 0
     for path_obj in paths:
         path = Path(path_obj).expanduser()
-        with dstio.open(str(path), banks=_bank_filter(kind)) as dst:
-            for source_index, event in enumerate(dst):
-                bank = event.get("talesdcalibev") or event.get("talesdcalib")
-                source_kind = "data"
-                if bank is None and (kind in {"auto", "mc"}):
-                    if detector_positions is None:
-                        raise ValueError("MC rusdraw input requires TALE-SD positions from talesdconst; pass --const-dst")
-                    bank = _convert_rusdraw_event(event, detector_positions)
-                    source_kind = "mc"
-                if bank is None:
-                    continue
-                if require_trigger_mode0 and int(bank.get("trgMode", 0)) != 0:
-                    continue
-                yield BankRecord(
-                    bank=bank,
-                    source_path=str(path),
-                    source_index=source_index,
-                    source_kind=source_kind,
-                )
-                emitted += 1
-                if max_events is not None and emitted >= max_events:
-                    return
+        dst_handle = None
+        try:
+            last_exc: Exception | None = None
+            for attempt in range(max(int(open_retries), 1)):
+                try:
+                    dst_handle = dstio.open(str(path), banks=_bank_filter(kind))
+                    break
+                except Exception as exc:
+                    if _is_dst_unit_exhaustion(exc):
+                        _raise_dst_unit_exhaustion(exc)
+                    last_exc = exc
+                    if attempt + 1 < max(int(open_retries), 1):
+                        time.sleep(max(float(open_retry_delay), 0.0) * (attempt + 1))
+            if dst_handle is None:
+                if last_exc is not None:
+                    raise last_exc
+                raise OSError(f"failed to open DST: {path}")
+            with dst_handle as dst:
+                for source_index, event in enumerate(dst):
+                    if source_indices is not None and source_index not in source_indices:
+                        continue
+                    bank = event.get("talesdcalibev") or event.get("talesdcalib")
+                    source_kind = "data"
+                    if bank is None and (kind in {"auto", "mc"}):
+                        if detector_positions is None:
+                            raise ValueError("MC rusdraw input requires TALE-SD positions from talesdconst; pass --const-dst")
+                        bank = _convert_rusdraw_event(event, detector_positions)
+                        source_kind = "mc"
+                    if bank is None:
+                        continue
+                    if require_trigger_mode0 and int(bank.get("trgMode", 0)) != 0:
+                        continue
+                    yield BankRecord(
+                        bank=bank,
+                        source_path=str(path),
+                        source_index=source_index,
+                        source_kind=source_kind,
+                    )
+                    emitted += 1
+                    if max_events is not None and emitted >= max_events:
+                        return
+        except Exception as exc:
+            if _is_dst_unit_exhaustion(exc):
+                _raise_dst_unit_exhaustion(exc)
+            if not skip_errors:
+                raise
+            print(f"warning: skipping unreadable DST {path}: {exc}")

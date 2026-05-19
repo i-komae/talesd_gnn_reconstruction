@@ -1,0 +1,115 @@
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={draw, rounded corners=1.5pt, align=center, inner xsep=5pt, inner ysep=4pt},
+  input/.style={box, fill=blue!7},
+  enc/.style={box, fill=green!8},
+  gnn/.style={box, fill=orange!10},
+  readout/.style={box, fill=purple!8},
+  output/.style={box, fill=red!7},
+  note/.style={align=left, font=\scriptsize},
+  arrow/.style={-{Latex[length=2.4mm]}, thick}
+]
+
+\node[input, text width=58mm] (graph) at (0,0) {
+  \textbf{Input graph}\\
+  accepted pulse nodes\\
+  $N_v$ nodes, $N_e$ directed edges\\
+  detector-ID embedding: $0$
+};
+
+\node[input, text width=34mm, below left=12mm and 28mm of graph] (x) {
+  \textbf{Node scalars}\\
+  $\mathbf{X}:N_v\times29$\\
+  geometry, timing\\
+  signal, calibration
+};
+\node[input, text width=34mm, below=12mm of graph] (w) {
+  \textbf{Pulse traces}\\
+  $\mathbf{W}:N_v\times4\times128$\\
+  upper/lower raw\\
+  upper/lower compact
+};
+\node[input, text width=34mm, below right=12mm and 28mm of graph] (p) {
+  \textbf{Pulse scalars}\\
+  $\mathbf{P}:N_v\times6$\\
+  time, charge\\
+  order, first flag
+};
+
+\node[enc, text width=34mm, below=10mm of w] (wenc) {
+  \textbf{1D CNN--GRU}\\
+  Conv $4\!\to\!32\!\to\!64$\\
+  BiGRU pooling\\
+  $N_v\times64$
+};
+\node[enc, text width=34mm, below=10mm of p] (penc) {
+  \textbf{Pulse MLP}\\
+  $6\!\to\!192\!\to\!192$\\
+  mean $\oplus$ max\\
+  $N_v\times384$
+};
+
+\node[enc, text width=52mm, below=18mm of wenc] (concat) {
+  \textbf{Per-node concatenation}\\
+  $29\oplus64\oplus384$\\
+  $N_v\times477$
+};
+\node[enc, text width=52mm, below=10mm of concat] (nenc) {
+  \textbf{Node encoder}\\
+  MLP $477\!\to\!192\!\to\!192$\\
+  $\mathbf{h}_v:N_v\times192$
+};
+
+\node[input, text width=32mm, right=8mm of nenc] (edge) {
+  \textbf{Edge scalars}\\
+  $\mathbf{A}:N_e\times13$\\
+  geometry, time\\
+  charge, Ising
+};
+
+\node[gnn, text width=58mm, below=10mm of nenc] (mp) {
+  \textbf{Gated GNN layers}\\
+  $5$ message-passing layers\\
+  edge input $2H+13=397$\\
+  hidden dimension $H=192$
+};
+
+\node[readout, text width=58mm, below=10mm of mp] (readout) {
+  \textbf{Graph readout}\\
+  mean $\oplus$ max $\oplus$ $4$ attention heads\\
+  $1152\!\to\!384\!\to\!192$
+};
+
+\node[output, text width=42mm, below left=11mm and 8mm of readout] (reco) {
+  \textbf{Reconstruction}\\
+  $\log_{10}E$: $1$\\
+  core $(x,y,z)$: $3$\\
+  direction $\hat{n}$: $3$
+};
+\node[output, text width=42mm, below right=11mm and 8mm of readout] (mass) {
+  \textbf{Optional mass}\\
+  $192\!\to\!96\!\to\!1$\\
+  proton/iron logit\\
+  disabled by default
+};
+
+\draw[arrow] (graph.south) -- ++(0,-4mm) -| (x.north);
+\draw[arrow] (graph.south) -- (w.north);
+\draw[arrow] (graph.south) -- ++(0,-4mm) -| (p.north);
+\draw[arrow] (w) -- (wenc);
+\draw[arrow] (p) -- (penc);
+\draw[arrow] (x.south) -- ++(0,-36mm) -| ([xshift=-18mm]concat.north);
+\draw[arrow] (wenc.south) -- (concat.north);
+\draw[arrow] (penc.south) -- ++(0,-7mm) -| ([xshift=18mm]concat.north);
+\draw[arrow] (concat) -- (nenc);
+\draw[arrow] (nenc) -- (mp);
+\draw[arrow] (edge.south) -- ++(0,-5mm) -| ([xshift=20mm]mp.north);
+\draw[arrow] (mp) -- (readout);
+\draw[arrow] (readout.south) -- ++(0,-5mm) -| (reco.north);
+\draw[arrow] (readout.south) -- ++(0,-5mm) -| (mass.north);
+
+\node[note, below=5mm of reco.south east, text width=84mm, anchor=north] {
+  The graph is pulse-based.  The four trace channels are auxiliary features attached to each accepted-pulse node; they are not a detector-plane CNN input.
+};
+
+\end{tikzpicture}

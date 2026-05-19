@@ -12,6 +12,8 @@ dependencies = [
     "h5py>=3.10",
     "matplotlib>=3.8",
     "numpy>=2.0",
+    "pybind11>=3.0.4",
+    "scipy>=1.17.1",
     "torch>=2.3",
     "tqdm>=4.66",
 ]
@@ -21,8 +23,11 @@ talesd-gnn = "talesd_gnn_reconstruction.cli:main"
 talesd-gnn-reconstruction = "talesd_gnn_reconstruction.cli:main"
 
 [build-system]
-requires = ["uv_build>=0.9.4,<0.10.0"]
-build-backend = "uv_build"
+requires = ["setuptools>=69", "wheel", "pybind11>=3.0.4", "numpy>=2.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.uv.sources]
 dstio = { path = "../dstio", editable = true }
