@@ -754,27 +754,46 @@ def _cmd_export(args: argparse.Namespace) -> None:
             config["scan_selected_files"] = len(selected_by_path)
 
             file_results = _iter_file_results(inputs, args, detector_positions, selected_indices_by_path=selected_by_path)
-            reservoirs: dict[int, list[tuple[float, str, Any]]] = {}
-            graph_seen_by_bin: dict[int, int] = {}
-            for result in file_results:
-                skipped += int(result["skipped"])
-                for graph in result["graphs"]:
-                    if not _add_energy_sample(
-                        graph,
-                        reservoirs,
-                        graph_seen_by_bin,
-                        per_bin=max(int(args.energy_sample_per_bin), 1),
-                        bin_width=float(args.energy_bin_width),
-                        seed=int(args.seed),
-                        stratify_particle=bool(args.energy_sample_stratify_particle),
-                    ):
-                        skipped += 1
-            sampled_graphs = _sampled_graphs_from_reservoirs(reservoirs, seed=int(args.seed))
+            graph_seen_by_bin: dict[int | tuple[str, int], int] = {}
+            per_bin = max(int(args.energy_sample_per_bin), 1)
+            if preselect_per_bin <= per_bin:
+                config["energy_sample_streaming_preselected"] = True
+
+                def selected_graphs_from_files() -> Iterator[Any]:
+                    nonlocal skipped
+                    for result in file_results:
+                        skipped += int(result["skipped"])
+                        for graph in result["graphs"]:
+                            if graph.target is None or graph.target.shape[0] == 0 or not math.isfinite(float(graph.target[0])):
+                                skipped += 1
+                                continue
+                            particle = _particle_stratum_from_graph(graph) if bool(args.energy_sample_stratify_particle) else None
+                            bin_key = _energy_sample_bin_key(float(graph.target[0]), float(args.energy_bin_width), particle=particle)
+                            graph_seen_by_bin[bin_key] = graph_seen_by_bin.get(bin_key, 0) + 1
+                            yield graph
+
+                written_total, written_paths = _write_graph_iterable(selected_graphs_from_files(), args, config)
+            else:
+                reservoirs: dict[int | tuple[str, int], list[tuple[float, str, Any]]] = {}
+                for result in file_results:
+                    skipped += int(result["skipped"])
+                    for graph in result["graphs"]:
+                        if not _add_energy_sample(
+                            graph,
+                            reservoirs,
+                            graph_seen_by_bin,
+                            per_bin=per_bin,
+                            bin_width=float(args.energy_bin_width),
+                            seed=int(args.seed),
+                            stratify_particle=bool(args.energy_sample_stratify_particle),
+                        ):
+                            skipped += 1
+                sampled_graphs = _sampled_graphs_from_reservoirs(reservoirs, seed=int(args.seed))
+                written_total, written_paths = _write_graph_iterable(sampled_graphs, args, config)
             config["energy_graph_seen_by_bin"] = {
                 _energy_sample_bin_label(bin_key, float(args.energy_bin_width)): count
                 for bin_key, count in sorted(graph_seen_by_bin.items(), key=lambda item: str(item[0]))
             }
-            written_total, written_paths = _write_graph_iterable(sampled_graphs, args, config)
         else:
             file_results = _iter_file_results(inputs, args, detector_positions)
 
