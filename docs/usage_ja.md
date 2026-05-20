@@ -196,7 +196,7 @@ MAX_EVENTS_PER_FILE=256 RUN_NAME=large256_export_$(date +%Y%m%d_%H%M%S) \
   scripts/export_large_graphs.sh
 ```
 
-このscriptはproton/ironの6入力ディレクトリを読み、`~/TALE/gnn/outputs/graphs/<run_name>/` にshardを作成します。export完了時に以下のmarkerを強調表示します。
+このscriptはproton/ironの6入力ディレクトリを読み、`~/TALE/gnn/outputs/talesd_gnn_reconstruction/runs/<run_name>/graphs/` にshardを作成します。export完了時に以下のmarkerを強調表示します。
 
 ```text
 DST FILE READING COMPLETE
