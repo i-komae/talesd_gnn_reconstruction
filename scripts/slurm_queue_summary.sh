@@ -52,7 +52,7 @@ need_command() {
 
 print_sinfo() {
   echo
-  echo "##### SLURM INFO #####"
+  echo "##### SLURM NODE INFO #####"
   echo "date     : $(date)"
   echo "login    : $(hostname)"
   echo "user     : ${USER:-unknown}"
@@ -64,10 +64,108 @@ print_sinfo() {
     || true
 }
 
+print_resource_info() {
+  echo
+  echo "##### RSC INFO #####"
+  echo "GPU Used/Total is computed from Slurm CfgTRES/AllocTRES."
+  echo
+
+  if ! command -v scontrol >/dev/null 2>&1; then
+    echo "scontrol is not available; cannot compute GPU Used/Total."
+    return
+  fi
+
+  scontrol show node -o | awk -v parts="${GPU_PARTITIONS}" '
+    BEGIN {
+      nrequested = split(parts, requested, ",")
+      nparts = 0
+      for (i = 1; i <= nrequested; i++) {
+        if (requested[i] != "") {
+          nparts++
+          order[nparts] = requested[i]
+          wanted[requested[i]] = 1
+        }
+      }
+      width = 25
+      printf "%-24s %-25s %8s %12s\n", "PARTITION", "GPU USE", "USED%", "USED/TOTAL"
+    }
+
+    function has_partition(list, part, values, nvalues, i) {
+      nvalues = split(list, values, ",")
+      for (i = 1; i <= nvalues; i++) {
+        if (values[i] == part) {
+          return 1
+        }
+      }
+      return 0
+    }
+
+    function gpu_count(tres, values, nvalues, i, item, sum) {
+      sum = 0
+      nvalues = split(tres, values, ",")
+      for (i = 1; i <= nvalues; i++) {
+        item = values[i]
+        if (item ~ /^gres\/gpu[^=]*=/) {
+          sub(/^gres\/gpu[^=]*=/, "", item)
+          sum += item + 0
+        }
+      }
+      return sum
+    }
+
+    {
+      partitions = ""
+      cfg_tres = ""
+      alloc_tres = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^Partitions=/) {
+          partitions = substr($i, 12)
+        } else if ($i ~ /^CfgTRES=/) {
+          cfg_tres = substr($i, 9)
+        } else if ($i ~ /^AllocTRES=/) {
+          alloc_tres = substr($i, 11)
+        }
+      }
+
+      cfg_gpu = gpu_count(cfg_tres)
+      alloc_gpu = gpu_count(alloc_tres)
+      if (cfg_gpu <= 0) {
+        next
+      }
+
+      for (i = 1; i <= nparts; i++) {
+        part = order[i]
+        if (has_partition(partitions, part)) {
+          total[part] += cfg_gpu
+          used[part] += alloc_gpu
+        }
+      }
+    }
+
+    END {
+      for (i = 1; i <= nparts; i++) {
+        part = order[i]
+        if (total[part] <= 0) {
+          continue
+        }
+        pct = 100.0 * used[part] / total[part]
+        filled = int(width * used[part] / total[part] + 0.5)
+        if (filled > width) {
+          filled = width
+        }
+        bar = ""
+        for (j = 1; j <= width; j++) {
+          bar = bar (j <= filled ? "*" : "-")
+        }
+        printf "%-24s %s %7.1f%% %6d/%-6d\n", part, bar, pct, used[part], total[part]
+      }
+    }'
+}
+
 print_job_table() {
   local title="$1"
   local scope="$2"
-  local -a cmd=(squeue -o "%.18i %.22P %.28j %.10u %.2t %.10M %.10l %.6D %R")
+  local -a cmd=(squeue -o "%.18i %.22P %.28j %.10u %.10T %.10M %.10l %.6D %R")
   if [[ "${scope}" == "mine" ]]; then
     cmd+=(-u "${USER}")
   fi
@@ -87,7 +185,7 @@ print_summary() {
 
   echo
   echo "##### ${title} SUMMARY BY PARTITION #####"
-  printf "%-24s %8s %8s %8s %8s\n" "PARTITION" "TOTAL" "PD" "R" "OTHER"
+  printf "%-24s %8s %8s %8s %8s\n" "PARTITION" "TOTAL" "PENDING" "RUNNING" "OTHER"
 
   local data
   data="$("${cmd[@]}" || true)"
@@ -116,7 +214,7 @@ print_summary() {
     }' | sort
 
   echo
-  printf "%-24s %8s %8s %8s %8s\n" "TOTAL" "TOTAL" "PD" "R" "OTHER"
+  printf "%-24s %8s %8s %8s %8s\n" "TOTAL" "TOTAL" "PENDING" "RUNNING" "OTHER"
   printf "%s\n" "${data}" | awk '
     {
       total++
@@ -165,6 +263,7 @@ print_pending_reasons() {
 need_command sinfo
 need_command squeue
 
+print_resource_info
 print_sinfo
 print_job_table "MY JOBS" "mine"
 print_summary "MY JOBS" "mine"
