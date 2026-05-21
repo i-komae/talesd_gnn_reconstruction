@@ -168,6 +168,10 @@ print_resource_info() {
       return ""
     }
 
+    function class_mark(class) {
+      return class_color(class) "*" reset
+    }
+
     function usage_color(pct) {
       if (pct >= 95.0) {
         return red
@@ -234,9 +238,8 @@ print_resource_info() {
         for (j = 1; j <= width; j++) {
           bar = bar (j <= filled ? "*" : "-")
         }
-        name_color = class_color(class)
         bar_color = usage_color(pct)
-        printf "%s%-10s%s %s%s%s %7.1f%% %6d/%-6d\n", name_color, class, reset, bar_color, bar, reset, pct, used[class], total[class]
+        printf "%s %-10s %s%s%s %7.1f%% %6d/%-6d\n", class_mark(class), class, bar_color, bar, reset, pct, used[class], total[class]
       }
     }'
 }
@@ -264,7 +267,7 @@ print_summary() {
 
   echo
   printf "%s##### %s SUMMARY BY PARTITION #####%s\n" "${BOLD}${CYAN}" "${title}" "${RESET}"
-  printf "%s%-24s %8s %8s %8s %8s%s\n" "${BOLD}" "PARTITION" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "PARTITION" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
 
   local data
   data="$("${cmd[@]}" || true)"
@@ -303,13 +306,15 @@ print_summary() {
       }
       return ""
     }
+    function part_mark(part) {
+      return part_color(part) "*" reset
+    }
     {
-      color = part_color($1)
-      printf "%s%-24s%s %8s %8s %8s %8s\n", color, $1, reset, $2, $3, $4, $5
+      printf "%-2s %-24s %8s %8s %8s %8s\n", part_mark($1), $1, $2, $3, $4, $5
     }'
 
   echo
-  printf "%s%-24s %8s %8s %8s %8s%s\n" "${BOLD}" "TOTAL" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "TOTAL" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
   printf "%s\n" "${data}" | awk -v bold="${BOLD}" -v reset="${RESET}" '
     {
       total++
@@ -322,7 +327,7 @@ print_summary() {
       }
     }
     END {
-      printf "%s%-24s %8d %8d %8d %8d%s\n", bold, "all", total+0, pending+0, running+0, other+0, reset
+      printf "%s%-2s %-24s %8d %8d %8d %8d%s\n", bold, "", "all", total+0, pending+0, running+0, other+0, reset
     }'
 }
 
@@ -367,7 +372,7 @@ print_gpu_queue_summary() {
   fi
 
   printf "%sBY GPU CLASS%s\n" "${BOLD}" "${RESET}"
-  printf "%s%-10s %8s %8s %8s %8s%s\n" "${BOLD}" "GPU CLASS" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-10s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GPU CLASS" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
   printf "%s\n" "${data}" | awk '
     function gpu_class(part) {
       if (part ~ /a100/) {
@@ -410,14 +415,16 @@ print_gpu_queue_summary() {
       }
       return ""
     }
+    function class_mark(class) {
+      return class_color(class) "*" reset
+    }
     {
-      color = class_color($1)
-      printf "%s%-10s%s %8s %8s %8s %8s\n", color, $1, reset, $2, $3, $4, $5
+      printf "%-2s %-10s %8s %8s %8s %8s\n", class_mark($1), $1, $2, $3, $4, $5
     }'
 
   echo
   printf "%sBY PARTITION%s\n" "${BOLD}" "${RESET}"
-  printf "%s%-24s %8s %8s %8s %8s%s\n" "${BOLD}" "PARTITION" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "PARTITION" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
   printf "%s\n" "${data}" | awk '
     {
       part=$1
@@ -448,9 +455,11 @@ print_gpu_queue_summary() {
       }
       return ""
     }
+    function part_mark(part) {
+      return part_color(part) "*" reset
+    }
     {
-      color = part_color($1)
-      printf "%s%-24s%s %8s %8s %8s %8s\n", color, $1, reset, $2, $3, $4, $5
+      printf "%-2s %-24s %8s %8s %8s %8s\n", part_mark($1), $1, $2, $3, $4, $5
     }'
 }
 
