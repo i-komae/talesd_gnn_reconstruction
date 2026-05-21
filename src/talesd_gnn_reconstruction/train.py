@@ -935,7 +935,7 @@ def train_model(
         collate_threads=collate_threads,
     )
     stage_seconds["model_and_loaders"] = time.perf_counter() - stage_started
-    print(
+    _progress_write(
         f"device={device} data_loader_workers={num_workers} "
         f"preprocess_workers={preprocess_workers} "
         f"prefetch_factor={prefetch_factor} collate_backend={collate_backend} "
@@ -945,8 +945,11 @@ def train_model(
         + f" waveform_encoder={waveform_encoder} waveform_channels={model_kwargs['waveform_channels']}"
         + f" loss_mode={loss_mode} mass_classification={mass_classification}"
         + f" particle_filter={particle_filter}"
-        + (f" requested_collate_backend={requested_collate_backend}" if requested_collate_backend != collate_backend else ""),
-        flush=True,
+        + (
+            f" requested_collate_backend={requested_collate_backend}"
+            if requested_collate_backend != collate_backend
+            else ""
+        )
     )
 
     best_val = float("inf")
@@ -1250,10 +1253,9 @@ def train_model(
     )
     stage_seconds["save_metrics"] = time.perf_counter() - stage_started
     stage_seconds["total"] = time.perf_counter() - overall_started
-    print(
-        "stage_seconds:",
-        json.dumps({name: round(value, 3) for name, value in stage_seconds.items()}, sort_keys=True),
-        flush=True,
+    _progress_write(
+        "stage_seconds: "
+        + json.dumps({name: round(value, 3) for name, value in stage_seconds.items()}, sort_keys=True)
     )
     dataset.close()
     return {

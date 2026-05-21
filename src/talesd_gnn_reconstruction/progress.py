@@ -31,6 +31,13 @@ def _progress_width() -> int:
     return max(40, min(columns - 1, 120))
 
 
+def progress_stream() -> TextIO:
+    stream = os.environ.get("TALESD_GNN_PROGRESS_STREAM", "stderr").strip().lower()
+    if stream == "stdout":
+        return sys.stdout
+    return sys.stderr
+
+
 class LineProgress:
     def __init__(self, desc: str, total: int | None = None) -> None:
         self.desc = desc
@@ -68,12 +75,12 @@ class LineProgress:
     def _report_if_due(self) -> None:
         now = time.perf_counter()
         if now - self.last_report >= self.interval:
-            print(self._line(), file=sys.stderr, flush=True)
+            print(self._line(), file=progress_stream(), flush=True)
             self.last_report = now
 
     def close(self) -> None:
         if not self.closed:
-            print(self._line(final=True), file=sys.stderr, flush=True)
+            print(self._line(final=True), file=progress_stream(), flush=True)
             self.closed = True
 
 
@@ -103,6 +110,7 @@ class NullProgress:
 
 
 def _tqdm_kwargs(leave: bool = True, position: int | None = None) -> dict[str, Any]:
+    stream = progress_stream()
     kwargs: dict[str, Any] = {
         "leave": leave,
         "dynamic_ncols": False,
@@ -110,7 +118,7 @@ def _tqdm_kwargs(leave: bool = True, position: int | None = None) -> dict[str, A
         "ascii": True,
         "mininterval": 0.5,
         "smoothing": 0.1,
-        "file": sys.stderr,
+        "file": stream,
         "bar_format": "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
     }
     if position is not None:
@@ -128,7 +136,7 @@ def progress(
 ) -> Any:
     if not enabled:
         return iterable
-    if not sys.stderr.isatty():
+    if not progress_stream().isatty():
         return LineProgressIterable(iterable, desc=desc, total=total)
     try:
         from tqdm import tqdm
@@ -141,7 +149,7 @@ def progress(
 def progress_bar(desc: str, total: int, enabled: bool = True, position: int | None = None) -> Any:
     if not enabled:
         return NullProgress()
-    if not sys.stderr.isatty():
+    if not progress_stream().isatty():
         return LineProgress(desc=desc, total=total)
     try:
         from tqdm import tqdm
@@ -153,8 +161,8 @@ def progress_bar(desc: str, total: int, enabled: bool = True, position: int | No
 
 def write(message: str, *, file: TextIO | None = None, flush: bool = True) -> None:
     if file is None:
-        file = sys.stderr
-    if sys.stderr.isatty():
+        file = progress_stream()
+    if file.isatty():
         try:
             from tqdm import tqdm
 

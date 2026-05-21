@@ -82,7 +82,8 @@ fi
 SBATCH_DIR="${RUN_DIR}/slurm"
 SLURM_LOG_DIR="${RUN_DIR}/slurm_logs"
 SUMMARY_DIR="${RUN_DIR}/summaries"
-mkdir -p "${SBATCH_DIR}" "${SLURM_LOG_DIR}" "${SUMMARY_DIR}"
+LOG_DIR="${RUN_DIR}/logs"
+mkdir -p "${SBATCH_DIR}" "${SLURM_LOG_DIR}" "${SUMMARY_DIR}" "${LOG_DIR}"
 
 SBATCH_FILE="${SBATCH_DIR}/${RUN_NAME}.sbatch"
 
@@ -98,6 +99,10 @@ cat > "${SBATCH_FILE}" <<EOF
 #SBATCH --error=${SLURM_LOG_DIR}/%x_%j.err
 
 set -euo pipefail
+
+JOB_LOG_PATH="${LOG_DIR}/${RUN_NAME}.job.log"
+mkdir -p "${LOG_DIR}" "${SUMMARY_DIR}" "${SLURM_LOG_DIR}"
+exec > >(tee -a "\${JOB_LOG_PATH}") 2>&1
 
 module purge
 module load gcc/13.1.0 cmake/3.28 cuda/12.6.0 hdf5/2.0.0 mkl/latest tbb/latest
@@ -116,6 +121,7 @@ echo "slurm_job_id=\${SLURM_JOB_ID:-}"
 echo "partition=${PARTITION}"
 echo "graph_input=${GRAPH_INPUT}"
 echo "run_dir=${RUN_DIR}"
+echo "job_log=${LOG_DIR}/${RUN_NAME}.job.log"
 echo "epochs=${TRAIN_EPOCHS}"
 echo "batch_size=${BATCH_SIZE}"
 echo "train_workers=${TRAIN_WORKERS}"
@@ -134,9 +140,18 @@ else
 fi
 
 if [[ "${SUMMARIZE_GRAPHS}" == "1" ]]; then
-  .venv/bin/python scripts/summarize_graph_shards.py "${GRAPH_INPUT}" \\
-    --workers "${PREPROCESS_WORKERS}" \\
-    -o "${SUMMARY_DIR}/graph_summary.json"
+  {
+    echo "======================================================================"
+    echo "SUMMARIZE GRAPH SHARDS"
+    echo "date=\$(date)"
+    echo "summary_json=${SUMMARY_DIR}/graph_summary.json"
+    echo "summary_log=${SUMMARY_DIR}/graph_summary.log"
+    .venv/bin/python scripts/summarize_graph_shards.py "${GRAPH_INPUT}" \\
+      --workers "${PREPROCESS_WORKERS}" \\
+      -o "${SUMMARY_DIR}/graph_summary.json"
+    echo "date=\$(date)"
+    echo "======================================================================"
+  } 2>&1 | tee -a "${SUMMARY_DIR}/graph_summary.log"
 fi
 
 env \\
@@ -193,6 +208,9 @@ sbatch_file:
 run_dir:
   ${RUN_DIR}
 
+job_log:
+  ${LOG_DIR}/${RUN_NAME}.job.log
+
 graph_input:
   ${GRAPH_INPUT}
 
@@ -204,6 +222,7 @@ epochs=${TRAIN_EPOCHS}
 batch_size=${BATCH_SIZE}
 train_workers=${TRAIN_WORKERS}
 preprocess_workers=${PREPROCESS_WORKERS}
+graph_summary_log=${SUMMARY_DIR}/graph_summary.log
 
 This job trains only from local HDF5 graph shards. It does not read DST.
 ======================================================================
