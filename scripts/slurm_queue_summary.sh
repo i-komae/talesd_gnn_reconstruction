@@ -5,13 +5,14 @@ GPU_PARTITIONS_DEFAULT="a100_devel-al9,a100_short-al9,a100-al9,a100_long-al9,v10
 GPU_PARTITIONS="${GPU_PARTITIONS:-${GPU_PARTITIONS_DEFAULT}}"
 MY_ONLY=0
 DETAILS=0
+SHOW_NODES=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/slurm_queue_summary.sh [1|--mine-only] [--details]
+Usage: scripts/slurm_queue_summary.sh [1|--mine-only] [--details] [--nodes]
 
 Default output is compact:
-  - GPU node state
+  - GPU Used/Total summary
   - my jobs
   - my summary
   - all-job summary
@@ -19,6 +20,7 @@ Default output is compact:
 Options:
   1, --mine-only  Stop after my jobs and my summary.
   --details       Also print the full all-job table.
+  --nodes         Also print Slurm node state from sinfo.
 EOF
 }
 
@@ -29,6 +31,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --details|--all-details)
       DETAILS=1
+      ;;
+    --nodes|--node-info)
+      SHOW_NODES=1
       ;;
     -h|--help)
       usage
@@ -264,7 +269,9 @@ need_command sinfo
 need_command squeue
 
 print_resource_info
-print_sinfo
+if [[ "${SHOW_NODES}" == "1" ]]; then
+  print_sinfo
+fi
 print_job_table "MY JOBS" "mine"
 print_summary "MY JOBS" "mine"
 print_pending_reasons "MY JOBS" "mine"
