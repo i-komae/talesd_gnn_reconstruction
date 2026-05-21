@@ -942,6 +942,11 @@ def train_model(
     )
     stage_seconds["model_and_loaders"] = time.perf_counter() - stage_started
     _progress_write(
+        f"graphs={len(dataset)} train_events={len(train_indices)} val_events={len(val_indices)} "
+        f"test_events={len(test_indices)} batch_size={batch_size} "
+        f"train_batches={len(train_loader)} val_batches={len(val_loader)} test_batches={len(test_loader)}"
+    )
+    _progress_write(
         f"device={device} data_loader_workers={num_workers} "
         f"preprocess_workers={preprocess_workers} "
         f"prefetch_factor={prefetch_factor} collate_backend={collate_backend} "
