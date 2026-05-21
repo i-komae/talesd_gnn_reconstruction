@@ -48,6 +48,8 @@ TRAIN_WORKERS="${TRAIN_WORKERS:-4}"
 PREPROCESS_WORKERS="${PREPROCESS_WORKERS:-0}"
 COLLATE_THREADS="${COLLATE_THREADS:-1}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
+TRAINING_TASK="${TRAINING_TASK:-reconstruction}"
+MASS_CLASSIFICATION="${MASS_CLASSIFICATION:-0}"
 VAL_FRACTION="${VAL_FRACTION:-0.10}"
 TEST_FRACTION="${TEST_FRACTION:-0.20}"
 SPLIT_MODE="${SPLIT_MODE:-source-stratified}"
@@ -57,7 +59,7 @@ DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT:-1000}"
 PRECISION_MIN_BIN_COUNT="${PRECISION_MIN_BIN_COUNT:-1000}"
 MAX_GRAPHS="${MAX_GRAPHS:-}"
 
-CONFIG_NAME="${CONFIG_NAME:-${MODEL_ARCHITECTURE}_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${LOSS_MODE}_${PARTICLE_FILTER}_${TRAIN_EPOCHS}epoch}"
+CONFIG_NAME="${CONFIG_NAME:-${TRAINING_TASK}_${MODEL_ARCHITECTURE}_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${LOSS_MODE}_${PARTICLE_FILTER}_${TRAIN_EPOCHS}epoch}"
 CHECKPOINT="${CHECKPOINT_DIR}/${CONFIG_NAME}.pt"
 LOG_PATH="${LOG_DIR}/${CONFIG_NAME}.log"
 METRICS_PATH="${CHECKPOINT}.metrics.json"
@@ -99,6 +101,8 @@ TRAIN_WORKERS=${TRAIN_WORKERS}
 PREPROCESS_WORKERS=${PREPROCESS_WORKERS}
 COLLATE_THREADS=${COLLATE_THREADS}
 PREFETCH_FACTOR=${PREFETCH_FACTOR}
+TRAINING_TASK=${TRAINING_TASK}
+MASS_CLASSIFICATION=${MASS_CLASSIFICATION}
 VAL_FRACTION=${VAL_FRACTION}
 TEST_FRACTION=${TEST_FRACTION}
 SPLIT_MODE=${SPLIT_MODE}
@@ -179,6 +183,7 @@ fi
     --prefetch-factor "${PREFETCH_FACTOR}" \
     --collate-backend cpp \
     --collate-threads "${COLLATE_THREADS}" \
+    --training-task "${TRAINING_TASK}" \
     --split-mode "${SPLIT_MODE}" \
     --test-fraction "${TEST_FRACTION}" \
     --val-fraction "${VAL_FRACTION}" \
@@ -187,6 +192,9 @@ fi
 
   if [[ -n "${MAX_GRAPHS}" ]]; then
     cmd+=(--max-graphs "${MAX_GRAPHS}")
+  fi
+  if [[ "${MASS_CLASSIFICATION}" == "1" || "${TRAINING_TASK}" == "mass" ]]; then
+    cmd+=(--mass-classification)
   fi
 
   "${cmd[@]}"
@@ -198,16 +206,28 @@ fi
 } 2>&1 | tee "${LOG_PATH}"
 
 .venv/bin/python scripts/summarize_metrics.py "${METRICS_PATH}" -o "${SUMMARY_DIR}/metrics_summary.csv"
-if .venv/bin/python scripts/check_precision_targets.py "${METRICS_PATH}" --min-bin-count "${PRECISION_MIN_BIN_COUNT}" -o "${PRECISION_REPORT}"; then
-  precision_status="PASS"
+if [[ "${TRAINING_TASK}" == "mass" ]]; then
+  precision_status="N/A"
+  cat > "${PRECISION_REPORT}" <<EOF
+Precision gate is not applied to mass-only training.
+
+Use:
+  checkpoints/${CONFIG_NAME}.pt.metrics.json
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_classification.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_classification.pdf
+EOF
 else
-  precision_status="FAIL"
+  if .venv/bin/python scripts/check_precision_targets.py "${METRICS_PATH}" --min-bin-count "${PRECISION_MIN_BIN_COUNT}" -o "${PRECISION_REPORT}"; then
+    precision_status="PASS"
+  else
+    precision_status="FAIL"
+  fi
 fi
 
 cat > "${RUN_DIR}/README.txt" <<EOF
 Run: ${RUN_NAME}
 Created: $(date)
-Purpose: large mass-free reconstruction training from existing local graph shards.
+Purpose: large ${TRAINING_TASK} training from existing local graph shards.
 
 Important files:
   config/train.env
@@ -217,6 +237,8 @@ Important files:
   checkpoints/${CONFIG_NAME}.pt.diagnostics/
   summaries/metrics_summary.csv
   summaries/${CONFIG_NAME}_precision_targets.txt
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_classification.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_classification.pdf
 
 Graph input:
   ${GRAPH_INPUT}

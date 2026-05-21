@@ -728,6 +728,7 @@ def train_model(
     prefetch_factor: int = 2,
     collate_backend: str = "auto",
     collate_threads: int = 1,
+    training_task: str = "reconstruction",
     mass_classification: bool = False,
     mass_loss_weight: float = 0.1,
     show_progress: bool = True,
@@ -743,6 +744,11 @@ def train_model(
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    training_task = str(training_task).lower()
+    if training_task not in {"reconstruction", "mass"}:
+        raise ValueError("training_task must be 'reconstruction' or 'mass'")
+    if training_task == "mass":
+        mass_classification = True
 
     overall_started = time.perf_counter()
     stage_seconds: dict[str, float] = {}
@@ -943,7 +949,7 @@ def train_model(
         + f" split_mode={split_mode} model_architecture={model_architecture}"
         + f" detector_embedding_dim={max(int(detector_embedding_dim), 0)} detector_count={len(detector_lids)}"
         + f" waveform_encoder={waveform_encoder} waveform_channels={model_kwargs['waveform_channels']}"
-        + f" loss_mode={loss_mode} mass_classification={mass_classification}"
+        + f" training_task={training_task} loss_mode={loss_mode} mass_classification={mass_classification}"
         + f" particle_filter={particle_filter}"
         + (
             f" requested_collate_backend={requested_collate_backend}"
@@ -976,31 +982,40 @@ def train_model(
             batch = _batch_to_device(batch_cpu, device, non_blocking=pin_memory)
             pred_all = model(batch)
             pred, mass_logit = _split_model_output(pred_all, target_dim, mass_classification)
-            reco_loss = _reconstruction_loss(
-                pred,
-                batch["y"],
-                mode=loss_mode,
-                target_mean=target_mean,
-                target_std=target_std,
-                energy_weight=energy_loss_weight,
-                core_weight=core_loss_weight,
-                direction_weight=direction_loss_weight,
-                core_scale_km=core_loss_scale_km,
-            )
-            loss = reco_loss
+            reco_loss = None
+            loss = None
+            if training_task != "mass":
+                reco_loss = _reconstruction_loss(
+                    pred,
+                    batch["y"],
+                    mode=loss_mode,
+                    target_mean=target_mean,
+                    target_std=target_std,
+                    energy_weight=energy_loss_weight,
+                    core_weight=core_loss_weight,
+                    direction_weight=direction_loss_weight,
+                    core_scale_km=core_loss_scale_km,
+                )
+                loss = reco_loss
             mass_loss = None
             if mass_classification and mass_logit is not None and bce_loss_fn is not None:
                 labels = batch["mass_label"].to(dtype=mass_logit.dtype)
                 mask = torch.isfinite(labels)
                 if torch.any(mask):
                     mass_loss = bce_loss_fn(mass_logit[mask], labels[mask])
-                    loss = loss + float(mass_loss_weight) * mass_loss
+                    if training_task == "mass":
+                        loss = mass_loss
+                    else:
+                        loss = loss + float(mass_loss_weight) * mass_loss
+            if loss is None:
+                raise ValueError("no valid loss was computed for this batch")
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
             train_losses.append(float(loss.detach().cpu()))
-            train_reco_losses.append(float(reco_loss.detach().cpu()))
+            if reco_loss is not None:
+                train_reco_losses.append(float(reco_loss.detach().cpu()))
             if mass_loss is not None:
                 train_mass_losses.append(float(mass_loss.detach().cpu()))
 
@@ -1021,27 +1036,36 @@ def train_model(
                 batch = _batch_to_device(batch_cpu, device, non_blocking=pin_memory)
                 pred_all = model(batch)
                 pred, mass_logit = _split_model_output(pred_all, target_dim, mass_classification)
-                reco_loss = _reconstruction_loss(
-                    pred,
-                    batch["y"],
-                    mode=loss_mode,
-                    target_mean=target_mean,
-                    target_std=target_std,
-                    energy_weight=energy_loss_weight,
-                    core_weight=core_loss_weight,
-                    direction_weight=direction_loss_weight,
-                    core_scale_km=core_loss_scale_km,
-                )
-                loss = reco_loss
+                reco_loss = None
+                loss = None
+                if training_task != "mass":
+                    reco_loss = _reconstruction_loss(
+                        pred,
+                        batch["y"],
+                        mode=loss_mode,
+                        target_mean=target_mean,
+                        target_std=target_std,
+                        energy_weight=energy_loss_weight,
+                        core_weight=core_loss_weight,
+                        direction_weight=direction_loss_weight,
+                        core_scale_km=core_loss_scale_km,
+                    )
+                    loss = reco_loss
                 mass_loss = None
                 if mass_classification and mass_logit is not None and bce_loss_fn is not None:
                     labels = batch["mass_label"].to(dtype=mass_logit.dtype)
                     mask = torch.isfinite(labels)
                     if torch.any(mask):
                         mass_loss = bce_loss_fn(mass_logit[mask], labels[mask])
-                        loss = loss + float(mass_loss_weight) * mass_loss
+                        if training_task == "mass":
+                            loss = mass_loss
+                        else:
+                            loss = loss + float(mass_loss_weight) * mass_loss
+                if loss is None:
+                    raise ValueError("no valid validation loss was computed for this batch")
                 val_losses.append(float(loss.detach().cpu()))
-                val_reco_losses.append(float(reco_loss.detach().cpu()))
+                if reco_loss is not None:
+                    val_reco_losses.append(float(reco_loss.detach().cpu()))
                 if mass_loss is not None:
                     val_mass_losses.append(float(mass_loss.detach().cpu()))
 
@@ -1049,10 +1073,12 @@ def train_model(
             "epoch": epoch,
             "train_loss": float(np.mean(train_losses)),
             "val_loss": float(np.mean(val_losses)),
-            "train_reconstruction_loss": float(np.mean(train_reco_losses)),
-            "val_reconstruction_loss": float(np.mean(val_reco_losses)),
             "lr": float(optimizer.param_groups[0]["lr"]),
         }
+        if train_reco_losses:
+            epoch_row["train_reconstruction_loss"] = float(np.mean(train_reco_losses))
+        if val_reco_losses:
+            epoch_row["val_reconstruction_loss"] = float(np.mean(val_reco_losses))
         if train_mass_losses:
             epoch_row["train_mass_loss"] = float(np.mean(train_mass_losses))
         if val_mass_losses:
@@ -1109,7 +1135,7 @@ def train_model(
         mass_classification=mass_classification,
         target_dim=target_dim,
     )
-    val_metrics = reconstruction_metrics(pred_val, target_val)
+    val_metrics = None if training_task == "mass" else reconstruction_metrics(pred_val, target_val)
     val_mass_metrics = (
         binary_classification_metrics(mass_logit_val, mass_label_val)
         if mass_classification and mass_logit_val is not None and mass_label_val is not None
@@ -1128,15 +1154,17 @@ def train_model(
         mass_classification=mass_classification,
         target_dim=target_dim,
     )
-    test_metrics = reconstruction_metrics(pred_test, target_test)
+    test_metrics = None if training_task == "mass" else reconstruction_metrics(pred_test, target_test)
     test_mass_metrics = (
         binary_classification_metrics(mass_logit_test, mass_label_test)
         if mass_classification and mass_logit_test is not None and mass_label_test is not None
         else None
     )
     stage_seconds["test_predict"] = time.perf_counter() - stage_started
-    _progress_write("validation metrics: " + json.dumps(val_metrics, sort_keys=True))
-    _progress_write("test metrics: " + json.dumps(test_metrics, sort_keys=True))
+    if val_metrics is not None:
+        _progress_write("validation metrics: " + json.dumps(val_metrics, sort_keys=True))
+    if test_metrics is not None:
+        _progress_write("test metrics: " + json.dumps(test_metrics, sort_keys=True))
     if val_mass_metrics is not None:
         _progress_write("validation mass metrics: " + json.dumps(val_mass_metrics, sort_keys=True))
     if test_mass_metrics is not None:
@@ -1162,6 +1190,7 @@ def train_model(
             test_particle_labels=mass_label_test,
             energy_bin_width=diagnostic_energy_bin_width,
             min_bin_count=diagnostic_min_bin_count,
+            save_reconstruction=training_task != "mass",
         )
         stage_seconds["diagnostics"] = time.perf_counter() - stage_started
     stage_seconds["total_before_save"] = time.perf_counter() - overall_started
@@ -1197,6 +1226,7 @@ def train_model(
             "collate_backend": collate_backend,
             "requested_collate_backend": requested_collate_backend,
             "collate_threads": collate_threads,
+            "training_task": training_task,
             "mass_classification": mass_classification,
             "mass_loss_weight": mass_loss_weight,
             "learning_rate": learning_rate,

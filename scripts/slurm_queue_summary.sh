@@ -135,7 +135,7 @@ print_resource_info() {
         }
       }
       width = 25
-      printf "%s%-10s %-25s %8s %12s%s\n", bold, "GPU CLASS", "GPU USE", "USED%", "USED/TOTAL", reset
+      printf "%s%-2s %-10s %-25s %8s %12s%s\n", bold, "", "GPU CLASS", "GPU USE", "USED%", "USED/TOTAL", reset
     }
 
     function node_class(list, values, nvalues, i, part) {
@@ -166,10 +166,6 @@ print_resource_info() {
         return magenta
       }
       return ""
-    }
-
-    function class_mark(class) {
-      return class_color(class) "*" reset
     }
 
     function usage_color(pct) {
@@ -239,7 +235,7 @@ print_resource_info() {
           bar = bar (j <= filled ? "*" : "-")
         }
         bar_color = usage_color(pct)
-        printf "%s %-10s %s%s%s %7.1f%% %6d/%-6d\n", class_mark(class), class, bar_color, bar, reset, pct, used[class], total[class]
+        printf "%s*%s  %-10s %s%s%s %7.1f%% %6d/%-6d\n", class_color(class), reset, class, bar_color, bar, reset, pct, used[class], total[class]
       }
     }'
 }
@@ -306,11 +302,8 @@ print_summary() {
       }
       return ""
     }
-    function part_mark(part) {
-      return part_color(part) "*" reset
-    }
     {
-      printf "%-2s %-24s %8s %8s %8s %8s\n", part_mark($1), $1, $2, $3, $4, $5
+      printf "%s*%s  %-24s %8s %8s %8s %8s\n", part_color($1), reset, $1, $2, $3, $4, $5
     }'
 
   echo
@@ -415,11 +408,8 @@ print_gpu_queue_summary() {
       }
       return ""
     }
-    function class_mark(class) {
-      return class_color(class) "*" reset
-    }
     {
-      printf "%-2s %-10s %8s %8s %8s %8s\n", class_mark($1), $1, $2, $3, $4, $5
+      printf "%s*%s  %-10s %8s %8s %8s %8s\n", class_color($1), reset, $1, $2, $3, $4, $5
     }'
 
   echo
@@ -455,11 +445,8 @@ print_gpu_queue_summary() {
       }
       return ""
     }
-    function part_mark(part) {
-      return part_color(part) "*" reset
-    }
     {
-      printf "%-2s %-24s %8s %8s %8s %8s\n", part_mark($1), $1, $2, $3, $4, $5
+      printf "%s*%s  %-24s %8s %8s %8s %8s\n", part_color($1), reset, $1, $2, $3, $4, $5
     }'
 }
 

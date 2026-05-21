@@ -20,6 +20,8 @@ TRAIN_WORKERS="${TRAIN_WORKERS:-12}"
 PREPROCESS_WORKERS="${PREPROCESS_WORKERS:-24}"
 COLLATE_THREADS="${COLLATE_THREADS:-1}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
+TRAINING_TASK="${TRAINING_TASK:-reconstruction}"
+MASS_CLASSIFICATION="${MASS_CLASSIFICATION:-0}"
 DEVICE="${DEVICE:-cuda}"
 
 MODEL_ARCHITECTURE="${MODEL_ARCHITECTURE:-physics}"
@@ -126,6 +128,8 @@ echo "epochs=${TRAIN_EPOCHS}"
 echo "batch_size=${BATCH_SIZE}"
 echo "train_workers=${TRAIN_WORKERS}"
 echo "preprocess_workers=${PREPROCESS_WORKERS}"
+echo "training_task=${TRAINING_TASK}"
+echo "mass_classification=${MASS_CLASSIFICATION}"
 echo "device=${DEVICE}"
 echo "This job does not read DST files."
 echo "======================================================================"
@@ -187,6 +191,8 @@ env \\
   PREPROCESS_WORKERS="${PREPROCESS_WORKERS}" \\
   COLLATE_THREADS="${COLLATE_THREADS}" \\
   PREFETCH_FACTOR="${PREFETCH_FACTOR}" \\
+  TRAINING_TASK="${TRAINING_TASK}" \\
+  MASS_CLASSIFICATION="${MASS_CLASSIFICATION}" \\
   VAL_FRACTION="${VAL_FRACTION}" \\
   TEST_FRACTION="${TEST_FRACTION}" \\
   SPLIT_MODE="${SPLIT_MODE}" \\
@@ -222,6 +228,8 @@ epochs=${TRAIN_EPOCHS}
 batch_size=${BATCH_SIZE}
 train_workers=${TRAIN_WORKERS}
 preprocess_workers=${PREPROCESS_WORKERS}
+training_task=${TRAINING_TASK}
+mass_classification=${MASS_CLASSIFICATION}
 graph_summary_log=${SUMMARY_DIR}/graph_summary.log
 
 This job trains only from local HDF5 graph shards. It does not read DST.

@@ -854,6 +854,7 @@ def _cmd_train(args: argparse.Namespace) -> None:
         prefetch_factor=args.prefetch_factor,
         collate_backend=args.collate_backend,
         collate_threads=args.collate_threads,
+        training_task=args.training_task,
         mass_classification=args.mass_classification,
         mass_loss_weight=args.mass_loss_weight,
         show_progress=not args.no_progress,
@@ -873,6 +874,12 @@ def _cmd_train(args: argparse.Namespace) -> None:
                 print(f"{split_name} diagnostics: {split_info['directory']}")
             elif split_info.get("pdf"):
                 print(f"{split_name} diagnostics: {split_info['pdf']}")
+        for split_name in ("validation_mass", "test_mass"):
+            split_info = diagnostics.get(split_name) or {}
+            if split_info.get("directory"):
+                print(f"{split_name} diagnostics: {split_info['directory']}")
+            elif split_info.get("pdfs"):
+                print(f"{split_name} diagnostics: {', '.join(split_info['pdfs'])}")
 
 
 def _cmd_predict(args: argparse.Namespace) -> None:
@@ -994,6 +1001,7 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--prefetch-factor", type=int, default=2, help="各DataLoader workerが先読みするbatch数")
     train.add_argument("--collate-backend", choices=["auto", "cpp", "python"], default="auto", help="batch構築backend。autoは小規模入力ではpython、大規模/worker利用時はcppを選ぶ")
     train.add_argument("--collate-threads", type=int, default=1, help="C++ collate内部のthread数。0ならautoまたはTALESD_GNN_COLLATE_THREADS")
+    train.add_argument("--training-task", choices=["reconstruction", "mass"], default="reconstruction", help="reconstructionは幾何/エネルギー再構成、massはproton/iron分類のみを学習する")
     train.add_argument("--mass-classification", action="store_true", help="rusdmc.parttype由来のproton/iron分類headも同時に学習する")
     train.add_argument("--mass-loss-weight", type=float, default=0.1, help="proton/iron分類lossを再構成lossに足す重み")
     train.add_argument("--no-progress", action="store_true", help="学習中のprogress barを表示しない")

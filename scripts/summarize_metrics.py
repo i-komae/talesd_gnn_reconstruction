@@ -54,6 +54,9 @@ def _row(path: Path) -> dict[str, Any]:
         "test_relative_energy_central68_width": _get(data, "metrics", "test", "relative_energy_central68_width"),
         "test_relative_energy_central68_half_width": _get(data, "metrics", "test", "relative_energy_central68_half_width"),
         "test_rmse_log10_energy": _get(data, "metrics", "test", "rmse_log10_energy"),
+        "test_mass_accuracy": _get(data, "metrics", "test_mass", "accuracy"),
+        "test_mass_auc": _get(data, "metrics", "test_mass", "auc"),
+        "test_mass_balanced_accuracy": _get(data, "metrics", "test_mass", "balanced_accuracy"),
         "val_angular_68_deg": _get(data, "metrics", "validation", "angular_68_deg"),
         "val_core_median_km": _get(data, "metrics", "validation", "core_median_km"),
         "val_core_xy_68_km": _get(data, "metrics", "validation", "core_xy_68_km"),
@@ -61,6 +64,9 @@ def _row(path: Path) -> dict[str, Any]:
         "val_median_relative_energy": _get(data, "metrics", "validation", "median_relative_energy"),
         "val_median_abs_relative_energy": _get(data, "metrics", "validation", "median_abs_relative_energy"),
         "val_relative_energy_central68_half_width": _get(data, "metrics", "validation", "relative_energy_central68_half_width"),
+        "val_mass_accuracy": _get(data, "metrics", "validation_mass", "accuracy"),
+        "val_mass_auc": _get(data, "metrics", "validation_mass", "auc"),
+        "val_mass_balanced_accuracy": _get(data, "metrics", "validation_mass", "balanced_accuracy"),
         "n_train": split.get("n_train", ""),
         "n_val": split.get("n_val", ""),
         "n_test": split.get("n_test", ""),
@@ -73,6 +79,7 @@ def _row(path: Path) -> dict[str, Any]:
         "layers": runtime.get("layers", ""),
         "dropout": runtime.get("dropout", ""),
         "device": runtime.get("device", ""),
+        "training_task": runtime.get("training_task", ""),
         "num_workers": runtime.get("num_workers", ""),
         "collate_backend": runtime.get("collate_backend", ""),
         "stage_epochs_sec": stage_seconds.get("epochs", ""),
@@ -89,7 +96,15 @@ def main() -> None:
     rows = [_row(Path(path).expanduser()) for path in args.metrics if Path(path).expanduser().exists()]
     if not rows:
         raise SystemExit("no metrics files found")
-    rows.sort(key=lambda row: float(row["test_angular_68_deg"]) if row["test_angular_68_deg"] != "" else float("inf"))
+    rows.sort(
+        key=lambda row: (
+            float(row["test_angular_68_deg"])
+            if row["test_angular_68_deg"] != ""
+            else -float(row["test_mass_accuracy"])
+            if row["test_mass_accuracy"] != ""
+            else float("inf")
+        )
+    )
     output = Path(args.output).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", newline="") as handle:

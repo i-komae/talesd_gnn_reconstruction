@@ -1238,6 +1238,7 @@ def save_training_diagnostics(
     test_particle_labels: np.ndarray | None = None,
     energy_bin_width: float = 0.1,
     min_bin_count: int = 20,
+    save_reconstruction: bool = True,
 ) -> dict[str, Any]:
     output = Path(output_path).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1245,33 +1246,34 @@ def save_training_diagnostics(
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
     learning_curve = _save_learning_curve(output, history)
     diagnostics: dict[str, Any] = {"directory": str(diagnostics_dir), "learning_curve_pdf": str(learning_curve)}
-    for split_name, pair in [("validation", validation), ("test", test)]:
-        _pdf, summary = _save_reconstruction_pdf(
-            output,
-            split_name,
-            pred=pair[0],
-            target=pair[1],
-            energy_bin_width=energy_bin_width,
-            min_bin_count=min_bin_count,
-        )
-        diagnostics[split_name] = summary
-    for split_name, labels, pair in [
-        ("validation", validation_particle_labels, validation),
-        ("test", test_particle_labels, test),
-    ]:
-        if labels is None:
-            continue
-        summary = _save_species_reconstruction_outputs(
-            output,
-            split_name,
-            pred=pair[0],
-            target=pair[1],
-            labels=labels,
-            energy_bin_width=energy_bin_width,
-            min_bin_count=min_bin_count,
-        )
-        if summary is not None:
-            diagnostics[f"{split_name}_species"] = summary
+    if save_reconstruction:
+        for split_name, pair in [("validation", validation), ("test", test)]:
+            _pdf, summary = _save_reconstruction_pdf(
+                output,
+                split_name,
+                pred=pair[0],
+                target=pair[1],
+                energy_bin_width=energy_bin_width,
+                min_bin_count=min_bin_count,
+            )
+            diagnostics[split_name] = summary
+        for split_name, labels, pair in [
+            ("validation", validation_particle_labels, validation),
+            ("test", test_particle_labels, test),
+        ]:
+            if labels is None:
+                continue
+            summary = _save_species_reconstruction_outputs(
+                output,
+                split_name,
+                pred=pair[0],
+                target=pair[1],
+                labels=labels,
+                energy_bin_width=energy_bin_width,
+                min_bin_count=min_bin_count,
+            )
+            if summary is not None:
+                diagnostics[f"{split_name}_species"] = summary
     for split_name, mass_pair, reco_pair in [
         ("validation", validation_mass, validation),
         ("test", test_mass, test),
