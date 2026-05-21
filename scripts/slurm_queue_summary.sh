@@ -7,6 +7,7 @@ MY_ONLY=0
 DETAILS=0
 SHOW_NODES=0
 SHOW_REASONS=0
+PARTITION_FILTER="regular"
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   BOLD=$'\033[1m'
@@ -30,34 +31,48 @@ fi
 
 usage() {
   cat <<'EOF'
-Usage: scripts/slurm_queue_summary.sh [1|--mine-only] [--details] [--nodes] [--reasons]
+Usage: scripts/slurm_queue_summary.sh [1] [-g|-c|-a] [-d] [-n] [-r] [-h]
 
 Default output is compact:
-  - GPU Used/Total summary
+  - GPU Used/Total summary for GPU partitions
+  - regular Slurm partitions grouped by resource class
   - my summary
-  - GPU queue length by GPU class and partition
+  - job queue length by resource class and partition
 
 Options:
-  1, --mine-only  Stop after my summary.
-  --details       Also print detailed my-job and all-job tables.
-  --nodes         Also print Slurm node state from sinfo.
-  --reasons       Also print pending reasons.
+  1, -m  Stop after my summary.
+  -g     GPU partitions only.
+  -c     CPU/non-GPU partitions only.
+  -a     All visible partitions, including reservations.
+  -d     Also print detailed job tables.
+  -n     Also print node tables.
+  -r     Also print pending reasons.
+  -h     Show this help.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    1|--mine-only)
+    1|-m|--mine-only)
       MY_ONLY=1
       ;;
-    --details|--all-details)
+    -d|--details|--all-details)
       DETAILS=1
       ;;
-    --nodes|--node-info)
+    -n|--nodes|--node-info)
       SHOW_NODES=1
       ;;
-    --reasons|--pending-reasons)
+    -r|--reasons|--pending-reasons)
       SHOW_REASONS=1
+      ;;
+    -g|--gpu-only|--gpus)
+      PARTITION_FILTER="gpu"
+      ;;
+    -c|--cpu-only|--cpus)
+      PARTITION_FILTER="cpu"
+      ;;
+    -a|--all)
+      PARTITION_FILTER="all"
       ;;
     -h|--help)
       usage
@@ -85,17 +100,50 @@ print_sinfo() {
   echo "date     : $(date)"
   echo "login    : $(hostname)"
   echo "user     : ${USER:-unknown}"
-  echo "gpu parts: ${GPU_PARTITIONS}"
+  echo "scope    : ${PARTITION_FILTER} partitions"
   echo
   printf "%-24s %5s %-10s %-12s %8s %10s %s\n" "PARTITION" "NODES" "STATE" "GRES" "CPUS" "MEMORY" "NODELIST"
-  sinfo -h -p "${GPU_PARTITIONS}" -o "%P|%D|%t|%G|%c|%m|%N" \
-    | awk -F'|' '{printf "%-24s %5s %-10s %-12s %8s %10s %s\n", $1, $2, $3, $4, $5, $6, $7}' \
+  sinfo -h -o "%P|%D|%t|%G|%c|%m|%N" \
+    | awk -F'|' -v filter="${PARTITION_FILTER}" '
+      function clean_part(part) {
+        sub(/\*$/, "", part)
+        return part
+      }
+      function group_from_part(part) {
+        if (part ~ /^reservation_b6000/) return "RESERVATION"
+        if (part ~ /a100/) return "A100"
+        if (part ~ /b6000/) return "B6000"
+        if (part ~ /v100/) return "V100"
+        if (part ~ /bigmemory/) return "BIGMEM"
+        if (part ~ /^golbal/ || part ~ /^global/) return "GLOBAL"
+        if (part ~ /^edr1/) return "EDR1"
+        if (part ~ /^edr2/) return "EDR2"
+        if (part ~ /^intel/) return "INTEL"
+        return "OTHER"
+      }
+      function is_gpu_group(group) {
+        return group == "A100" || group == "B6000" || group == "V100"
+      }
+      function is_cpu_group(group) {
+        return !is_gpu_group(group) && group != "RESERVATION"
+      }
+      function selected(group) {
+        return filter == "all" || (filter == "regular" && group != "RESERVATION") || (filter == "gpu" && is_gpu_group(group)) || (filter == "cpu" && is_cpu_group(group))
+      }
+      {
+        part = clean_part($1)
+        group = group_from_part(part)
+        if (!selected(group)) {
+          next
+        }
+        printf "%-24s %5s %-10s %-12s %8s %10s %s\n", $1, $2, $3, $4, $5, $6, $7
+      }' \
     || true
 }
 
 print_resource_info() {
   echo
-  printf "%s##### RSC INFO #####%s\n" "${BOLD}${CYAN}" "${RESET}"
+  printf "%s##### GPU RSC INFO #####%s\n" "${BOLD}${CYAN}" "${RESET}"
 
   if ! command -v scontrol >/dev/null 2>&1; then
     echo "scontrol is not available; cannot compute GPU Used/Total."
@@ -240,6 +288,115 @@ print_resource_info() {
     }'
 }
 
+print_partition_info() {
+  echo
+  printf "%s##### PARTITION INFO #####%s\n" "${BOLD}${CYAN}" "${RESET}"
+  printf "%s%-2s %-12s %-28s %-12s %6s %6s %6s %6s %6s%s\n" \
+    "${BOLD}" "" "GROUP" "PARTITION" "TIME_LIMIT" "NODES" "IDLE" "MIX" "ALLOC" "OTHER" "${RESET}"
+
+  sinfo -h -o "%P|%l|%D|%t" | awk -F'|' -v filter="${PARTITION_FILTER}" '
+    function clean_part(part) {
+      sub(/\*$/, "", part)
+      return part
+    }
+    function group_from_part(part) {
+      if (part ~ /^reservation_b6000/) {
+        return "RESERVATION"
+      }
+      if (part ~ /a100/) {
+        return "A100"
+      }
+      if (part ~ /b6000/) {
+        return "B6000"
+      }
+      if (part ~ /v100/) {
+        return "V100"
+      }
+      if (part ~ /bigmemory/) {
+        return "BIGMEM"
+      }
+      if (part ~ /^golbal/ || part ~ /^global/) {
+        return "GLOBAL"
+      }
+      if (part ~ /^edr1/) {
+        return "EDR1"
+      }
+      if (part ~ /^edr2/) {
+        return "EDR2"
+      }
+      if (part ~ /^intel/) {
+        return "INTEL"
+      }
+      return "OTHER"
+    }
+    function group_rank(group) {
+      if (group == "A100") return 10
+      if (group == "B6000") return 20
+      if (group == "V100") return 30
+      if (group == "RESERVATION") return 40
+      if (group == "BIGMEM") return 50
+      if (group == "GLOBAL") return 60
+      if (group == "EDR1") return 70
+      if (group == "EDR2") return 80
+      if (group == "INTEL") return 90
+      return 99
+    }
+    function is_gpu_group(group) {
+      return group == "A100" || group == "B6000" || group == "V100"
+    }
+    function is_cpu_group(group) {
+      return !is_gpu_group(group) && group != "RESERVATION"
+    }
+    function selected(group) {
+      return filter == "all" || (filter == "regular" && group != "RESERVATION") || (filter == "gpu" && is_gpu_group(group)) || (filter == "cpu" && is_cpu_group(group))
+    }
+    {
+      part = clean_part($1)
+      limit[part] = $2
+      state = $4
+      nodes = $3 + 0
+      total[part] += nodes
+      if (state == "idle") {
+        idle[part] += nodes
+      } else if (state == "mix") {
+        mix[part] += nodes
+      } else if (state == "alloc") {
+        alloc[part] += nodes
+      } else {
+        other[part] += nodes
+      }
+    }
+    END {
+      for (part in total) {
+        group = group_from_part(part)
+        if (!selected(group)) {
+          continue
+        }
+        printf "%02d|%s|%s|%s|%d|%d|%d|%d|%d\n",
+          group_rank(group), group, part, limit[part], total[part],
+          idle[part]+0, mix[part]+0, alloc[part]+0, other[part]+0
+      }
+    }' | sort -t'|' -k1,1n -k3,3 | awk -F'|' \
+    -v blue="${BLUE}" \
+    -v green="${GREEN}" \
+    -v magenta="${MAGENTA}" \
+    -v yellow="${YELLOW}" \
+    -v red="${RED}" \
+    -v reset="${RESET}" '
+    function group_color(group) {
+      if (group == "A100") return blue
+      if (group == "B6000") return magenta
+      if (group == "V100") return green
+      if (group == "RESERVATION") return yellow
+      if (group == "BIGMEM") return red
+      return ""
+    }
+    {
+      printf "%s*%s  %-12s %-28s %-12s %6s %6s %6s %6s %6s\n",
+        group_color($2), reset, $2, $3, $4, $5, $6, $7, $8, $9
+    }'
+}
+
 print_job_table() {
   local title="$1"
   local scope="$2"
@@ -272,9 +429,34 @@ print_summary() {
     return
   fi
 
-  printf "%s\n" "${data}" | awk '
+  printf "%s\n" "${data}" | awk -v filter="${PARTITION_FILTER}" '
+    function group_from_part(part) {
+      if (part ~ /^reservation_b6000/) return "RESERVATION"
+      if (part ~ /a100/) return "A100"
+      if (part ~ /b6000/) return "B6000"
+      if (part ~ /v100/) return "V100"
+      if (part ~ /bigmemory/) return "BIGMEM"
+      if (part ~ /^golbal/ || part ~ /^global/) return "GLOBAL"
+      if (part ~ /^edr1/) return "EDR1"
+      if (part ~ /^edr2/) return "EDR2"
+      if (part ~ /^intel/) return "INTEL"
+      return "OTHER"
+    }
+    function is_gpu_group(group) {
+      return group == "A100" || group == "B6000" || group == "V100"
+    }
+    function is_cpu_group(group) {
+      return !is_gpu_group(group) && group != "RESERVATION"
+    }
+    function selected(part) {
+      group = group_from_part(part)
+      return filter == "all" || (filter == "regular" && group != "RESERVATION") || (filter == "gpu" && is_gpu_group(group)) || (filter == "cpu" && is_cpu_group(group))
+    }
     {
       part=$1
+      if (!selected(part)) {
+        next
+      }
       state=$2
       total[part]++
       if (state == "PD") {
@@ -308,8 +490,33 @@ print_summary() {
 
   echo
   printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "TOTAL" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
-  printf "%s\n" "${data}" | awk -v bold="${BOLD}" -v reset="${RESET}" '
+  printf "%s\n" "${data}" | awk -v filter="${PARTITION_FILTER}" -v bold="${BOLD}" -v reset="${RESET}" '
+    function group_from_part(part) {
+      if (part ~ /^reservation_b6000/) return "RESERVATION"
+      if (part ~ /a100/) return "A100"
+      if (part ~ /b6000/) return "B6000"
+      if (part ~ /v100/) return "V100"
+      if (part ~ /bigmemory/) return "BIGMEM"
+      if (part ~ /^golbal/ || part ~ /^global/) return "GLOBAL"
+      if (part ~ /^edr1/) return "EDR1"
+      if (part ~ /^edr2/) return "EDR2"
+      if (part ~ /^intel/) return "INTEL"
+      return "OTHER"
+    }
+    function is_gpu_group(group) {
+      return group == "A100" || group == "B6000" || group == "V100"
+    }
+    function is_cpu_group(group) {
+      return !is_gpu_group(group) && group != "RESERVATION"
+    }
+    function selected(part) {
+      group = group_from_part(part)
+      return filter == "all" || (filter == "regular" && group != "RESERVATION") || (filter == "gpu" && is_gpu_group(group)) || (filter == "cpu" && is_cpu_group(group))
+    }
     {
+      if (!selected($1)) {
+        next
+      }
       total++
       if ($2 == "PD") {
         pending++
@@ -341,8 +548,33 @@ print_pending_reasons() {
     return
   fi
 
-  printf "%s\n" "${data}" | awk -F'|' '
+  printf "%s\n" "${data}" | awk -F'|' -v filter="${PARTITION_FILTER}" '
+    function group_from_part(part) {
+      if (part ~ /^reservation_b6000/) return "RESERVATION"
+      if (part ~ /a100/) return "A100"
+      if (part ~ /b6000/) return "B6000"
+      if (part ~ /v100/) return "V100"
+      if (part ~ /bigmemory/) return "BIGMEM"
+      if (part ~ /^golbal/ || part ~ /^global/) return "GLOBAL"
+      if (part ~ /^edr1/) return "EDR1"
+      if (part ~ /^edr2/) return "EDR2"
+      if (part ~ /^intel/) return "INTEL"
+      return "OTHER"
+    }
+    function is_gpu_group(group) {
+      return group == "A100" || group == "B6000" || group == "V100"
+    }
+    function is_cpu_group(group) {
+      return !is_gpu_group(group) && group != "RESERVATION"
+    }
+    function selected(part) {
+      group = group_from_part(part)
+      return filter == "all" || (filter == "regular" && group != "RESERVATION") || (filter == "gpu" && is_gpu_group(group)) || (filter == "cpu" && is_cpu_group(group))
+    }
     {
+      if (!selected($1)) {
+        next
+      }
       key=$1 " | " $2
       count[key]++
     }
@@ -353,21 +585,36 @@ print_pending_reasons() {
     }' | sort -nr
 }
 
-print_gpu_queue_summary() {
+print_job_queue_summary() {
+  local title="JOB QUEUE SUMMARY"
+  local group_heading="BY RESOURCE GROUP"
+  local group_label="GROUP"
+  if [[ "${PARTITION_FILTER}" == "gpu" ]]; then
+    title="GPU JOB QUEUE SUMMARY"
+    group_heading="BY GPU CLASS"
+    group_label="GPU CLASS"
+  elif [[ "${PARTITION_FILTER}" == "cpu" ]]; then
+    title="CPU JOB QUEUE SUMMARY"
+    group_heading="BY CPU GROUP"
+  fi
+
   echo
-  printf "%s##### GPU JOB QUEUE SUMMARY #####%s\n" "${BOLD}${CYAN}" "${RESET}"
+  printf "%s##### %s #####%s\n" "${BOLD}${CYAN}" "${title}" "${RESET}"
 
   local data
-  data="$(squeue -h -p "${GPU_PARTITIONS}" -o "%P %t" || true)"
+  data="$(squeue -h -o "%P %t" || true)"
   if [[ -z "${data}" ]]; then
     printf "%-24s %8d %8d %8d %8d\n" "(none)" 0 0 0 0
     return
   fi
 
-  printf "%sBY GPU CLASS%s\n" "${BOLD}" "${RESET}"
-  printf "%s%-2s %-10s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GPU CLASS" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
-  printf "%s\n" "${data}" | awk '
-    function gpu_class(part) {
+  printf "%s%s%s\n" "${BOLD}" "${group_heading}" "${RESET}"
+  printf "%s%-2s %-12s %8s %8s %8s %8s%s\n" "${BOLD}" "" "${group_label}" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s\n" "${data}" | awk -v filter="${PARTITION_FILTER}" '
+    function group_from_part(part) {
+      if (part ~ /^reservation_b6000/) {
+        return "RESERVATION"
+      }
       if (part ~ /a100/) {
         return "A100"
       }
@@ -377,47 +624,154 @@ print_gpu_queue_summary() {
       if (part ~ /v100/) {
         return "V100"
       }
+      if (part ~ /bigmemory/) {
+        return "BIGMEM"
+      }
+      if (part ~ /^golbal/ || part ~ /^global/) {
+        return "GLOBAL"
+      }
+      if (part ~ /^edr1/) {
+        return "EDR1"
+      }
+      if (part ~ /^edr2/) {
+        return "EDR2"
+      }
+      if (part ~ /^intel/) {
+        return "INTEL"
+      }
       return "OTHER"
     }
+    function group_rank(group) {
+      if (group == "A100") return 10
+      if (group == "B6000") return 20
+      if (group == "V100") return 30
+      if (group == "RESERVATION") return 40
+      if (group == "BIGMEM") return 50
+      if (group == "GLOBAL") return 60
+      if (group == "EDR1") return 70
+      if (group == "EDR2") return 80
+      if (group == "INTEL") return 90
+      return 99
+    }
+    function is_gpu_group(group) {
+      return group == "A100" || group == "B6000" || group == "V100"
+    }
+    function is_cpu_group(group) {
+      return !is_gpu_group(group) && group != "RESERVATION"
+    }
+    function selected(group) {
+      return filter == "all" || (filter == "regular" && group != "RESERVATION") || (filter == "gpu" && is_gpu_group(group)) || (filter == "cpu" && is_cpu_group(group))
+    }
     {
-      class=gpu_class($1)
+      group=group_from_part($1)
+      if (!selected(group)) {
+        next
+      }
       state=$2
-      total[class]++
+      total[group]++
       if (state == "PD") {
-        pending[class]++
+        pending[group]++
       } else if (state == "R") {
-        running[class]++
+        running[group]++
       } else {
-        other[class]++
+        other[group]++
       }
     }
     END {
-      for (class in total) {
-        printf "%-10s %8d %8d %8d %8d\n", class, total[class], pending[class]+0, running[class]+0, other[class]+0
+      for (group in total) {
+        printf "%02d|%-12s|%8d|%8d|%8d|%8d\n",
+          group_rank(group), group, total[group], pending[group]+0, running[group]+0, other[group]+0
       }
-    }' | sort | awk -v blue="${BLUE}" -v green="${GREEN}" -v magenta="${MAGENTA}" -v reset="${RESET}" '
-    function class_color(class) {
-      if (class == "A100") {
+    }' | sort -t'|' -k1,1n | awk -F'|' \
+    -v blue="${BLUE}" \
+    -v green="${GREEN}" \
+    -v magenta="${MAGENTA}" \
+    -v yellow="${YELLOW}" \
+    -v red="${RED}" \
+    -v reset="${RESET}" '
+    function group_color(group) {
+      if (group == "A100") {
         return blue
       }
-      if (class == "V100") {
+      if (group == "V100") {
         return green
       }
-      if (class == "B6000") {
+      if (group == "B6000") {
         return magenta
+      }
+      if (group == "RESERVATION") {
+        return yellow
+      }
+      if (group == "BIGMEM") {
+        return red
       }
       return ""
     }
     {
-      printf "%s*%s  %-10s %8s %8s %8s %8s\n", class_color($1), reset, $1, $2, $3, $4, $5
+      printf "%s*%s  %-12s %8s %8s %8s %8s\n", group_color($2), reset, $2, $3, $4, $5, $6
     }'
 
   echo
   printf "%sBY PARTITION%s\n" "${BOLD}" "${RESET}"
-  printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "PARTITION" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
-  printf "%s\n" "${data}" | awk '
+  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GROUP" "PARTITION" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s\n" "${data}" | awk -v filter="${PARTITION_FILTER}" '
+    function group_from_part(part) {
+      if (part ~ /^reservation_b6000/) {
+        return "RESERVATION"
+      }
+      if (part ~ /a100/) {
+        return "A100"
+      }
+      if (part ~ /b6000/) {
+        return "B6000"
+      }
+      if (part ~ /v100/) {
+        return "V100"
+      }
+      if (part ~ /bigmemory/) {
+        return "BIGMEM"
+      }
+      if (part ~ /^golbal/ || part ~ /^global/) {
+        return "GLOBAL"
+      }
+      if (part ~ /^edr1/) {
+        return "EDR1"
+      }
+      if (part ~ /^edr2/) {
+        return "EDR2"
+      }
+      if (part ~ /^intel/) {
+        return "INTEL"
+      }
+      return "OTHER"
+    }
+    function group_rank(group) {
+      if (group == "A100") return 10
+      if (group == "B6000") return 20
+      if (group == "V100") return 30
+      if (group == "RESERVATION") return 40
+      if (group == "BIGMEM") return 50
+      if (group == "GLOBAL") return 60
+      if (group == "EDR1") return 70
+      if (group == "EDR2") return 80
+      if (group == "INTEL") return 90
+      return 99
+    }
+    function is_gpu_group(group) {
+      return group == "A100" || group == "B6000" || group == "V100"
+    }
+    function is_cpu_group(group) {
+      return !is_gpu_group(group) && group != "RESERVATION"
+    }
+    function selected(group) {
+      return filter == "all" || (filter == "regular" && group != "RESERVATION") || (filter == "gpu" && is_gpu_group(group)) || (filter == "cpu" && is_cpu_group(group))
+    }
     {
       part=$1
+      group = group_from_part(part)
+      if (!selected(group)) {
+        next
+      }
       state=$2
       total[part]++
       if (state == "PD") {
@@ -430,30 +784,49 @@ print_gpu_queue_summary() {
     }
     END {
       for (part in total) {
-        printf "%-24s %8d %8d %8d %8d\n", part, total[part], pending[part]+0, running[part]+0, other[part]+0
+        group = group_from_part(part)
+        printf "%02d|%-12s|%-28s|%8d|%8d|%8d|%8d\n",
+          group_rank(group), group, part, total[part], pending[part]+0, running[part]+0, other[part]+0
       }
-    }' | sort | awk -v blue="${BLUE}" -v green="${GREEN}" -v magenta="${MAGENTA}" -v reset="${RESET}" '
-    function part_color(part) {
-      if (part ~ /a100/) {
+    }' | sort -t'|' -k1,1n -k3,3 | awk -F'|' \
+    -v blue="${BLUE}" \
+    -v green="${GREEN}" \
+    -v magenta="${MAGENTA}" \
+    -v yellow="${YELLOW}" \
+    -v red="${RED}" \
+    -v reset="${RESET}" '
+    function group_color(group) {
+      if (group == "A100") {
         return blue
       }
-      if (part ~ /v100/) {
+      if (group == "V100") {
         return green
       }
-      if (part ~ /b6000/) {
+      if (group == "B6000") {
         return magenta
+      }
+      if (group == "RESERVATION") {
+        return yellow
+      }
+      if (group == "BIGMEM") {
+        return red
       }
       return ""
     }
     {
-      printf "%s*%s  %-24s %8s %8s %8s %8s\n", part_color($1), reset, $1, $2, $3, $4, $5
+      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, $3, $4, $5, $6, $7
     }'
 }
 
 need_command sinfo
 need_command squeue
 
-print_resource_info
+if [[ "${PARTITION_FILTER}" != "cpu" ]]; then
+  print_resource_info
+fi
+if [[ "${PARTITION_FILTER}" != "gpu" ]]; then
+  print_partition_info
+fi
 if [[ "${SHOW_NODES}" == "1" ]]; then
   print_sinfo
 fi
@@ -472,7 +845,7 @@ fi
 if [[ "${DETAILS}" == "1" ]]; then
   print_job_table "ALL JOBS" "all"
 fi
-print_gpu_queue_summary
+print_job_queue_summary
 if [[ "${SHOW_REASONS}" == "1" ]]; then
   print_pending_reasons "ALL JOBS" "all"
 fi
