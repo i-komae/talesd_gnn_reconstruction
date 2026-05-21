@@ -10,9 +10,21 @@ SHOW_REASONS=0
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   BOLD=$'\033[1m'
+  CYAN=$'\033[36m'
+  RED=$'\033[31m'
+  YELLOW=$'\033[33m'
+  GREEN=$'\033[32m'
+  BLUE=$'\033[34m'
+  MAGENTA=$'\033[35m'
   RESET=$'\033[0m'
 else
   BOLD=""
+  CYAN=""
+  RED=""
+  YELLOW=""
+  GREEN=""
+  BLUE=""
+  MAGENTA=""
   RESET=""
 fi
 
@@ -69,7 +81,7 @@ need_command() {
 
 print_sinfo() {
   echo
-  printf "%s##### SLURM NODE INFO #####%s\n" "${BOLD}" "${RESET}"
+  printf "%s##### SLURM NODE INFO #####%s\n" "${BOLD}${CYAN}" "${RESET}"
   echo "date     : $(date)"
   echo "login    : $(hostname)"
   echo "user     : ${USER:-unknown}"
@@ -83,7 +95,7 @@ print_sinfo() {
 
 print_resource_info() {
   echo
-  printf "%s##### RSC INFO #####%s\n" "${BOLD}" "${RESET}"
+  printf "%s##### RSC INFO #####%s\n" "${BOLD}${CYAN}" "${RESET}"
 
   if ! command -v scontrol >/dev/null 2>&1; then
     echo "scontrol is not available; cannot compute GPU Used/Total."
@@ -93,6 +105,11 @@ print_resource_info() {
   scontrol show node -o | awk \
     -v parts="${GPU_PARTITIONS}" \
     -v bold="${BOLD}" \
+    -v red="${RED}" \
+    -v yellow="${YELLOW}" \
+    -v green="${GREEN}" \
+    -v blue="${BLUE}" \
+    -v magenta="${MAGENTA}" \
     -v reset="${RESET}" '
     BEGIN {
       nrequested = split(parts, requested, ",")
@@ -136,6 +153,29 @@ print_resource_info() {
         }
       }
       return ""
+    }
+
+    function class_color(class) {
+      if (class == "A100") {
+        return blue
+      }
+      if (class == "V100") {
+        return green
+      }
+      if (class == "B6000") {
+        return magenta
+      }
+      return ""
+    }
+
+    function usage_color(pct) {
+      if (pct >= 95.0) {
+        return red
+      }
+      if (pct >= 80.0) {
+        return yellow
+      }
+      return green
     }
 
     function gpu_count(tres, values, nvalues, i, item, sum) {
@@ -194,7 +234,9 @@ print_resource_info() {
         for (j = 1; j <= width; j++) {
           bar = bar (j <= filled ? "*" : "-")
         }
-        printf "%-10s %s %7.1f%% %6d/%-6d\n", class, bar, pct, used[class], total[class]
+        name_color = class_color(class)
+        bar_color = usage_color(pct)
+        printf "%s%-10s%s %s%s%s %7.1f%% %6d/%-6d\n", name_color, class, reset, bar_color, bar, reset, pct, used[class], total[class]
       }
     }'
 }
@@ -208,7 +250,7 @@ print_job_table() {
   fi
 
   echo
-  printf "%s##### %s #####%s\n" "${BOLD}" "${title}" "${RESET}"
+  printf "%s##### %s #####%s\n" "${BOLD}${CYAN}" "${title}" "${RESET}"
   "${cmd[@]}" || true
 }
 
@@ -221,7 +263,7 @@ print_summary() {
   fi
 
   echo
-  printf "%s##### %s SUMMARY BY PARTITION #####%s\n" "${BOLD}" "${title}" "${RESET}"
+  printf "%s##### %s SUMMARY BY PARTITION #####%s\n" "${BOLD}${CYAN}" "${title}" "${RESET}"
   printf "%s%-24s %8s %8s %8s %8s%s\n" "${BOLD}" "PARTITION" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
 
   local data
@@ -248,7 +290,23 @@ print_summary() {
       for (part in total) {
         printf "%-24s %8d %8d %8d %8d\n", part, total[part], pending[part]+0, running[part]+0, other[part]+0
       }
-    }' | sort
+    }' | sort | awk -v blue="${BLUE}" -v green="${GREEN}" -v magenta="${MAGENTA}" -v reset="${RESET}" '
+    function part_color(part) {
+      if (part ~ /a100/) {
+        return blue
+      }
+      if (part ~ /v100/) {
+        return green
+      }
+      if (part ~ /b6000/) {
+        return magenta
+      }
+      return ""
+    }
+    {
+      color = part_color($1)
+      printf "%s%-24s%s %8s %8s %8s %8s\n", color, $1, reset, $2, $3, $4, $5
+    }'
 
   echo
   printf "%s%-24s %8s %8s %8s %8s%s\n" "${BOLD}" "TOTAL" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
@@ -277,7 +335,7 @@ print_pending_reasons() {
   fi
 
   echo
-  printf "%s##### %s PENDING REASONS #####%s\n" "${BOLD}" "${title}" "${RESET}"
+  printf "%s##### %s PENDING REASONS #####%s\n" "${BOLD}${CYAN}" "${title}" "${RESET}"
   local data
   data="$("${cmd[@]}" || true)"
   if [[ -z "${data}" ]]; then
@@ -299,7 +357,7 @@ print_pending_reasons() {
 
 print_gpu_queue_summary() {
   echo
-  printf "%s##### GPU QUEUE SUMMARY #####%s\n" "${BOLD}" "${RESET}"
+  printf "%s##### GPU QUEUE SUMMARY #####%s\n" "${BOLD}${CYAN}" "${RESET}"
 
   local data
   data="$(squeue -h -p "${GPU_PARTITIONS}" -o "%P %t" || true)"
@@ -339,7 +397,23 @@ print_gpu_queue_summary() {
       for (class in total) {
         printf "%-10s %8d %8d %8d %8d\n", class, total[class], pending[class]+0, running[class]+0, other[class]+0
       }
-    }' | sort
+    }' | sort | awk -v blue="${BLUE}" -v green="${GREEN}" -v magenta="${MAGENTA}" -v reset="${RESET}" '
+    function class_color(class) {
+      if (class == "A100") {
+        return blue
+      }
+      if (class == "V100") {
+        return green
+      }
+      if (class == "B6000") {
+        return magenta
+      }
+      return ""
+    }
+    {
+      color = class_color($1)
+      printf "%s%-10s%s %8s %8s %8s %8s\n", color, $1, reset, $2, $3, $4, $5
+    }'
 
   echo
   printf "%sBY PARTITION%s\n" "${BOLD}" "${RESET}"
@@ -361,7 +435,23 @@ print_gpu_queue_summary() {
       for (part in total) {
         printf "%-24s %8d %8d %8d %8d\n", part, total[part], pending[part]+0, running[part]+0, other[part]+0
       }
-    }' | sort
+    }' | sort | awk -v blue="${BLUE}" -v green="${GREEN}" -v magenta="${MAGENTA}" -v reset="${RESET}" '
+    function part_color(part) {
+      if (part ~ /a100/) {
+        return blue
+      }
+      if (part ~ /v100/) {
+        return green
+      }
+      if (part ~ /b6000/) {
+        return magenta
+      }
+      return ""
+    }
+    {
+      color = part_color($1)
+      printf "%s%-24s%s %8s %8s %8s %8s\n", color, $1, reset, $2, $3, $4, $5
+    }'
 }
 
 need_command sinfo
