@@ -16,7 +16,7 @@ import h5py
 import numpy as np
 
 from .dataset import H5GraphDataset, StandardScaler, collate_graph_arrays, fit_scalers
-from .diagnostics import save_training_diagnostics
+from .diagnostics import require_matplotlib_latex, save_training_diagnostics
 from .metrics import binary_classification_metrics, direction_to_angles, reconstruction_metrics
 from .progress import progress as _progress
 from .progress import progress_bar as _progress_bar
@@ -756,6 +756,8 @@ def train_model(
     prefetch_factor = max(int(prefetch_factor), 1)
     collate_threads = max(int(collate_threads), 0)
     pin_memory = device.startswith("cuda")
+    if save_diagnostics:
+        require_matplotlib_latex()
     stage_started = time.perf_counter()
     dataset = H5GraphDataset(
         graphs_path,

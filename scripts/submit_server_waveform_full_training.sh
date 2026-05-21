@@ -117,6 +117,17 @@ export UV_CACHE_DIR="${UV_CACHE_DIR}"
 export UV_LINK_MODE="${UV_LINK_MODE}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS}"
 
+for cmd in latex dvipng kpsewhich; do
+  if ! command -v "\${cmd}" >/dev/null 2>&1; then
+    echo "Missing \${cmd}. Diagnostics use matplotlib text.usetex=True, so install TeX Live before training." >&2
+    exit 2
+  fi
+done
+if ! kpsewhich amsmath.sty >/dev/null 2>&1; then
+  echo "Missing amsmath.sty. Diagnostics use matplotlib text.usetex=True, so install TeX Live packages before training." >&2
+  exit 2
+fi
+
 echo "======================================================================"
 echo "SERVER WAVEFORM FULL TRAINING"
 echo "date=\$(date)"

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -28,7 +30,33 @@ MARKERSIZE = 4.0
 CAPSIZE = 2.5
 
 
+def require_matplotlib_latex() -> None:
+    missing = [cmd for cmd in ("latex", "dvipng", "kpsewhich") if shutil.which(cmd) is None]
+    if missing:
+        raise RuntimeError(
+            "matplotlib diagnostics require TeX because text.usetex=True. "
+            f"Missing command(s): {', '.join(missing)}"
+        )
+
+    missing_files = []
+    for tex_file in ("amsmath.sty",):
+        result = subprocess.run(
+            ["kpsewhich", tex_file],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode != 0:
+            missing_files.append(tex_file)
+    if missing_files:
+        raise RuntimeError(
+            "matplotlib diagnostics require TeX packages because text.usetex=True. "
+            f"Missing file(s): {', '.join(missing_files)}"
+        )
+
+
 def _prepare_matplotlib() -> None:
+    require_matplotlib_latex()
     cache_dir = Path(tempfile.gettempdir()) / "talesd_gnn_matplotlib"
     cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(cache_dir))

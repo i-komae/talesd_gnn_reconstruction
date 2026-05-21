@@ -156,13 +156,15 @@ def _format_ta_time(date_val: Any, time_val: Any, usec_val: Any) -> str:
 def _setup_event_display_style() -> None:
     import matplotlib.pyplot as plt
 
-    plt.rcParams["font.family"] = "serif"
+    plt.rcParams["text.usetex"] = True
+    plt.rcParams["font.family"] = "cm"
     plt.rcParams["mathtext.fontset"] = "cm"
-    plt.rcParams["axes.grid"] = False
+    plt.rcParams["axes.grid"] = True
     plt.rcParams["grid.linestyle"] = "--"
     plt.rcParams["xtick.direction"] = "in"
     plt.rcParams["ytick.direction"] = "in"
     plt.rcParams["axes.linewidth"] = 1.2
+    plt.rcParams["text.latex.preamble"] = r"\usepackage{amsmath}"
 
 
 def _load_background_detectors(const_dst: str | Path | None) -> np.ndarray | None:
