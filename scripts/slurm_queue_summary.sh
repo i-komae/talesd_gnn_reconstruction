@@ -6,21 +6,23 @@ GPU_PARTITIONS="${GPU_PARTITIONS:-${GPU_PARTITIONS_DEFAULT}}"
 MY_ONLY=0
 DETAILS=0
 SHOW_NODES=0
+SHOW_REASONS=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/slurm_queue_summary.sh [1|--mine-only] [--details] [--nodes]
+Usage: scripts/slurm_queue_summary.sh [1|--mine-only] [--details] [--nodes] [--reasons]
 
 Default output is compact:
   - GPU Used/Total summary
   - my jobs
   - my summary
-  - all-job summary
+  - GPU queue length by partition
 
 Options:
   1, --mine-only  Stop after my jobs and my summary.
   --details       Also print the full all-job table.
   --nodes         Also print Slurm node state from sinfo.
+  --reasons       Also print all pending reasons.
 EOF
 }
 
@@ -34,6 +36,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --nodes|--node-info)
       SHOW_NODES=1
+      ;;
+    --reasons|--pending-reasons)
+      SHOW_REASONS=1
       ;;
     -h|--help)
       usage
@@ -83,26 +88,47 @@ print_resource_info() {
   scontrol show node -o | awk -v parts="${GPU_PARTITIONS}" '
     BEGIN {
       nrequested = split(parts, requested, ",")
-      nparts = 0
+      nclasses = 0
       for (i = 1; i <= nrequested; i++) {
-        if (requested[i] != "") {
-          nparts++
-          order[nparts] = requested[i]
-          wanted[requested[i]] = 1
+        part = requested[i]
+        if (part == "") {
+          continue
         }
+        if (part ~ /a100/) {
+          class = "A100"
+        } else if (part ~ /v100/) {
+          class = "V100"
+        } else if (part ~ /b6000/) {
+          class = "B6000"
+        } else {
+          class = part
+        }
+        if (!(class in seen_class)) {
+          nclasses++
+          class_order[nclasses] = class
+          seen_class[class] = 1
+        }
+        class_parts[class] = class_parts[class] (class_parts[class] == "" ? "" : ",") part
       }
       width = 25
-      printf "%-24s %-25s %8s %12s\n", "PARTITION", "GPU USE", "USED%", "USED/TOTAL"
+      printf "%-10s %-25s %8s %12s  %s\n", "GPU CLASS", "GPU USE", "USED%", "USED/TOTAL", "PARTITIONS"
     }
 
-    function has_partition(list, part, values, nvalues, i) {
+    function node_class(list, values, nvalues, i, part) {
       nvalues = split(list, values, ",")
       for (i = 1; i <= nvalues; i++) {
-        if (values[i] == part) {
-          return 1
+        part = values[i]
+        if (part ~ /a100/) {
+          return "A100"
+        }
+        if (part ~ /v100/) {
+          return "V100"
+        }
+        if (part ~ /b6000/) {
+          return "B6000"
         }
       }
-      return 0
+      return ""
     }
 
     function gpu_count(tres, values, nvalues, i, item, sum) {
@@ -138,23 +164,22 @@ print_resource_info() {
         next
       }
 
-      for (i = 1; i <= nparts; i++) {
-        part = order[i]
-        if (has_partition(partitions, part)) {
-          total[part] += cfg_gpu
-          used[part] += alloc_gpu
-        }
+      class = node_class(partitions)
+      if (class == "") {
+        next
       }
+      total[class] += cfg_gpu
+      used[class] += alloc_gpu
     }
 
     END {
-      for (i = 1; i <= nparts; i++) {
-        part = order[i]
-        if (total[part] <= 0) {
+      for (i = 1; i <= nclasses; i++) {
+        class = class_order[i]
+        if (total[class] <= 0) {
           continue
         }
-        pct = 100.0 * used[part] / total[part]
-        filled = int(width * used[part] / total[part] + 0.5)
+        pct = 100.0 * used[class] / total[class]
+        filled = int(width * used[class] / total[class] + 0.5)
         if (filled > width) {
           filled = width
         }
@@ -162,7 +187,7 @@ print_resource_info() {
         for (j = 1; j <= width; j++) {
           bar = bar (j <= filled ? "*" : "-")
         }
-        printf "%-24s %s %7.1f%% %6d/%-6d\n", part, bar, pct, used[part], total[part]
+        printf "%-10s %s %7.1f%% %6d/%-6d  %s\n", class, bar, pct, used[class], total[class], class_parts[class]
       }
     }'
 }
@@ -265,6 +290,55 @@ print_pending_reasons() {
     }' | sort -nr
 }
 
+print_gpu_queue_summary() {
+  echo
+  echo "##### GPU QUEUE SUMMARY #####"
+  printf "%-24s %8s %8s %8s %8s\n" "PARTITION" "TOTAL" "PENDING" "RUNNING" "OTHER"
+
+  local data
+  data="$(squeue -h -p "${GPU_PARTITIONS}" -o "%P %t" || true)"
+  if [[ -z "${data}" ]]; then
+    printf "%-24s %8d %8d %8d %8d\n" "(none)" 0 0 0 0
+    return
+  fi
+
+  printf "%s\n" "${data}" | awk '
+    {
+      part=$1
+      state=$2
+      total[part]++
+      if (state == "PD") {
+        pending[part]++
+      } else if (state == "R") {
+        running[part]++
+      } else {
+        other[part]++
+      }
+    }
+    END {
+      for (part in total) {
+        printf "%-24s %8d %8d %8d %8d\n", part, total[part], pending[part]+0, running[part]+0, other[part]+0
+      }
+    }' | sort
+
+  echo
+  printf "%-24s %8s %8s %8s %8s\n" "TOTAL" "TOTAL" "PENDING" "RUNNING" "OTHER"
+  printf "%s\n" "${data}" | awk '
+    {
+      total++
+      if ($2 == "PD") {
+        pending++
+      } else if ($2 == "R") {
+        running++
+      } else {
+        other++
+      }
+    }
+    END {
+      printf "%-24s %8d %8d %8d %8d\n", "gpu partitions", total+0, pending+0, running+0, other+0
+    }'
+}
+
 need_command sinfo
 need_command squeue
 
@@ -283,5 +357,7 @@ fi
 if [[ "${DETAILS}" == "1" ]]; then
   print_job_table "ALL JOBS" "all"
 fi
-print_summary "ALL JOBS" "all"
-print_pending_reasons "ALL JOBS" "all"
+print_gpu_queue_summary
+if [[ "${SHOW_REASONS}" == "1" ]]; then
+  print_pending_reasons "ALL JOBS" "all"
+fi
