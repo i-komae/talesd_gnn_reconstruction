@@ -3,7 +3,45 @@ set -euo pipefail
 
 GPU_PARTITIONS_DEFAULT="a100_devel-al9,a100_short-al9,a100-al9,a100_long-al9,v100-al9,v100-al9_short,v100-al9_long,b6000-al9,b6000-al9_short,b6000-al9_long"
 GPU_PARTITIONS="${GPU_PARTITIONS:-${GPU_PARTITIONS_DEFAULT}}"
-MY_ONLY="${1:-0}"
+MY_ONLY=0
+DETAILS=0
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/slurm_queue_summary.sh [1|--mine-only] [--details]
+
+Default output is compact:
+  - GPU node state
+  - my jobs
+  - my summary
+  - all-job summary
+
+Options:
+  1, --mine-only  Stop after my jobs and my summary.
+  --details       Also print the full all-job table.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    1|--mine-only)
+      MY_ONLY=1
+      ;;
+    --details|--all-details)
+      DETAILS=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
 
 need_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -20,7 +58,10 @@ print_sinfo() {
   echo "user     : ${USER:-unknown}"
   echo "gpu parts: ${GPU_PARTITIONS}"
   echo
-  sinfo -p "${GPU_PARTITIONS}" -o "%-24P %5D %10t %-12G %8c %10m %N" || true
+  printf "%-24s %5s %-10s %-12s %8s %10s %s\n" "PARTITION" "NODES" "STATE" "GRES" "CPUS" "MEMORY" "NODELIST"
+  sinfo -h -p "${GPU_PARTITIONS}" -o "%P|%D|%t|%G|%c|%m|%N" \
+    | awk -F'|' '{printf "%-24s %5s %-10s %-12s %8s %10s %s\n", $1, $2, $3, $4, $5, $6, $7}' \
+    || true
 }
 
 print_job_table() {
@@ -133,6 +174,8 @@ if [[ "${MY_ONLY}" == "1" ]]; then
   exit 0
 fi
 
-print_job_table "ALL JOBS" "all"
+if [[ "${DETAILS}" == "1" ]]; then
+  print_job_table "ALL JOBS" "all"
+fi
 print_summary "ALL JOBS" "all"
 print_pending_reasons "ALL JOBS" "all"
