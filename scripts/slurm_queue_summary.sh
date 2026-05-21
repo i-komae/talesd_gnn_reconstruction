@@ -176,7 +176,7 @@ print_resource_info() {
         }
       }
       width = 25
-      printf "%s%-2s %-10s %-25s %8s %12s%s\n", bold, "", "GPU CLASS", "GPU USE", "USED%", "USED/TOTAL", reset
+      printf "%s%-2s %-10s %-25s %7s %12s  %-25s %7s %12s%s\n", bold, "", "GPU CLASS", "GPU USE", "GPU%", "GPU USED", "CPU USE", "CPU%", "CPU USED", reset
     }
 
     function class_from_part(part) {
@@ -239,6 +239,34 @@ print_resource_info() {
       return sum
     }
 
+    function cpu_count(tres, values, nvalues, i, item, sum) {
+      sum = 0
+      nvalues = split(tres, values, ",")
+      for (i = 1; i <= nvalues; i++) {
+        item = values[i]
+        if (item ~ /^cpu=/) {
+          sub(/^cpu=/, "", item)
+          sum += item + 0
+        }
+      }
+      return sum
+    }
+
+    function usage_bar(used_value, total_value, width, j, filled, bar) {
+      if (total_value <= 0) {
+        return ""
+      }
+      filled = int(width * used_value / total_value + 0.5)
+      if (filled > width) {
+        filled = width
+      }
+      bar = ""
+      for (j = 1; j <= width; j++) {
+        bar = bar (j <= filled ? "*" : "-")
+      }
+      return bar
+    }
+
     {
       partitions = ""
       cfg_tres = ""
@@ -255,6 +283,8 @@ print_resource_info() {
 
       cfg_gpu = gpu_count(cfg_tres)
       alloc_gpu = gpu_count(alloc_tres)
+      cfg_cpu = cpu_count(cfg_tres)
+      alloc_cpu = cpu_count(alloc_tres)
       if (cfg_gpu <= 0) {
         next
       }
@@ -265,6 +295,8 @@ print_resource_info() {
       }
       total[class] += cfg_gpu
       used[class] += alloc_gpu
+      total_cpu[class] += cfg_cpu
+      used_cpu[class] += alloc_cpu
     }
 
     END {
@@ -274,16 +306,15 @@ print_resource_info() {
           continue
         }
         pct = 100.0 * used[class] / total[class]
-        filled = int(width * used[class] / total[class] + 0.5)
-        if (filled > width) {
-          filled = width
-        }
-        bar = ""
-        for (j = 1; j <= width; j++) {
-          bar = bar (j <= filled ? "*" : "-")
+        cpu_pct = total_cpu[class] > 0 ? 100.0 * used_cpu[class] / total_cpu[class] : 0.0
+        bar = usage_bar(used[class], total[class], width)
+        cpu_bar = usage_bar(used_cpu[class], total_cpu[class], width)
+        if (cpu_bar == "") {
+          cpu_bar = sprintf("%*s", width, "")
         }
         bar_color = usage_color(pct)
-        printf "%s*%s  %-10s %s%s%s %7.1f%% %6d/%-6d\n", class_color(class), reset, class, bar_color, bar, reset, pct, used[class], total[class]
+        cpu_bar_color = usage_color(cpu_pct)
+        printf "%s*%s  %-10s %s%s%s %6.1f%% %6d/%-6d  %s%s%s %6.1f%% %6d/%-6d\n", class_color(class), reset, class, bar_color, bar, reset, pct, used[class], total[class], cpu_bar_color, cpu_bar, reset, cpu_pct, used_cpu[class], total_cpu[class]
       }
     }'
 }
