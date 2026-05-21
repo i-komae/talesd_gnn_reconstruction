@@ -320,6 +320,154 @@ print_resource_info() {
     }'
 }
 
+print_cpu_resource_info() {
+  echo
+  printf "%s##### CPU RSC INFO #####%s\n" "${BOLD}${CYAN}" "${RESET}"
+
+  if ! command -v scontrol >/dev/null 2>&1; then
+    echo "scontrol is not available; cannot compute CPU/MEM Used/Total."
+    return
+  fi
+
+  scontrol show node -o | awk \
+    -v bold="${BOLD}" \
+    -v red="${RED}" \
+    -v yellow="${YELLOW}" \
+    -v green="${GREEN}" \
+    -v blue="${BLUE}" \
+    -v magenta="${MAGENTA}" \
+    -v cyan="${CYAN}" \
+    -v reset="${RESET}" '
+    BEGIN {
+      nclasses = 0
+      width = 25
+      printf "%s%-2s %-12s %-4s %-25s %7s %12s%s\n", bold, "", "GROUP", "RSC", "USE", "USED%", "USED/TOTAL", reset
+    }
+
+    function group_rank(group) {
+      if (group == "BIGMEM") return 10
+      if (group == "GLOBAL") return 20
+      if (group == "EDR1") return 30
+      if (group == "EDR2") return 40
+      if (group == "INTEL") return 50
+      return 99
+    }
+
+    function group_color(group) {
+      if (group == "BIGMEM") return red
+      if (group == "GLOBAL") return cyan
+      if (group == "EDR1") return blue
+      if (group == "EDR2") return green
+      if (group == "INTEL") return magenta
+      return ""
+    }
+
+    function group_from_part(part) {
+      if (part ~ /bigmemory/) return "BIGMEM"
+      if (part ~ /^edr1/) return "EDR1"
+      if (part ~ /^edr2/) return "EDR2"
+      if (part ~ /^intel/) return "INTEL"
+      if (part ~ /^golbal/ || part ~ /^global/) return "GLOBAL"
+      return ""
+    }
+
+    function node_group(list, values, nvalues, i, group, fallback) {
+      fallback = ""
+      nvalues = split(list, values, ",")
+      for (i = 1; i <= nvalues; i++) {
+        group = group_from_part(values[i])
+        if (group == "BIGMEM" || group == "EDR1" || group == "EDR2" || group == "INTEL") {
+          return group
+        }
+        if (group == "GLOBAL") {
+          fallback = group
+        }
+      }
+      return fallback
+    }
+
+    function tres_count(tres, key, values, nvalues, i, item) {
+      nvalues = split(tres, values, ",")
+      for (i = 1; i <= nvalues; i++) {
+        item = values[i]
+        if (item ~ ("^" key "=")) {
+          sub("^" key "=", "", item)
+          sub(/M$/, "", item)
+          return item + 0
+        }
+      }
+      return 0
+    }
+
+    function usage_color(pct) {
+      if (pct >= 95.0) return red
+      if (pct >= 80.0) return yellow
+      return green
+    }
+
+    function usage_bar(used_value, total_value, width, fill, j, filled, bar) {
+      if (total_value <= 0) return ""
+      filled = int(width * used_value / total_value + 0.5)
+      if (filled > width) filled = width
+      bar = ""
+      for (j = 1; j <= width; j++) {
+        bar = bar (j <= filled ? fill : "-")
+      }
+      return bar
+    }
+
+    {
+      partitions = ""
+      cfg_tres = ""
+      alloc_tres = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^Partitions=/) {
+          partitions = substr($i, 12)
+        } else if ($i ~ /^CfgTRES=/) {
+          cfg_tres = substr($i, 9)
+        } else if ($i ~ /^AllocTRES=/) {
+          alloc_tres = substr($i, 11)
+        }
+      }
+
+      group = node_group(partitions)
+      if (group == "") {
+        next
+      }
+      if (!(group in seen_class)) {
+        seen_class[group] = 1
+        nclasses++
+        class_order[nclasses] = group
+      }
+      total_cpu[group] += tres_count(cfg_tres, "cpu")
+      used_cpu[group] += tres_count(alloc_tres, "cpu")
+      total_mem[group] += tres_count(cfg_tres, "mem")
+      used_mem[group] += tres_count(alloc_tres, "mem")
+    }
+
+    END {
+      for (rank = 1; rank <= 99; rank++) {
+        for (i = 1; i <= nclasses; i++) {
+          group = class_order[i]
+          if (group_rank(group) != rank || total_cpu[group] <= 0) {
+            continue
+          }
+          cpu_pct = 100.0 * used_cpu[group] / total_cpu[group]
+          mem_pct = total_mem[group] > 0 ? 100.0 * used_mem[group] / total_mem[group] : 0.0
+          cpu_bar = usage_bar(used_cpu[group], total_cpu[group], width, "#")
+          mem_bar = usage_bar(used_mem[group], total_mem[group], width, "=")
+          if (mem_bar == "") {
+            mem_bar = sprintf("%*s", width, "")
+          }
+          cpu_color = usage_color(cpu_pct)
+          mem_color = usage_color(mem_pct)
+          printf "%s*%s  %-12s %-4s %s%s%s %6.1f%% %6d/%-6d\n", group_color(group), reset, group, "CPU", cpu_color, cpu_bar, reset, cpu_pct, used_cpu[group], total_cpu[group]
+          printf "   %-12s %-4s %s%s%s %6.1f%% %6d/%-6d MB\n", "", "MEM", mem_color, mem_bar, reset, mem_pct, used_mem[group], total_mem[group]
+        }
+      }
+    }'
+}
+
 print_partition_info() {
   echo
   printf "%s##### PARTITION INFO #####%s\n" "${BOLD}${CYAN}" "${RESET}"
@@ -414,6 +562,7 @@ print_partition_info() {
     -v magenta="${MAGENTA}" \
     -v yellow="${YELLOW}" \
     -v red="${RED}" \
+    -v cyan="${CYAN}" \
     -v reset="${RESET}" '
     function group_color(group) {
       if (group == "A100") return blue
@@ -421,6 +570,10 @@ print_partition_info() {
       if (group == "V100") return green
       if (group == "RESERVATION") return yellow
       if (group == "BIGMEM") return red
+      if (group == "GLOBAL") return cyan
+      if (group == "EDR1") return blue
+      if (group == "EDR2") return green
+      if (group == "INTEL") return magenta
       return ""
     }
     {
@@ -523,6 +676,7 @@ print_summary() {
     -v magenta="${MAGENTA}" \
     -v yellow="${YELLOW}" \
     -v red="${RED}" \
+    -v cyan="${CYAN}" \
     -v reset="${RESET}" '
     function group_color(group) {
       if (group == "A100") {
@@ -539,6 +693,18 @@ print_summary() {
       }
       if (group == "BIGMEM") {
         return red
+      }
+      if (group == "GLOBAL") {
+        return cyan
+      }
+      if (group == "EDR1") {
+        return blue
+      }
+      if (group == "EDR2") {
+        return green
+      }
+      if (group == "INTEL") {
+        return magenta
       }
       return ""
     }
@@ -746,6 +912,7 @@ print_job_queue_summary() {
     -v magenta="${MAGENTA}" \
     -v yellow="${YELLOW}" \
     -v red="${RED}" \
+    -v cyan="${CYAN}" \
     -v reset="${RESET}" '
     function group_color(group) {
       if (group == "A100") {
@@ -762,6 +929,18 @@ print_job_queue_summary() {
       }
       if (group == "BIGMEM") {
         return red
+      }
+      if (group == "GLOBAL") {
+        return cyan
+      }
+      if (group == "EDR1") {
+        return blue
+      }
+      if (group == "EDR2") {
+        return green
+      }
+      if (group == "INTEL") {
+        return magenta
       }
       return ""
     }
@@ -852,6 +1031,7 @@ print_job_queue_summary() {
     -v magenta="${MAGENTA}" \
     -v yellow="${YELLOW}" \
     -v red="${RED}" \
+    -v cyan="${CYAN}" \
     -v reset="${RESET}" '
     function group_color(group) {
       if (group == "A100") {
@@ -869,6 +1049,18 @@ print_job_queue_summary() {
       if (group == "BIGMEM") {
         return red
       }
+      if (group == "GLOBAL") {
+        return cyan
+      }
+      if (group == "EDR1") {
+        return blue
+      }
+      if (group == "EDR2") {
+        return green
+      }
+      if (group == "INTEL") {
+        return magenta
+      }
       return ""
     }
     {
@@ -879,7 +1071,9 @@ print_job_queue_summary() {
 need_command sinfo
 need_command squeue
 
-if [[ "${PARTITION_FILTER}" != "cpu" ]]; then
+if [[ "${PARTITION_FILTER}" == "cpu" ]]; then
+  print_cpu_resource_info
+elif [[ "${PARTITION_FILTER}" != "cpu" ]]; then
   print_resource_info
 fi
 if [[ "${PARTITION_FILTER}" != "gpu" ]]; then
