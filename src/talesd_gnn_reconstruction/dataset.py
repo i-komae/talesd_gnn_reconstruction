@@ -12,6 +12,7 @@ import numpy as np
 
 from .constants import PULSE_FEATURE_COLUMNS, WAVEFORM_FEATURE_CHANNELS, WAVEFORM_TRACE_BINS
 from .progress import progress as _progress
+from .progress import progress_bar as _progress_bar
 
 
 @dataclass
@@ -73,6 +74,20 @@ class RunningFeatureStats:
         delta = batch_mean - self.mean
         self.mean = self.mean + delta * batch_count / total
         self.m2 = self.m2 + batch_m2 + delta**2 * self.count * batch_count / total
+        self.count = total
+
+    def merge(self, other: "RunningFeatureStats") -> None:
+        if other.count == 0:
+            return
+        if self.count == 0:
+            self.count = int(other.count)
+            self.mean = other.mean.copy()
+            self.m2 = other.m2.copy()
+            return
+        total = self.count + other.count
+        delta = other.mean - self.mean
+        self.mean = self.mean + delta * other.count / total
+        self.m2 = self.m2 + other.m2 + delta**2 * self.count * other.count / total
         self.count = total
 
     def to_scaler(self) -> StandardScaler:
@@ -413,25 +428,151 @@ def fit_scalers(
     dataset: H5GraphDataset,
     indices: list[int],
     show_progress: bool = False,
+    workers: int = 0,
 ) -> dict[str, StandardScaler]:
     if not indices:
         raise ValueError("cannot fit scalers with no training indices")
 
-    first = dataset[indices[0]]
-    node_stats = RunningFeatureStats(first["node_features"].shape[1])
-    edge_stats = RunningFeatureStats(first["edge_features"].shape[1])
-    pulse_dim = max(first["pulse_features"].shape[1] - 1, 0)
+    node_dim, edge_dim, pulse_dim, target_dim = _scaler_feature_dimensions(dataset, indices[0])
+    node_stats = RunningFeatureStats(node_dim)
+    edge_stats = RunningFeatureStats(edge_dim)
     pulse_stats = RunningFeatureStats(pulse_dim) if pulse_dim > 0 else None
-    target_stats = RunningFeatureStats(first["target"].shape[0] if first["target"] is not None else 0)
+    target_stats = RunningFeatureStats(target_dim)
+    if int(workers) > 1 and len(indices) >= 1024:
+        return _fit_scalers_parallel(dataset, indices, show_progress=show_progress, workers=int(workers))
+
     for index in _progress(indices, desc="fit scalers", total=len(indices), enabled=show_progress):
-        sample = dataset[index]
-        node_stats.update(sample["node_features"])
-        if sample["edge_features"].shape[0] > 0:
-            edge_stats.update(sample["edge_features"])
-        if pulse_stats is not None and sample["pulse_features"].shape[0] > 0:
-            pulse_stats.update(sample["pulse_features"][:, 1:])
-        if sample["target"] is not None:
-            target_stats.update(sample["target"])
+        _update_scaler_stats(dataset, index, node_stats, edge_stats, pulse_stats, target_stats)
+
+    if target_stats.count == 0:
+        raise ValueError("training graphs have no MC targets")
+    scalers = {
+        "node": node_stats.to_scaler(),
+        "edge": edge_stats.to_scaler(),
+        "target": target_stats.to_scaler(),
+    }
+    if pulse_stats is not None:
+        scalers["pulse"] = pulse_stats.to_scaler()
+    return scalers
+
+
+def _scaler_feature_dimensions(dataset: H5GraphDataset, index: int) -> tuple[int, int, int, int]:
+    path_index, _local_index, key = dataset._locate(index)
+    group = dataset._handle(path_index)["events"][key]
+    node_dim = int(group["node_features"].shape[1])
+    edge_dim = int(group["edge_features"].shape[1])
+    pulse_dim = int(max(group["pulse_features"].shape[1] - 1, 0)) if "pulse_features" in group else 0
+    target_dim = int(group["target"].shape[0]) if "target" in group else 0
+    return node_dim, edge_dim, pulse_dim, target_dim
+
+
+def _update_scaler_stats(
+    dataset: H5GraphDataset,
+    index: int,
+    node_stats: RunningFeatureStats,
+    edge_stats: RunningFeatureStats,
+    pulse_stats: RunningFeatureStats | None,
+    target_stats: RunningFeatureStats,
+) -> None:
+    path_index, _local_index, key = dataset._locate(index)
+    group = dataset._handle(path_index)["events"][key]
+    node_stats.update(group["node_features"][()].astype(np.float32))
+    edge_features = group["edge_features"][()].astype(np.float32)
+    if edge_features.shape[0] > 0:
+        edge_stats.update(edge_features)
+    if pulse_stats is not None and "pulse_features" in group:
+        pulse_features = group["pulse_features"][()].astype(np.float32)
+        if pulse_features.shape[0] > 0 and pulse_features.shape[1] > 1:
+            pulse_stats.update(pulse_features[:, 1:])
+    if "target" in group:
+        target_stats.update(group["target"][()].astype(np.float32))
+
+
+def _fit_scaler_chunk(
+    payload: tuple[H5GraphDataset, list[int]],
+) -> tuple[int, dict[str, RunningFeatureStats | None]]:
+    dataset, indices = payload
+    try:
+        node_dim, edge_dim, pulse_dim, target_dim = _scaler_feature_dimensions(dataset, indices[0])
+        node_stats = RunningFeatureStats(node_dim)
+        edge_stats = RunningFeatureStats(edge_dim)
+        pulse_stats = RunningFeatureStats(pulse_dim) if pulse_dim > 0 else None
+        target_stats = RunningFeatureStats(target_dim)
+        for index in indices:
+            _update_scaler_stats(dataset, index, node_stats, edge_stats, pulse_stats, target_stats)
+        return (
+            len(indices),
+            {
+                "node": node_stats,
+                "edge": edge_stats,
+                "pulse": pulse_stats,
+                "target": target_stats,
+            },
+        )
+    finally:
+        dataset.close()
+
+
+def _fit_scalers_parallel(
+    dataset: H5GraphDataset,
+    indices: list[int],
+    *,
+    show_progress: bool,
+    workers: int,
+) -> dict[str, StandardScaler]:
+    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+
+    node_dim, edge_dim, pulse_dim, target_dim = _scaler_feature_dimensions(dataset, indices[0])
+    node_stats = RunningFeatureStats(node_dim)
+    edge_stats = RunningFeatureStats(edge_dim)
+    pulse_stats = RunningFeatureStats(pulse_dim) if pulse_dim > 0 else None
+    target_stats = RunningFeatureStats(target_dim)
+
+    worker_count = min(max(int(workers), 1), len(indices))
+    chunk_size = max(1024, int(np.ceil(len(indices) / max(worker_count * 4, 1))))
+    chunks = [indices[start : start + chunk_size] for start in range(0, len(indices), chunk_size)]
+    progress = _progress_bar("fit scalers", len(indices), enabled=show_progress)
+
+    pending = set()
+    chunk_iter = iter(chunks)
+    max_pending = max(worker_count * 2, 1)
+    pool = ProcessPoolExecutor(max_workers=worker_count)
+    pool_closed = False
+
+    def submit_next() -> bool:
+        try:
+            chunk = next(chunk_iter)
+        except StopIteration:
+            return False
+        pending.add(pool.submit(_fit_scaler_chunk, (dataset, chunk)))
+        return True
+
+    try:
+        for _ in range(min(max_pending, len(chunks))):
+            submit_next()
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                count, stats = future.result()
+                node_stats.merge(stats["node"])  # type: ignore[arg-type]
+                edge_stats.merge(stats["edge"])  # type: ignore[arg-type]
+                if pulse_stats is not None and stats["pulse"] is not None:
+                    pulse_stats.merge(stats["pulse"])  # type: ignore[arg-type]
+                target_stats.merge(stats["target"])  # type: ignore[arg-type]
+                progress.update(count)
+                submit_next()
+        pool.shutdown(wait=True)
+        pool_closed = True
+    except BaseException:
+        for future in pending:
+            future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
+        pool_closed = True
+        raise
+    finally:
+        if not pool_closed:
+            pool.shutdown(wait=False, cancel_futures=True)
+        progress.close()
 
     if target_stats.count == 0:
         raise ValueError("training graphs have no MC targets")

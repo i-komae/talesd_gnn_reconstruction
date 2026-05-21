@@ -5,18 +5,21 @@ import math
 import os
 import random
 import time
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from collections.abc import Sequence
 from functools import partial
 from math import ceil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import h5py
 import numpy as np
 
 from .dataset import H5GraphDataset, StandardScaler, collate_graph_arrays, fit_scalers
 from .diagnostics import save_training_diagnostics
 from .metrics import binary_classification_metrics, direction_to_angles, reconstruction_metrics
 from .progress import progress as _progress
+from .progress import progress_bar as _progress_bar
 from .progress import write as _progress_write
 
 if TYPE_CHECKING:
@@ -264,6 +267,176 @@ def _source_stratification_keys(source_path: str, target: np.ndarray | None, par
     }
 
 
+def _decode_h5_string(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _stratified_source_scan_payloads(
+    dataset: H5GraphDataset,
+) -> list[tuple[str, int, int, list[int] | None, list[str] | None]]:
+    payloads: list[tuple[str, int, int, list[int] | None, list[str] | None]] = []
+    global_start = 0
+    for path_index in range(len(dataset._path_lengths)):
+        path = dataset.paths[path_index]
+        n_events = int(dataset._path_lengths[path_index])
+        if n_events <= 0:
+            continue
+        selected = dataset._path_local_indices[path_index]
+        key_list = dataset._path_key_lists[path_index]
+        payloads.append(
+            (
+                str(path),
+                global_start,
+                n_events,
+                None if selected is None else list(selected[:n_events]),
+                None if key_list is None else list(key_list),
+            )
+        )
+        global_start += n_events
+    return payloads
+
+
+def _scan_stratified_source_shard(
+    payload: tuple[str, int, int, list[int] | None, list[str] | None],
+) -> tuple[int, dict[str, list[int]], dict[str, dict[str, Any]]]:
+    path, global_start, n_events, selected_local_indices, key_list = payload
+    source_to_indices: dict[str, list[int]] = {}
+    source_stats: dict[str, dict[str, Any]] = {}
+    with h5py.File(path, "r") as h5:
+        events = h5["events"]
+        metadata = h5.get("metadata")
+        source_values = None
+        label_values = None
+        if metadata is not None and "source_path" in metadata and len(metadata["source_path"]) > 0:
+            source_values = metadata["source_path"][:]
+        if metadata is not None and "particle_label" in metadata and len(metadata["particle_label"]) > 0:
+            label_values = np.asarray(metadata["particle_label"][:], dtype=np.float64)
+
+        for offset in range(n_events):
+            local_index = (
+                int(selected_local_indices[offset])
+                if selected_local_indices is not None
+                else offset
+            )
+            global_index = global_start + offset
+            key = f"{local_index:08d}" if key_list is None else key_list[local_index]
+
+            source_path = ""
+            if source_values is not None and local_index < len(source_values):
+                source_path = _decode_h5_string(source_values[local_index])
+            group = events[key]
+            if not source_path:
+                source_path = str(group.attrs.get("source_path", ""))
+            if not source_path:
+                source_path = f"unknown:{global_index}"
+            source_to_indices.setdefault(source_path, []).append(global_index)
+
+            particle_label = None
+            if label_values is not None and local_index < len(label_values):
+                value = float(label_values[local_index])
+                if np.isfinite(value):
+                    particle_label = value
+            if particle_label is None:
+                particle_label = H5GraphDataset._group_particle_label(group)
+
+            stats = source_stats.setdefault(
+                source_path,
+                {
+                    "target_sum": np.zeros(7, dtype=np.float64),
+                    "target_count": 0,
+                    "particle_label": particle_label,
+                },
+            )
+            if "target" in group:
+                target = group["target"][()]
+                if target.shape[0] >= 7 and np.all(np.isfinite(target[:7])):
+                    stats["target_sum"] += target[:7].astype(np.float64)
+                    stats["target_count"] += 1
+            if stats["particle_label"] is None:
+                stats["particle_label"] = particle_label
+    return n_events, source_to_indices, source_stats
+
+
+def _merge_stratified_source_scan(
+    target_source_to_indices: dict[str, list[int]],
+    target_source_stats: dict[str, dict[str, Any]],
+    source_to_indices: dict[str, list[int]],
+    source_stats: dict[str, dict[str, Any]],
+) -> None:
+    for source_path, indices in source_to_indices.items():
+        target_source_to_indices.setdefault(source_path, []).extend(indices)
+    for source_path, stats in source_stats.items():
+        current = target_source_stats.setdefault(
+            source_path,
+            {
+                "target_sum": np.zeros(7, dtype=np.float64),
+                "target_count": 0,
+                "particle_label": stats["particle_label"],
+            },
+        )
+        current["target_sum"] += stats["target_sum"]
+        current["target_count"] += int(stats["target_count"])
+        if current["particle_label"] is None:
+            current["particle_label"] = stats["particle_label"]
+
+
+def _scan_stratified_source_paths_parallel(
+    dataset: H5GraphDataset,
+    *,
+    show_progress: bool,
+    workers: int,
+) -> tuple[dict[str, list[int]], dict[str, dict[str, Any]]]:
+    payloads = _stratified_source_scan_payloads(dataset)
+    worker_count = min(max(int(workers), 1), max(len(payloads), 1))
+    source_to_indices: dict[str, list[int]] = {}
+    source_stats: dict[str, dict[str, Any]] = {}
+    progress = _progress_bar("scan stratified source paths", len(dataset), enabled=show_progress)
+    pending = set()
+    payload_iter = iter(payloads)
+    max_pending = max(worker_count * 2, 1)
+    pool = ProcessPoolExecutor(max_workers=worker_count)
+    pool_closed = False
+
+    def submit_next() -> bool:
+        try:
+            payload = next(payload_iter)
+        except StopIteration:
+            return False
+        pending.add(pool.submit(_scan_stratified_source_shard, payload))
+        return True
+
+    try:
+        for _ in range(min(max_pending, len(payloads))):
+            submit_next()
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                count, shard_source_to_indices, shard_source_stats = future.result()
+                _merge_stratified_source_scan(
+                    source_to_indices,
+                    source_stats,
+                    shard_source_to_indices,
+                    shard_source_stats,
+                )
+                progress.update(count)
+                submit_next()
+        pool.shutdown(wait=True)
+        pool_closed = True
+    except BaseException:
+        for future in pending:
+            future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
+        pool_closed = True
+        raise
+    finally:
+        if not pool_closed:
+            pool.shutdown(wait=False, cancel_futures=True)
+        progress.close()
+    return source_to_indices, source_stats
+
+
 def _assign_source_group(
     split_sources: dict[str, list[str]],
     sources: list[str],
@@ -295,32 +468,40 @@ def split_indices_by_stratified_source_path(
     seed: int = 12345,
     show_progress: bool = True,
     min_group_sources: int = 10,
+    workers: int = 0,
 ) -> dict[str, list[int]]:
     source_to_indices: dict[str, list[int]] = {}
     source_stats: dict[str, dict[str, Any]] = {}
-    iterator = _progress(
-        range(len(dataset)),
-        desc="scan stratified source paths",
-        total=len(dataset),
-        enabled=show_progress,
-    )
-    for index in iterator:
-        source_path = dataset.source_path(index) or f"unknown:{index}"
-        source_to_indices.setdefault(source_path, []).append(index)
-        stats = source_stats.setdefault(
-            source_path,
-            {
-                "target_sum": np.zeros(7, dtype=np.float64),
-                "target_count": 0,
-                "particle_label": dataset.particle_label(index),
-            },
+    if int(workers) > 1 and len(dataset) >= 1024 and len(dataset._path_lengths) > 1:
+        source_to_indices, source_stats = _scan_stratified_source_paths_parallel(
+            dataset,
+            show_progress=show_progress,
+            workers=int(workers),
         )
-        target = dataset.target(index)
-        if target is not None and target.shape[0] >= 7 and np.all(np.isfinite(target[:7])):
-            stats["target_sum"] += target[:7].astype(np.float64)
-            stats["target_count"] += 1
-        if stats["particle_label"] is None:
-            stats["particle_label"] = dataset.particle_label(index)
+    else:
+        iterator = _progress(
+            range(len(dataset)),
+            desc="scan stratified source paths",
+            total=len(dataset),
+            enabled=show_progress,
+        )
+        for index in iterator:
+            source_path = dataset.source_path(index) or f"unknown:{index}"
+            source_to_indices.setdefault(source_path, []).append(index)
+            stats = source_stats.setdefault(
+                source_path,
+                {
+                    "target_sum": np.zeros(7, dtype=np.float64),
+                    "target_count": 0,
+                    "particle_label": dataset.particle_label(index),
+                },
+            )
+            target = dataset.target(index)
+            if target is not None and target.shape[0] >= 7 and np.all(np.isfinite(target[:7])):
+                stats["target_sum"] += target[:7].astype(np.float64)
+                stats["target_count"] += 1
+            if stats["particle_label"] is None:
+                stats["particle_label"] = dataset.particle_label(index)
 
     source_keys: dict[str, dict[str, tuple[str, ...]]] = {}
     for source_path, stats in source_stats.items():
@@ -543,6 +724,7 @@ def train_model(
     max_graphs: int | None = None,
     particle_filter: str = "all",
     num_workers: int = -1,
+    preprocess_workers: int = 0,
     prefetch_factor: int = 2,
     collate_backend: str = "auto",
     collate_threads: int = 1,
@@ -592,6 +774,7 @@ def train_model(
         num_workers = max(requested_num_workers, 0)
     requested_collate_backend = collate_backend
     collate_backend = _resolve_collate_backend(collate_backend, n_graphs=len(dataset), num_workers=num_workers)
+    preprocess_workers = max(int(preprocess_workers), 0)
 
     stage_started = time.perf_counter()
     if split_mode == "event":
@@ -616,6 +799,7 @@ def train_model(
             test_fraction=test_fraction,
             seed=seed,
             show_progress=show_progress,
+            workers=preprocess_workers,
         )
     else:
         raise ValueError("split_mode must be 'event', 'source-path', or 'source-stratified'")
@@ -633,7 +817,12 @@ def train_model(
         stage_seconds["scan_detector_ids"] = time.perf_counter() - stage_started
 
     stage_started = time.perf_counter()
-    scalers = fit_scalers(dataset, sorted(train_indices), show_progress=show_progress)
+    scalers = fit_scalers(
+        dataset,
+        sorted(train_indices),
+        show_progress=show_progress,
+        workers=preprocess_workers,
+    )
     stage_seconds["fit_scalers"] = time.perf_counter() - stage_started
     stage_started = time.perf_counter()
     first = dataset[train_indices[0]]
@@ -748,6 +937,7 @@ def train_model(
     stage_seconds["model_and_loaders"] = time.perf_counter() - stage_started
     print(
         f"device={device} data_loader_workers={num_workers} "
+        f"preprocess_workers={preprocess_workers} "
         f"prefetch_factor={prefetch_factor} collate_backend={collate_backend} "
         f"collate_threads={collate_threads or 'auto'}"
         + f" split_mode={split_mode} model_architecture={model_architecture}"
@@ -999,6 +1189,7 @@ def train_model(
         "runtime": {
             "device": device,
             "num_workers": num_workers,
+            "preprocess_workers": preprocess_workers,
             "prefetch_factor": prefetch_factor,
             "collate_backend": collate_backend,
             "requested_collate_backend": requested_collate_backend,

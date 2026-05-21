@@ -17,6 +17,7 @@ TIME_LIMIT="${TIME_LIMIT:-5-00:00:00}"
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-48}"
 BATCH_SIZE="${BATCH_SIZE:-256}"
 TRAIN_WORKERS="${TRAIN_WORKERS:-12}"
+PREPROCESS_WORKERS="${PREPROCESS_WORKERS:-24}"
 COLLATE_THREADS="${COLLATE_THREADS:-1}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
 DEVICE="${DEVICE:-cuda}"
@@ -118,6 +119,7 @@ echo "run_dir=${RUN_DIR}"
 echo "epochs=${TRAIN_EPOCHS}"
 echo "batch_size=${BATCH_SIZE}"
 echo "train_workers=${TRAIN_WORKERS}"
+echo "preprocess_workers=${PREPROCESS_WORKERS}"
 echo "device=${DEVICE}"
 echo "This job does not read DST files."
 echo "======================================================================"
@@ -133,6 +135,7 @@ fi
 
 if [[ "${SUMMARIZE_GRAPHS}" == "1" ]]; then
   .venv/bin/python scripts/summarize_graph_shards.py "${GRAPH_INPUT}" \\
+    --workers "${PREPROCESS_WORKERS}" \\
     -o "${SUMMARY_DIR}/graph_summary.json"
 fi
 
@@ -166,6 +169,7 @@ env \\
   DIRECTION_WEIGHT="${DIRECTION_WEIGHT}" \\
   CORE_SCALE_KM="${CORE_SCALE_KM}" \\
   TRAIN_WORKERS="${TRAIN_WORKERS}" \\
+  PREPROCESS_WORKERS="${PREPROCESS_WORKERS}" \\
   COLLATE_THREADS="${COLLATE_THREADS}" \\
   PREFETCH_FACTOR="${PREFETCH_FACTOR}" \\
   VAL_FRACTION="${VAL_FRACTION}" \\
@@ -199,6 +203,7 @@ mem=${MEM}
 epochs=${TRAIN_EPOCHS}
 batch_size=${BATCH_SIZE}
 train_workers=${TRAIN_WORKERS}
+preprocess_workers=${PREPROCESS_WORKERS}
 
 This job trains only from local HDF5 graph shards. It does not read DST.
 ======================================================================

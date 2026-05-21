@@ -850,6 +850,7 @@ def _cmd_train(args: argparse.Namespace) -> None:
         max_graphs=args.max_graphs,
         particle_filter=args.particle_filter,
         num_workers=args.num_workers,
+        preprocess_workers=args.preprocess_workers,
         prefetch_factor=args.prefetch_factor,
         collate_backend=args.collate_backend,
         collate_threads=args.collate_threads,
@@ -989,6 +990,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="学習に使う核種を絞る。allはproton/iron混合、protonはrusdmc.parttype=14、ironは5626のみ",
     )
     train.add_argument("--num-workers", type=int, default=DEFAULT_TRAIN_WORKERS, help="学習DataLoaderのworker数。-1でauto、0で単一process")
+    train.add_argument("--preprocess-workers", type=int, default=0, help="split scanとscaler fitに使う前処理worker数。0/1で単一process")
     train.add_argument("--prefetch-factor", type=int, default=2, help="各DataLoader workerが先読みするbatch数")
     train.add_argument("--collate-backend", choices=["auto", "cpp", "python"], default="auto", help="batch構築backend。autoは小規模入力ではpython、大規模/worker利用時はcppを選ぶ")
     train.add_argument("--collate-threads", type=int, default=1, help="C++ collate内部のthread数。0ならautoまたはTALESD_GNN_COLLATE_THREADS")
