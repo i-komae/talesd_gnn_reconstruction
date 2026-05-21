@@ -34,7 +34,7 @@ usage() {
 Usage: scripts/slurm_queue_summary.sh [1] [-g|-c|-a] [-d] [-n] [-r] [-h]
 
 Default output is compact:
-  - GPU Used/Total summary for GPU partitions
+  - GPU/CPU/MEM Used/Total summary for GPU partitions
   - regular Slurm partitions grouped by resource class
   - my summary
   - job queue length by resource class and partition
@@ -252,6 +252,20 @@ print_resource_info() {
       return sum
     }
 
+    function mem_count(tres, values, nvalues, i, item, sum) {
+      sum = 0
+      nvalues = split(tres, values, ",")
+      for (i = 1; i <= nvalues; i++) {
+        item = values[i]
+        if (item ~ /^mem=/) {
+          sub(/^mem=/, "", item)
+          sub(/M$/, "", item)
+          sum += item + 0
+        }
+      }
+      return sum
+    }
+
     function usage_bar(used_value, total_value, width, fill, j, filled, bar) {
       if (total_value <= 0) {
         return ""
@@ -285,6 +299,8 @@ print_resource_info() {
       alloc_gpu = gpu_count(alloc_tres)
       cfg_cpu = cpu_count(cfg_tres)
       alloc_cpu = cpu_count(alloc_tres)
+      cfg_mem = mem_count(cfg_tres)
+      alloc_mem = mem_count(alloc_tres)
       if (cfg_gpu <= 0) {
         next
       }
@@ -297,6 +313,8 @@ print_resource_info() {
       used[class] += alloc_gpu
       total_cpu[class] += cfg_cpu
       used_cpu[class] += alloc_cpu
+      total_mem[class] += cfg_mem
+      used_mem[class] += alloc_mem
     }
 
     END {
@@ -307,15 +325,22 @@ print_resource_info() {
         }
         pct = 100.0 * used[class] / total[class]
         cpu_pct = total_cpu[class] > 0 ? 100.0 * used_cpu[class] / total_cpu[class] : 0.0
+        mem_pct = total_mem[class] > 0 ? 100.0 * used_mem[class] / total_mem[class] : 0.0
         bar = usage_bar(used[class], total[class], width, "*")
         cpu_bar = usage_bar(used_cpu[class], total_cpu[class], width, "#")
+        mem_bar = usage_bar(used_mem[class], total_mem[class], width, "=")
         if (cpu_bar == "") {
           cpu_bar = sprintf("%*s", width, "")
         }
+        if (mem_bar == "") {
+          mem_bar = sprintf("%*s", width, "")
+        }
         bar_color = usage_color(pct)
         cpu_bar_color = usage_color(cpu_pct)
+        mem_bar_color = usage_color(mem_pct)
         printf "%s*%s  %-10s %-4s %s%s%s %6.1f%% %6d/%-6d\n", class_color(class), reset, class, "GPU", bar_color, bar, reset, pct, used[class], total[class]
         printf "   %-10s %-4s %s%s%s %6.1f%% %6d/%-6d\n", "", "CPU", cpu_bar_color, cpu_bar, reset, cpu_pct, used_cpu[class], total_cpu[class]
+        printf "   %-10s %-4s %s%s%s %6.1f%% %6d/%-6d MB\n", "", "MEM", mem_bar_color, mem_bar, reset, mem_pct, used_mem[class], total_mem[class]
       }
     }'
 }
