@@ -176,7 +176,7 @@ print_resource_info() {
         }
       }
       width = 25
-      printf "%s%-2s %-10s %-25s %7s %12s  %-25s %7s %12s%s\n", bold, "", "GPU CLASS", "GPU USE", "GPU%", "GPU USED", "CPU USE", "CPU%", "CPU USED", reset
+      printf "%s%-2s %-10s %-4s %-25s %7s %12s%s\n", bold, "", "GPU CLASS", "RSC", "USE", "USED%", "USED/TOTAL", reset
     }
 
     function class_from_part(part) {
@@ -314,7 +314,8 @@ print_resource_info() {
         }
         bar_color = usage_color(pct)
         cpu_bar_color = usage_color(cpu_pct)
-        printf "%s*%s  %-10s %s%s%s %6.1f%% %6d/%-6d  %s%s%s %6.1f%% %6d/%-6d\n", class_color(class), reset, class, bar_color, bar, reset, pct, used[class], total[class], cpu_bar_color, cpu_bar, reset, cpu_pct, used_cpu[class], total_cpu[class]
+        printf "%s*%s  %-10s %-4s %s%s%s %6.1f%% %6d/%-6d\n", class_color(class), reset, class, "GPU", bar_color, bar, reset, pct, used[class], total[class]
+        printf "   %-10s %-4s %s%s%s %6.1f%% %6d/%-6d\n", "", "CPU", cpu_bar_color, cpu_bar, reset, cpu_pct, used_cpu[class], total_cpu[class]
       }
     }'
 }
@@ -451,12 +452,12 @@ print_summary() {
 
   echo
   printf "%s##### %s SUMMARY BY PARTITION #####%s\n" "${BOLD}${CYAN}" "${title}" "${RESET}"
-  printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "PARTITION" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "" "PARTITION" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
 
   local data
   data="$("${cmd[@]}" || true)"
   if [[ -z "${data}" ]]; then
-    printf "%-24s %8d %8d %8d %8d\n" "(none)" 0 0 0 0
+    printf "%-2s %-12s %-28s %8d %8d %8d %8d\n" "" "" "(none)" 0 0 0 0
     return
   fi
 
@@ -516,11 +517,11 @@ print_summary() {
       return ""
     }
     {
-      printf "%s*%s  %-24s %8s %8s %8s %8s\n", part_color($1), reset, $1, $2, $3, $4, $5
+      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", part_color($1), reset, "", $1, $2, $3, $4, $5
     }'
 
   echo
-  printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "TOTAL" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "" "TOTAL" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
   printf "%s\n" "${data}" | awk -v filter="${PARTITION_FILTER}" -v bold="${BOLD}" -v reset="${RESET}" '
     function group_from_part(part) {
       if (part ~ /^reservation_b6000/) return "RESERVATION"
@@ -558,7 +559,7 @@ print_summary() {
       }
     }
     END {
-      printf "%s%-2s %-24s %8d %8d %8d %8d%s\n", bold, "", "all", total+0, pending+0, running+0, other+0, reset
+      printf "%s%-2s %-12s %-28s %8d %8d %8d %8d%s\n", bold, "", "", "all", total+0, pending+0, running+0, other+0, reset
     }'
 }
 
@@ -640,7 +641,7 @@ print_job_queue_summary() {
   fi
 
   printf "%s%s%s\n" "${BOLD}" "${group_heading}" "${RESET}"
-  printf "%s%-2s %-12s %8s %8s %8s %8s%s\n" "${BOLD}" "" "${group_label}" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "${group_label}" "" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
   printf "%s\n" "${data}" | awk -v filter="${PARTITION_FILTER}" '
     function group_from_part(part) {
       if (part ~ /^reservation_b6000/) {
@@ -739,7 +740,7 @@ print_job_queue_summary() {
       return ""
     }
     {
-      printf "%s*%s  %-12s %8s %8s %8s %8s\n", group_color($2), reset, $2, $3, $4, $5, $6
+      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, "", $3, $4, $5, $6
     }'
 
   echo
