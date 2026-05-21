@@ -176,7 +176,7 @@ print_resource_info() {
         }
       }
       width = 25
-      printf "%s%-2s %-10s %-4s %-25s %7s %17s%s\n", bold, "", "GPU CLASS", "RSC", "USE", "USED%", "USED/TOTAL", reset
+      printf "%s%-2s %-10s %-4s %-25s %7s %9s %9s%s\n", bold, "", "GPU CLASS", "RSC", "USE", "USED%", "USED", "TOTAL", reset
     }
 
     function class_from_part(part) {
@@ -331,8 +331,8 @@ print_resource_info() {
         cpu_pct = total_cpu[class] > 0 ? 100.0 * used_cpu[class] / total_cpu[class] : 0.0
         mem_pct = total_mem[class] > 0 ? 100.0 * used_mem[class] / total_mem[class] : 0.0
         bar = usage_bar(used[class], total[class], width, "*")
-        cpu_bar = usage_bar(used_cpu[class], total_cpu[class], width, "#")
-        mem_bar = usage_bar(used_mem[class], total_mem[class], width, "=")
+        cpu_bar = usage_bar(used_cpu[class], total_cpu[class], width, "*")
+        mem_bar = usage_bar(used_mem[class], total_mem[class], width, "*")
         if (cpu_bar == "") {
           cpu_bar = sprintf("%*s", width, "")
         }
@@ -346,9 +346,9 @@ print_resource_info() {
           print ""
         }
         printed++
-        printf "%s*%s  %-10s %-4s %s%s%s %6.1f%% %7d/%-7d\n", class_color(class), reset, class, "GPU", bar_color, bar, reset, pct, used[class], total[class]
-        printf "   %-10s %-4s %s%s%s %6.1f%% %7d/%-7d\n", "", "CPU", cpu_bar_color, cpu_bar, reset, cpu_pct, used_cpu[class], total_cpu[class]
-        printf "   %-10s %-4s %s%s%s %6.1f%% %7s/%-7s\n", "", "MEM", mem_bar_color, mem_bar, reset, mem_pct, gib_string(used_mem[class]), gib_string(total_mem[class])
+        printf "%s*%s  %-10s %-4s %s%s%s %6.1f%% %9d %9d\n", class_color(class), reset, class, "GPU", bar_color, bar, reset, pct, used[class], total[class]
+        printf "   %-10s %-4s %s%s%s %6.1f%% %9d %9d\n", "", "CPU", cpu_bar_color, cpu_bar, reset, cpu_pct, used_cpu[class], total_cpu[class]
+        printf "   %-10s %-4s %s%s%s %6.1f%% %9s %9s\n", "", "MEM", mem_bar_color, mem_bar, reset, mem_pct, gib_string(used_mem[class]), gib_string(total_mem[class])
       }
     }'
 }
@@ -374,7 +374,7 @@ print_cpu_resource_info() {
     BEGIN {
       nclasses = 0
       width = 25
-      printf "%s%-2s %-12s %-4s %-25s %7s %17s%s\n", bold, "", "GROUP", "RSC", "USE", "USED%", "USED/TOTAL", reset
+      printf "%s%-2s %-12s %-4s %-25s %7s %9s %9s%s\n", bold, "", "GROUP", "RSC", "USE", "USED%", "USED", "TOTAL", reset
     }
 
     function group_rank(group) {
@@ -491,8 +491,8 @@ print_cpu_resource_info() {
           }
           cpu_pct = 100.0 * used_cpu[group] / total_cpu[group]
           mem_pct = total_mem[group] > 0 ? 100.0 * used_mem[group] / total_mem[group] : 0.0
-          cpu_bar = usage_bar(used_cpu[group], total_cpu[group], width, "#")
-          mem_bar = usage_bar(used_mem[group], total_mem[group], width, "=")
+          cpu_bar = usage_bar(used_cpu[group], total_cpu[group], width, "*")
+          mem_bar = usage_bar(used_mem[group], total_mem[group], width, "*")
           if (mem_bar == "") {
             mem_bar = sprintf("%*s", width, "")
           }
@@ -502,8 +502,8 @@ print_cpu_resource_info() {
             print ""
           }
           printed++
-          printf "%s*%s  %-12s %-4s %s%s%s %6.1f%% %7d/%-7d\n", group_color(group), reset, group, "CPU", cpu_color, cpu_bar, reset, cpu_pct, used_cpu[group], total_cpu[group]
-          printf "   %-12s %-4s %s%s%s %6.1f%% %7s/%-7s\n", "", "MEM", mem_color, mem_bar, reset, mem_pct, gib_string(used_mem[group]), gib_string(total_mem[group])
+          printf "%s*%s  %-12s %-4s %s%s%s %6.1f%% %9d %9d\n", group_color(group), reset, group, "CPU", cpu_color, cpu_bar, reset, cpu_pct, used_cpu[group], total_cpu[group]
+          printf "   %-12s %-4s %s%s%s %6.1f%% %9s %9s\n", "", "MEM", mem_color, mem_bar, reset, mem_pct, gib_string(used_mem[group]), gib_string(total_mem[group])
         }
       }
     }'
