@@ -263,7 +263,7 @@ print_summary() {
 
   echo
   printf "%s##### %s SUMMARY BY PARTITION #####%s\n" "${BOLD}${CYAN}" "${title}" "${RESET}"
-  printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "PARTITION" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "PARTITION" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
 
   local data
   data="$("${cmd[@]}" || true)"
@@ -307,7 +307,7 @@ print_summary() {
     }'
 
   echo
-  printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "TOTAL" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "TOTAL" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
   printf "%s\n" "${data}" | awk -v bold="${BOLD}" -v reset="${RESET}" '
     {
       total++
@@ -355,7 +355,7 @@ print_pending_reasons() {
 
 print_gpu_queue_summary() {
   echo
-  printf "%s##### GPU QUEUE SUMMARY #####%s\n" "${BOLD}${CYAN}" "${RESET}"
+  printf "%s##### GPU JOB QUEUE SUMMARY #####%s\n" "${BOLD}${CYAN}" "${RESET}"
 
   local data
   data="$(squeue -h -p "${GPU_PARTITIONS}" -o "%P %t" || true)"
@@ -365,7 +365,7 @@ print_gpu_queue_summary() {
   fi
 
   printf "%sBY GPU CLASS%s\n" "${BOLD}" "${RESET}"
-  printf "%s%-2s %-10s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GPU CLASS" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-10s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GPU CLASS" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
   printf "%s\n" "${data}" | awk '
     function gpu_class(part) {
       if (part ~ /a100/) {
@@ -414,7 +414,7 @@ print_gpu_queue_summary() {
 
   echo
   printf "%sBY PARTITION%s\n" "${BOLD}" "${RESET}"
-  printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "PARTITION" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-24s %8s %8s %8s %8s%s\n" "${BOLD}" "" "PARTITION" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
   printf "%s\n" "${data}" | awk '
     {
       part=$1
