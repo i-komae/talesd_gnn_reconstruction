@@ -252,7 +252,7 @@ print_resource_info() {
       return sum
     }
 
-    function usage_bar(used_value, total_value, width, j, filled, bar) {
+    function usage_bar(used_value, total_value, width, fill, j, filled, bar) {
       if (total_value <= 0) {
         return ""
       }
@@ -262,7 +262,7 @@ print_resource_info() {
       }
       bar = ""
       for (j = 1; j <= width; j++) {
-        bar = bar (j <= filled ? "*" : "-")
+        bar = bar (j <= filled ? fill : "-")
       }
       return bar
     }
@@ -307,8 +307,8 @@ print_resource_info() {
         }
         pct = 100.0 * used[class] / total[class]
         cpu_pct = total_cpu[class] > 0 ? 100.0 * used_cpu[class] / total_cpu[class] : 0.0
-        bar = usage_bar(used[class], total[class], width)
-        cpu_bar = usage_bar(used_cpu[class], total_cpu[class], width)
+        bar = usage_bar(used[class], total[class], width, "*")
+        cpu_bar = usage_bar(used_cpu[class], total_cpu[class], width, "#")
         if (cpu_bar == "") {
           cpu_bar = sprintf("%*s", width, "")
         }
@@ -452,7 +452,7 @@ print_summary() {
 
   echo
   printf "%s##### %s SUMMARY BY PARTITION #####%s\n" "${BOLD}${CYAN}" "${title}" "${RESET}"
-  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "" "PARTITION" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GROUP" "PARTITION" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
 
   local data
   data="$("${cmd[@]}" || true)"
@@ -473,6 +473,18 @@ print_summary() {
       if (part ~ /^edr2/) return "EDR2"
       if (part ~ /^intel/) return "INTEL"
       return "OTHER"
+    }
+    function group_rank(group) {
+      if (group == "A100") return 10
+      if (group == "B6000") return 20
+      if (group == "V100") return 30
+      if (group == "RESERVATION") return 40
+      if (group == "BIGMEM") return 50
+      if (group == "GLOBAL") return 60
+      if (group == "EDR1") return 70
+      if (group == "EDR2") return 80
+      if (group == "INTEL") return 90
+      return 99
     }
     function is_gpu_group(group) {
       return group == "A100" || group == "B6000" || group == "V100"
@@ -501,27 +513,41 @@ print_summary() {
     }
     END {
       for (part in total) {
-        printf "%-24s %8d %8d %8d %8d\n", part, total[part], pending[part]+0, running[part]+0, other[part]+0
+        group = group_from_part(part)
+        printf "%02d|%s|%s|%d|%d|%d|%d\n",
+          group_rank(group), group, part, total[part], pending[part]+0, running[part]+0, other[part]+0
       }
-    }' | sort | awk -v blue="${BLUE}" -v green="${GREEN}" -v magenta="${MAGENTA}" -v reset="${RESET}" '
-    function part_color(part) {
-      if (part ~ /a100/) {
+    }' | sort -t'|' -k1,1n -k3,3 | awk -F'|' \
+    -v blue="${BLUE}" \
+    -v green="${GREEN}" \
+    -v magenta="${MAGENTA}" \
+    -v yellow="${YELLOW}" \
+    -v red="${RED}" \
+    -v reset="${RESET}" '
+    function group_color(group) {
+      if (group == "A100") {
         return blue
       }
-      if (part ~ /v100/) {
+      if (group == "V100") {
         return green
       }
-      if (part ~ /b6000/) {
+      if (group == "B6000") {
         return magenta
+      }
+      if (group == "RESERVATION") {
+        return yellow
+      }
+      if (group == "BIGMEM") {
+        return red
       }
       return ""
     }
     {
-      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", part_color($1), reset, "", $1, $2, $3, $4, $5
+      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, $3, $4, $5, $6, $7
     }'
 
   echo
-  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "" "TOTAL" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GROUP" "TOTAL" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
   printf "%s\n" "${data}" | awk -v filter="${PARTITION_FILTER}" -v bold="${BOLD}" -v reset="${RESET}" '
     function group_from_part(part) {
       if (part ~ /^reservation_b6000/) return "RESERVATION"
@@ -559,7 +585,7 @@ print_summary() {
       }
     }
     END {
-      printf "%s%-2s %-12s %-28s %8d %8d %8d %8d%s\n", bold, "", "", "all", total+0, pending+0, running+0, other+0, reset
+      printf "%s%-2s %-12s %-28s %8d %8d %8d %8d%s\n", bold, "", "ALL", "all", total+0, pending+0, running+0, other+0, reset
     }'
 }
 
@@ -711,7 +737,7 @@ print_job_queue_summary() {
     }
     END {
       for (group in total) {
-        printf "%02d|%-12s|%8d|%8d|%8d|%8d\n",
+        printf "%02d|%s|%d|%d|%d|%d\n",
           group_rank(group), group, total[group], pending[group]+0, running[group]+0, other[group]+0
       }
     }' | sort -t'|' -k1,1n | awk -F'|' \
@@ -817,7 +843,7 @@ print_job_queue_summary() {
     END {
       for (part in total) {
         group = group_from_part(part)
-        printf "%02d|%-12s|%-28s|%8d|%8d|%8d|%8d\n",
+        printf "%02d|%s|%s|%d|%d|%d|%d\n",
           group_rank(group), group, part, total[part], pending[part]+0, running[part]+0, other[part]+0
       }
     }' | sort -t'|' -k1,1n -k3,3 | awk -F'|' \
