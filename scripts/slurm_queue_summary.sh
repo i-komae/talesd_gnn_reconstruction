@@ -7,6 +7,7 @@ MY_ONLY=0
 DETAILS=0
 SHOW_NODES=0
 SHOW_REASONS=0
+SHOW_PARTITIONS=0
 PARTITION_FILTER="regular"
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -31,11 +32,10 @@ fi
 
 usage() {
   cat <<'EOF'
-Usage: scripts/slurm_queue_summary.sh [1] [-g|-c|-a] [-d] [-n] [-r] [-h]
+Usage: scripts/slurm_queue_summary.sh [1] [-g|-c|-a] [-p] [-d] [-n] [-r] [-h]
 
 Default output is compact:
   - GPU/CPU/MEM Used/Total summary for GPU partitions
-  - regular Slurm partitions grouped by resource class
   - my summary
   - job queue length by resource class and partition
 
@@ -44,6 +44,7 @@ Options:
   -g     GPU partitions only.
   -c     CPU/non-GPU partitions only.
   -a     All visible partitions, including reservations.
+  -p     Also print partition state summary.
   -d     Also print detailed job tables.
   -n     Also print node tables.
   -r     Also print pending reasons.
@@ -73,6 +74,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     -a|--all)
       PARTITION_FILTER="all"
+      ;;
+    -p|--partitions)
+      SHOW_PARTITIONS=1
       ;;
     -h|--help)
       usage
@@ -281,8 +285,18 @@ print_resource_info() {
       return bar
     }
 
-    function gib_string(value_mb) {
-      return sprintf("%.1fG", value_mb / 1024.0)
+    function mem_string(value_mb, gb) {
+      gb = value_mb / 1000.0
+      if (gb >= 1000.0) {
+        return sprintf("%.2fT", gb / 1000.0)
+      }
+      if (gb >= 100.0) {
+        return sprintf("%.0fG", gb)
+      }
+      if (gb >= 10.0) {
+        return sprintf("%.1fG", gb)
+      }
+      return sprintf("%.2fG", gb)
     }
 
     {
@@ -348,7 +362,7 @@ print_resource_info() {
         printed++
         printf "%s*%s  %-10s %-4s %s%s%s %6.1f%% %9d %9d\n", class_color(class), reset, class, "GPU", bar_color, bar, reset, pct, used[class], total[class]
         printf "   %-10s %-4s %s%s%s %6.1f%% %9d %9d\n", "", "CPU", cpu_bar_color, cpu_bar, reset, cpu_pct, used_cpu[class], total_cpu[class]
-        printf "   %-10s %-4s %s%s%s %6.1f%% %9s %9s\n", "", "MEM", mem_bar_color, mem_bar, reset, mem_pct, gib_string(used_mem[class]), gib_string(total_mem[class])
+        printf "   %-10s %-4s %s%s%s %6.1f%% %9s %9s\n", "", "MEM", mem_bar_color, mem_bar, reset, mem_pct, mem_string(used_mem[class]), mem_string(total_mem[class])
       }
     }'
 }
@@ -449,8 +463,18 @@ print_cpu_resource_info() {
       return bar
     }
 
-    function gib_string(value_mb) {
-      return sprintf("%.1fG", value_mb / 1024.0)
+    function mem_string(value_mb, gb) {
+      gb = value_mb / 1000.0
+      if (gb >= 1000.0) {
+        return sprintf("%.2fT", gb / 1000.0)
+      }
+      if (gb >= 100.0) {
+        return sprintf("%.0fG", gb)
+      }
+      if (gb >= 10.0) {
+        return sprintf("%.1fG", gb)
+      }
+      return sprintf("%.2fG", gb)
     }
 
     {
@@ -503,7 +527,7 @@ print_cpu_resource_info() {
           }
           printed++
           printf "%s*%s  %-12s %-4s %s%s%s %6.1f%% %9d %9d\n", group_color(group), reset, group, "CPU", cpu_color, cpu_bar, reset, cpu_pct, used_cpu[group], total_cpu[group]
-          printf "   %-12s %-4s %s%s%s %6.1f%% %9s %9s\n", "", "MEM", mem_color, mem_bar, reset, mem_pct, gib_string(used_mem[group]), gib_string(total_mem[group])
+          printf "   %-12s %-4s %s%s%s %6.1f%% %9s %9s\n", "", "MEM", mem_color, mem_bar, reset, mem_pct, mem_string(used_mem[group]), mem_string(total_mem[group])
         }
       }
     }'
@@ -1117,7 +1141,7 @@ if [[ "${PARTITION_FILTER}" == "cpu" ]]; then
 elif [[ "${PARTITION_FILTER}" != "cpu" ]]; then
   print_resource_info
 fi
-if [[ "${PARTITION_FILTER}" != "gpu" ]]; then
+if [[ "${SHOW_PARTITIONS}" == "1" ]]; then
   print_partition_info
 fi
 if [[ "${SHOW_NODES}" == "1" ]]; then
