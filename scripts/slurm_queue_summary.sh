@@ -119,15 +119,8 @@ print_resource_info() {
         if (part == "") {
           continue
         }
-        if (part ~ /a100/) {
-          class = "A100"
-        } else if (part ~ /v100/) {
-          class = "V100"
-        } else if (part ~ /b6000/) {
-          class = "B6000"
-        } else {
-          class = part
-        }
+        requested_part[part] = 1
+        class = class_from_part(part)
         if (!(class in seen_class)) {
           nclasses++
           class_order[nclasses] = class
@@ -138,18 +131,25 @@ print_resource_info() {
       printf "%s%-2s %-10s %-25s %8s %12s%s\n", bold, "", "GPU CLASS", "GPU USE", "USED%", "USED/TOTAL", reset
     }
 
+    function class_from_part(part) {
+      if (part ~ /a100/) {
+        return "A100"
+      }
+      if (part ~ /b6000/) {
+        return "B6000"
+      }
+      if (part ~ /v100/) {
+        return "V100"
+      }
+      return part
+    }
+
     function node_class(list, values, nvalues, i, part) {
       nvalues = split(list, values, ",")
       for (i = 1; i <= nvalues; i++) {
         part = values[i]
-        if (part ~ /a100/) {
-          return "A100"
-        }
-        if (part ~ /v100/) {
-          return "V100"
-        }
-        if (part ~ /b6000/) {
-          return "B6000"
+        if (requested_part[part]) {
+          return class_from_part(part)
         }
       }
       return ""
