@@ -22,7 +22,7 @@ Options:
   1, --mine-only  Stop after my jobs and my summary.
   --details       Also print the full all-job table.
   --nodes         Also print Slurm node state from sinfo.
-  --reasons       Also print all pending reasons.
+  --reasons       Also print pending reasons.
 EOF
 }
 
@@ -348,7 +348,9 @@ if [[ "${SHOW_NODES}" == "1" ]]; then
 fi
 print_job_table "MY JOBS" "mine"
 print_summary "MY JOBS" "mine"
-print_pending_reasons "MY JOBS" "mine"
+if [[ "${SHOW_REASONS}" == "1" ]]; then
+  print_pending_reasons "MY JOBS" "mine"
+fi
 
 if [[ "${MY_ONLY}" == "1" ]]; then
   exit 0
