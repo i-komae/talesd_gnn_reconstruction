@@ -10,19 +10,9 @@ SHOW_REASONS=0
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   BOLD=$'\033[1m'
-  DIM=$'\033[2m'
-  RED=$'\033[31m'
-  GREEN=$'\033[32m'
-  YELLOW=$'\033[33m'
-  CYAN=$'\033[36m'
   RESET=$'\033[0m'
 else
   BOLD=""
-  DIM=""
-  RED=""
-  GREEN=""
-  YELLOW=""
-  CYAN=""
   RESET=""
 fi
 
@@ -32,13 +22,12 @@ Usage: scripts/slurm_queue_summary.sh [1|--mine-only] [--details] [--nodes] [--r
 
 Default output is compact:
   - GPU Used/Total summary
-  - my jobs
   - my summary
   - GPU queue length by GPU class and partition
 
 Options:
-  1, --mine-only  Stop after my jobs and my summary.
-  --details       Also print the full all-job table.
+  1, --mine-only  Stop after my summary.
+  --details       Also print detailed my-job and all-job tables.
   --nodes         Also print Slurm node state from sinfo.
   --reasons       Also print pending reasons.
 EOF
@@ -80,7 +69,7 @@ need_command() {
 
 print_sinfo() {
   echo
-  printf "%s##### SLURM NODE INFO #####%s\n" "${BOLD}${CYAN}" "${RESET}"
+  printf "%s##### SLURM NODE INFO #####%s\n" "${BOLD}" "${RESET}"
   echo "date     : $(date)"
   echo "login    : $(hostname)"
   echo "user     : ${USER:-unknown}"
@@ -94,9 +83,7 @@ print_sinfo() {
 
 print_resource_info() {
   echo
-  printf "%s##### RSC INFO #####%s\n" "${BOLD}${CYAN}" "${RESET}"
-  printf "%sGPU Used/Total is computed from Slurm CfgTRES/AllocTRES.%s\n" "${DIM}" "${RESET}"
-  echo
+  printf "%s##### RSC INFO #####%s\n" "${BOLD}" "${RESET}"
 
   if ! command -v scontrol >/dev/null 2>&1; then
     echo "scontrol is not available; cannot compute GPU Used/Total."
@@ -106,9 +93,6 @@ print_resource_info() {
   scontrol show node -o | awk \
     -v parts="${GPU_PARTITIONS}" \
     -v bold="${BOLD}" \
-    -v red="${RED}" \
-    -v yellow="${YELLOW}" \
-    -v green="${GREEN}" \
     -v reset="${RESET}" '
     BEGIN {
       nrequested = split(parts, requested, ",")
@@ -132,10 +116,9 @@ print_resource_info() {
           class_order[nclasses] = class
           seen_class[class] = 1
         }
-        class_parts[class] = class_parts[class] (class_parts[class] == "" ? "" : ",") part
       }
       width = 25
-      printf "%s%-10s %-25s %8s %12s  %s%s\n", bold, "GPU CLASS", "GPU USE", "USED%", "USED/TOTAL", "PARTITIONS", reset
+      printf "%s%-10s %-25s %8s %12s%s\n", bold, "GPU CLASS", "GPU USE", "USED%", "USED/TOTAL", reset
     }
 
     function node_class(list, values, nvalues, i, part) {
@@ -211,13 +194,7 @@ print_resource_info() {
         for (j = 1; j <= width; j++) {
           bar = bar (j <= filled ? "*" : "-")
         }
-        color = green
-        if (pct >= 95.0) {
-          color = red
-        } else if (pct >= 80.0) {
-          color = yellow
-        }
-        printf "%s%-10s %s %7.1f%% %6d/%-6d  %s%s\n", color, class, bar, pct, used[class], total[class], class_parts[class], reset
+        printf "%-10s %s %7.1f%% %6d/%-6d\n", class, bar, pct, used[class], total[class]
       }
     }'
 }
@@ -231,7 +208,7 @@ print_job_table() {
   fi
 
   echo
-  printf "%s##### %s #####%s\n" "${BOLD}${CYAN}" "${title}" "${RESET}"
+  printf "%s##### %s #####%s\n" "${BOLD}" "${title}" "${RESET}"
   "${cmd[@]}" || true
 }
 
@@ -244,7 +221,7 @@ print_summary() {
   fi
 
   echo
-  printf "%s##### %s SUMMARY BY PARTITION #####%s\n" "${BOLD}${CYAN}" "${title}" "${RESET}"
+  printf "%s##### %s SUMMARY BY PARTITION #####%s\n" "${BOLD}" "${title}" "${RESET}"
   printf "%s%-24s %8s %8s %8s %8s%s\n" "${BOLD}" "PARTITION" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
 
   local data
@@ -254,7 +231,7 @@ print_summary() {
     return
   fi
 
-  printf "%s\n" "${data}" | awk -v red="${RED}" -v green="${GREEN}" -v reset="${RESET}" '
+  printf "%s\n" "${data}" | awk '
     {
       part=$1
       state=$2
@@ -269,14 +246,13 @@ print_summary() {
     }
     END {
       for (part in total) {
-        color = (pending[part] > 0 ? red : (running[part] > 0 ? green : ""))
-        printf "%s%-24s %8d %8d %8d %8d%s\n", color, part, total[part], pending[part]+0, running[part]+0, other[part]+0, reset
+        printf "%-24s %8d %8d %8d %8d\n", part, total[part], pending[part]+0, running[part]+0, other[part]+0
       }
     }' | sort
 
   echo
   printf "%s%-24s %8s %8s %8s %8s%s\n" "${BOLD}" "TOTAL" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
-  printf "%s\n" "${data}" | awk -v bold="${BOLD}" -v red="${RED}" -v green="${GREEN}" -v reset="${RESET}" '
+  printf "%s\n" "${data}" | awk -v bold="${BOLD}" -v reset="${RESET}" '
     {
       total++
       if ($2 == "PD") {
@@ -288,8 +264,7 @@ print_summary() {
       }
     }
     END {
-      color = (pending > 0 ? red : (running > 0 ? green : ""))
-      printf "%s%s%-24s %8d %8d %8d %8d%s\n", bold, color, "all", total+0, pending+0, running+0, other+0, reset
+      printf "%s%-24s %8d %8d %8d %8d%s\n", bold, "all", total+0, pending+0, running+0, other+0, reset
     }'
 }
 
@@ -302,7 +277,7 @@ print_pending_reasons() {
   fi
 
   echo
-  printf "%s##### %s PENDING REASONS #####%s\n" "${BOLD}${CYAN}" "${title}" "${RESET}"
+  printf "%s##### %s PENDING REASONS #####%s\n" "${BOLD}" "${title}" "${RESET}"
   local data
   data="$("${cmd[@]}" || true)"
   if [[ -z "${data}" ]]; then
@@ -324,7 +299,7 @@ print_pending_reasons() {
 
 print_gpu_queue_summary() {
   echo
-  printf "%s##### GPU QUEUE SUMMARY #####%s\n" "${BOLD}${CYAN}" "${RESET}"
+  printf "%s##### GPU QUEUE SUMMARY #####%s\n" "${BOLD}" "${RESET}"
 
   local data
   data="$(squeue -h -p "${GPU_PARTITIONS}" -o "%P %t" || true)"
@@ -335,7 +310,7 @@ print_gpu_queue_summary() {
 
   printf "%sBY GPU CLASS%s\n" "${BOLD}" "${RESET}"
   printf "%s%-10s %8s %8s %8s %8s%s\n" "${BOLD}" "GPU CLASS" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
-  printf "%s\n" "${data}" | awk -v red="${RED}" -v green="${GREEN}" -v reset="${RESET}" '
+  printf "%s\n" "${data}" | awk '
     function gpu_class(part) {
       if (part ~ /a100/) {
         return "A100"
@@ -362,33 +337,14 @@ print_gpu_queue_summary() {
     }
     END {
       for (class in total) {
-        color = (pending[class] > 0 ? red : (running[class] > 0 ? green : ""))
-        printf "%s%-10s %8d %8d %8d %8d%s\n", color, class, total[class], pending[class]+0, running[class]+0, other[class]+0, reset
+        printf "%-10s %8d %8d %8d %8d\n", class, total[class], pending[class]+0, running[class]+0, other[class]+0
       }
     }' | sort
 
   echo
-  printf "%s%-10s %8s %8s %8s %8s%s\n" "${BOLD}" "TOTAL" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
-  printf "%s\n" "${data}" | awk -v bold="${BOLD}" -v red="${RED}" -v green="${GREEN}" -v reset="${RESET}" '
-    {
-      total++
-      if ($2 == "PD") {
-        pending++
-      } else if ($2 == "R") {
-        running++
-      } else {
-        other++
-      }
-    }
-    END {
-      color = (pending > 0 ? red : (running > 0 ? green : ""))
-      printf "%s%s%-10s %8d %8d %8d %8d%s\n", bold, color, "GPU", total+0, pending+0, running+0, other+0, reset
-    }'
-
-  echo
   printf "%sBY PARTITION%s\n" "${BOLD}" "${RESET}"
   printf "%s%-24s %8s %8s %8s %8s%s\n" "${BOLD}" "PARTITION" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
-  printf "%s\n" "${data}" | awk -v red="${RED}" -v green="${GREEN}" -v reset="${RESET}" '
+  printf "%s\n" "${data}" | awk '
     {
       part=$1
       state=$2
@@ -403,28 +359,9 @@ print_gpu_queue_summary() {
     }
     END {
       for (part in total) {
-        color = (pending[part] > 0 ? red : (running[part] > 0 ? green : ""))
-        printf "%s%-24s %8d %8d %8d %8d%s\n", color, part, total[part], pending[part]+0, running[part]+0, other[part]+0, reset
+        printf "%-24s %8d %8d %8d %8d\n", part, total[part], pending[part]+0, running[part]+0, other[part]+0
       }
     }' | sort
-
-  echo
-  printf "%s%-24s %8s %8s %8s %8s%s\n" "${BOLD}" "TOTAL" "TOTAL" "PENDING" "RUNNING" "OTHER" "${RESET}"
-  printf "%s\n" "${data}" | awk -v bold="${BOLD}" -v red="${RED}" -v green="${GREEN}" -v reset="${RESET}" '
-    {
-      total++
-      if ($2 == "PD") {
-        pending++
-      } else if ($2 == "R") {
-        running++
-      } else {
-        other++
-      }
-    }
-    END {
-      color = (pending > 0 ? red : (running > 0 ? green : ""))
-      printf "%s%s%-24s %8d %8d %8d %8d%s\n", bold, color, "gpu partitions", total+0, pending+0, running+0, other+0, reset
-    }'
 }
 
 need_command sinfo
@@ -434,7 +371,9 @@ print_resource_info
 if [[ "${SHOW_NODES}" == "1" ]]; then
   print_sinfo
 fi
-print_job_table "MY JOBS" "mine"
+if [[ "${DETAILS}" == "1" ]]; then
+  print_job_table "MY JOBS" "mine"
+fi
 print_summary "MY JOBS" "mine"
 if [[ "${SHOW_REASONS}" == "1" ]]; then
   print_pending_reasons "MY JOBS" "mine"
