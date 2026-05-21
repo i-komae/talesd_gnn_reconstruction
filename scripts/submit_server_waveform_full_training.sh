@@ -10,14 +10,16 @@ RUN_DIR="${RUN_DIR:-${OUTPUT_ROOT}/runs/${RUN_NAME}}"
 
 PARTITION="${PARTITION:-b6000-al9_long}"
 GPUS="${GPUS:-1}"
-CPUS_PER_TASK="${CPUS_PER_TASK:-24}"
-MEM="${MEM:-256G}"
+CPUS_PER_GPU="${CPUS_PER_GPU:-12}"
+MEM_PER_GPU_GB="${MEM_PER_GPU_GB:-128}"
+CPUS_PER_TASK="${CPUS_PER_TASK:-$((GPUS * CPUS_PER_GPU))}"
+MEM="${MEM:-$((GPUS * MEM_PER_GPU_GB))G}"
 TIME_LIMIT="${TIME_LIMIT:-5-00:00:00}"
 
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-48}"
 BATCH_SIZE="${BATCH_SIZE:-256}"
-TRAIN_WORKERS="${TRAIN_WORKERS:-12}"
-PREPROCESS_WORKERS="${PREPROCESS_WORKERS:-24}"
+TRAIN_WORKERS="${TRAIN_WORKERS:-8}"
+PREPROCESS_WORKERS="${PREPROCESS_WORKERS:-${CPUS_PER_TASK}}"
 COLLATE_THREADS="${COLLATE_THREADS:-1}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
 TRAINING_TASK="${TRAINING_TASK:-reconstruction}"
@@ -121,6 +123,9 @@ echo "date=\$(date)"
 echo "hostname=\$(hostname)"
 echo "slurm_job_id=\${SLURM_JOB_ID:-}"
 echo "partition=${PARTITION}"
+echo "gpus=${GPUS}"
+echo "cpus_per_gpu=${CPUS_PER_GPU}"
+echo "mem_per_gpu_gb=${MEM_PER_GPU_GB}"
 echo "graph_input=${GRAPH_INPUT}"
 echo "run_dir=${RUN_DIR}"
 echo "job_log=${LOG_DIR}/${RUN_NAME}.job.log"
@@ -222,6 +227,7 @@ graph_input:
 
 partition=${PARTITION}
 time_limit=${TIME_LIMIT}
+gpus=${GPUS}
 cpus_per_task=${CPUS_PER_TASK}
 mem=${MEM}
 epochs=${TRAIN_EPOCHS}

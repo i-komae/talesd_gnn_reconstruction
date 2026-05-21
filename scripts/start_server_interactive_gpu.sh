@@ -3,8 +3,10 @@ set -euo pipefail
 
 PARTITION="${PARTITION:-b6000-al9_short}"
 GPUS="${GPUS:-1}"
-CPUS_PER_TASK="${CPUS_PER_TASK:-16}"
-MEM="${MEM:-128G}"
+CPUS_PER_GPU="${CPUS_PER_GPU:-12}"
+MEM_PER_GPU_GB="${MEM_PER_GPU_GB:-128}"
+CPUS_PER_TASK="${CPUS_PER_TASK:-$((GPUS * CPUS_PER_GPU))}"
+MEM="${MEM:-$((GPUS * MEM_PER_GPU_GB))G}"
 TIME="${TIME:-00:15:00}"
 
 if [[ "${PARTITION}" == a100* && "${ALLOW_A100:-0}" != "1" ]]; then
@@ -25,7 +27,9 @@ cat <<EOF
 Starting interactive Slurm GPU session
 partition=${PARTITION}
 gpus=${GPUS}
+cpus_per_gpu=${CPUS_PER_GPU}
 cpus_per_task=${CPUS_PER_TASK}
+mem_per_gpu_gb=${MEM_PER_GPU_GB}
 mem=${MEM}
 time=${TIME}
 ======================================================================
