@@ -118,6 +118,7 @@ class H5GraphDataset:
         load_detector_lids: bool = False,
         max_graphs: int | None = None,
         particle_filter: str = "all",
+        show_progress: bool = False,
     ):
         self.paths = _as_paths(path)
         self.require_target = require_target
@@ -141,53 +142,58 @@ class H5GraphDataset:
         self.columns_json = "{}"
 
         remaining = self.max_graphs
-        for path_index, graph_path in enumerate(self.paths):
-            if remaining is not None and remaining <= 0:
-                break
-            with h5py.File(graph_path, "r") as handle:
-                if path_index == 0:
-                    self.columns_json = handle.attrs.get("columns_json", "{}")
-                events = handle["events"]
-                key_list_all = sorted(events.keys())
-                n_events = len(key_list_all)
-                dense_numeric_keys = n_events > 0 and all(
-                    key == f"{index:08d}" for index, key in enumerate(key_list_all)
-                )
-                if dense_numeric_keys:
-                    key_list = None
-                else:
-                    key_list = key_list_all
-                    n_events = len(key_list)
-                raw_n_events = n_events
-                metadata = handle.get("metadata")
-                selected_local_indices = None
-                if self.particle_filter != "all":
-                    selected_local_indices = self._selected_particle_indices(
-                        events=events,
-                        metadata=metadata,
-                        key_list=key_list,
-                        n_events=raw_n_events,
+        progress = _progress_bar("initialize graph shards", len(self.paths), enabled=show_progress)
+        try:
+            for path_index, graph_path in enumerate(self.paths):
+                if remaining is not None and remaining <= 0:
+                    break
+                with h5py.File(graph_path, "r") as handle:
+                    if path_index == 0:
+                        self.columns_json = handle.attrs.get("columns_json", "{}")
+                    events = handle["events"]
+                    key_list_all = sorted(events.keys())
+                    n_events = len(key_list_all)
+                    dense_numeric_keys = n_events > 0 and all(
+                        key == f"{index:08d}" for index, key in enumerate(key_list_all)
                     )
-                    n_events = len(selected_local_indices)
-                if remaining is not None:
-                    n_events = min(n_events, remaining)
-                    if selected_local_indices is not None:
-                        selected_local_indices = selected_local_indices[:n_events]
-                    if key_list is not None:
-                        if selected_local_indices is None:
-                            key_list = key_list[:n_events]
-                    remaining -= n_events
-                self._path_key_lists.append(key_list)
-                self._path_local_indices.append(selected_local_indices)
-                self._path_lengths.append(n_events)
-                self._path_has_metadata.append(
-                    metadata is not None
-                    and "source_path" in metadata
-                    and "particle_label" in metadata
-                    and len(metadata["source_path"]) >= raw_n_events
-                )
-                total = n_events + (self._cumulative_lengths[-1] if self._cumulative_lengths else 0)
-                self._cumulative_lengths.append(total)
+                    if dense_numeric_keys:
+                        key_list = None
+                    else:
+                        key_list = key_list_all
+                        n_events = len(key_list)
+                    raw_n_events = n_events
+                    metadata = handle.get("metadata")
+                    selected_local_indices = None
+                    if self.particle_filter != "all":
+                        selected_local_indices = self._selected_particle_indices(
+                            events=events,
+                            metadata=metadata,
+                            key_list=key_list,
+                            n_events=raw_n_events,
+                        )
+                        n_events = len(selected_local_indices)
+                    if remaining is not None:
+                        n_events = min(n_events, remaining)
+                        if selected_local_indices is not None:
+                            selected_local_indices = selected_local_indices[:n_events]
+                        if key_list is not None:
+                            if selected_local_indices is None:
+                                key_list = key_list[:n_events]
+                        remaining -= n_events
+                    self._path_key_lists.append(key_list)
+                    self._path_local_indices.append(selected_local_indices)
+                    self._path_lengths.append(n_events)
+                    self._path_has_metadata.append(
+                        metadata is not None
+                        and "source_path" in metadata
+                        and "particle_label" in metadata
+                        and len(metadata["source_path"]) >= raw_n_events
+                    )
+                    total = n_events + (self._cumulative_lengths[-1] if self._cumulative_lengths else 0)
+                    self._cumulative_lengths.append(total)
+                progress.update(1)
+        finally:
+            progress.close()
 
     def __len__(self) -> int:
         return self._cumulative_lengths[-1] if self._cumulative_lengths else 0

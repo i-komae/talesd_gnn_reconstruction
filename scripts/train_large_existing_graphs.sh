@@ -244,7 +244,9 @@ fi
       --quality-energy-scale "${QUALITY_ENERGY_SCALE}")
   fi
 
+  echo "stage=start talesd_gnn_train date=$(date)"
   "${cmd[@]}"
+  echo "stage=done talesd_gnn_train date=$(date)"
 
   echo "checkpoint=${CHECKPOINT}"
   echo "metrics=${METRICS_PATH}"

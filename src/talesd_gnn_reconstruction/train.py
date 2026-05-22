@@ -904,9 +904,17 @@ def train_model(
     diagnostic_energy_bin_width: float = 0.1,
     diagnostic_min_bin_count: int = 20,
 ) -> dict[str, Any]:
+    stage_started = time.perf_counter()
+    _progress_write("stage=start import_torch")
     import torch
+    stage_seconds: dict[str, float] = {"import_torch": time.perf_counter() - stage_started}
+    _progress_write(f"stage=done import_torch elapsed={stage_seconds['import_torch']:.1f}s")
 
+    stage_started = time.perf_counter()
+    _progress_write("stage=start import_model")
     from .model import PhysicsTaleSdGNN, TaleSdGNN
+    stage_seconds["import_model"] = time.perf_counter() - stage_started
+    _progress_write(f"stage=done import_model elapsed={stage_seconds['import_model']:.1f}s")
 
     random.seed(seed)
     np.random.seed(seed)
@@ -927,13 +935,22 @@ def train_model(
         raise ValueError("mass_pos_weight_mode must be 'none' or 'auto'")
 
     overall_started = time.perf_counter()
-    stage_seconds: dict[str, float] = {}
+    stage_started = time.perf_counter()
+    _progress_write(f"stage=start resolve_device requested={device}")
     device = resolve_device(device)
+    stage_seconds["resolve_device"] = time.perf_counter() - stage_started
+    _progress_write(f"stage=done resolve_device resolved={device} elapsed={stage_seconds['resolve_device']:.1f}s")
     prefetch_factor = max(int(prefetch_factor), 1)
     collate_threads = max(int(collate_threads), 0)
     pin_memory = device.startswith("cuda")
     if save_diagnostics:
+        stage_started = time.perf_counter()
+        _progress_write("stage=start latex_check")
         require_matplotlib_latex()
+        stage_seconds["latex_check"] = time.perf_counter() - stage_started
+        _progress_write(f"stage=done latex_check elapsed={stage_seconds['latex_check']:.1f}s")
+    else:
+        _progress_write("stage=skip latex_check save_diagnostics=0")
     stage_started = time.perf_counter()
     _progress_write("stage=start dataset_init")
     dataset = H5GraphDataset(
@@ -947,6 +964,7 @@ def train_model(
         load_detector_lids=int(detector_embedding_dim) > 0,
         max_graphs=max_graphs,
         particle_filter=particle_filter,
+        show_progress=show_progress,
     )
     stage_seconds["dataset_init"] = time.perf_counter() - stage_started
     _progress_write(
