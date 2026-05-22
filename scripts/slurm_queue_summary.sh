@@ -670,7 +670,7 @@ print_summary() {
 
   echo
   printf "%s##### %s SUMMARY BY PARTITION #####%s\n" "${BOLD}${CYAN}" "${title}" "${RESET}"
-  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GROUP" "PARTITION" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GROUP" "PARTITION" "PENDING" "RUNNING" "OTHER" "TOTAL" "${RESET}"
 
   local data
   data="$("${cmd[@]}" || true)"
@@ -774,11 +774,11 @@ print_summary() {
       return ""
     }
     {
-      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, $3, $4, $5, $6, $7
+      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, $3, $5, $6, $7, $4
     }'
 
   echo
-  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GROUP" "TOTAL" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GROUP" "PARTITION" "PENDING" "RUNNING" "OTHER" "TOTAL" "${RESET}"
   printf "%s\n" "${data}" | awk -v filter="${PARTITION_FILTER}" -v bold="${BOLD}" -v reset="${RESET}" '
     function group_from_part(part) {
       if (part ~ /^reservation_b6000/) return "RESERVATION"
@@ -816,7 +816,7 @@ print_summary() {
       }
     }
     END {
-      printf "%s%-2s %-12s %-28s %8d %8d %8d %8d%s\n", bold, "", "ALL", "all", total+0, pending+0, running+0, other+0, reset
+      printf "%s%-2s %-12s %-28s %8d %8d %8d %8d%s\n", bold, "", "ALL", "all", pending+0, running+0, other+0, total+0, reset
     }'
 }
 
@@ -898,7 +898,7 @@ print_job_queue_summary() {
   fi
 
   printf "%s%s%s\n" "${BOLD}" "${group_heading}" "${RESET}"
-  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "${group_label}" "" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "${group_label}" "" "PENDING" "RUNNING" "OTHER" "TOTAL" "${RESET}"
   printf "%s\n" "${data}" | awk -v filter="${PARTITION_FILTER}" '
     function group_from_part(part) {
       if (part ~ /^reservation_b6000/) {
@@ -1010,12 +1010,12 @@ print_job_queue_summary() {
       return ""
     }
     {
-      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, "", $3, $4, $5, $6
+      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, "", $4, $5, $6, $3
     }'
 
   echo
   printf "%sBY PARTITION%s\n" "${BOLD}" "${RESET}"
-  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GROUP" "PARTITION" "JOBS" "PENDING" "RUNNING" "OTHER" "${RESET}"
+  printf "%s%-2s %-12s %-28s %8s %8s %8s %8s%s\n" "${BOLD}" "" "GROUP" "PARTITION" "PENDING" "RUNNING" "OTHER" "TOTAL" "${RESET}"
   printf "%s\n" "${data}" | awk -v filter="${PARTITION_FILTER}" '
     function group_from_part(part) {
       if (part ~ /^reservation_b6000/) {
@@ -1129,7 +1129,7 @@ print_job_queue_summary() {
       return ""
     }
     {
-      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, $3, $4, $5, $6, $7
+      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, $3, $5, $6, $7, $4
     }'
 }
 
