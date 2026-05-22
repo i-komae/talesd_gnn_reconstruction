@@ -145,10 +145,21 @@ make_header() {
 
 render_frame() {
   local frame="$1"
+  local rows
+  local visible_frame
   local rendered
   if [[ -t 1 ]]; then
-    rendered="$(printf "%s\n" "${frame}" | awk -v clear=$'\033[2K' '{ print clear $0 }')"
-    printf '\033[H%s\n\033[J' "${rendered}"
+    rows="$(terminal_rows)"
+    if [[ "${rows}" -gt 0 ]]; then
+      visible_frame="$(printf "%s\n" "${frame}" | awk -v max_rows="${rows}" 'NR <= max_rows { print }')"
+    else
+      visible_frame="${frame}"
+    fi
+    rendered="$(
+      printf "%s\n" "${visible_frame}" \
+        | awk -v clear=$'\033[2K' '{ if (NR > 1) printf "\n"; printf "%s%s", clear, $0 }'
+    )"
+    printf '\033[H%s\033[J' "${rendered}"
   else
     printf "%s\n" "${frame}"
   fi
