@@ -44,20 +44,20 @@
 };
 \node[enc, text width=34mm, below=10mm of p] (penc) {
   \textbf{Pulse MLP}\\
-  $6\!\to\!192\!\to\!192$\\
+  $6\!\to\!224\!\to\!224$\\
   mean $\oplus$ max\\
-  $N_v\times384$
+  $N_v\times448$
 };
 
 \node[enc, text width=52mm, below=18mm of wenc] (concat) {
   \textbf{Per-node concatenation}\\
-  $29\oplus64\oplus384$\\
-  $N_v\times477$
+  $29\oplus64\oplus448$\\
+  $N_v\times541$
 };
 \node[enc, text width=52mm, below=10mm of concat] (nenc) {
   \textbf{Node encoder}\\
-  MLP $477\!\to\!192\!\to\!192$\\
-  $\mathbf{h}_v:N_v\times192$
+  MLP $541\!\to\!224\!\to\!224$\\
+  $\mathbf{h}_v:N_v\times224$
 };
 
 \node[input, text width=32mm, right=8mm of nenc] (edge) {
@@ -69,28 +69,34 @@
 
 \node[gnn, text width=58mm, below=10mm of nenc] (mp) {
   \textbf{Gated GNN layers}\\
-  $5$ message-passing layers\\
-  edge input $2H+13=397$\\
-  hidden dimension $H=192$
+  $6$ message-passing layers\\
+  edge input $2H+13=461$\\
+  hidden dimension $H=224$
 };
 
 \node[readout, text width=58mm, below=10mm of mp] (readout) {
   \textbf{Graph readout}\\
   mean $\oplus$ max $\oplus$ $4$ attention heads\\
-  $1152\!\to\!384\!\to\!192$
+  $1344\!\to\!448\!\to\!224$
 };
 
-\node[output, text width=42mm, below left=11mm and 8mm of readout] (reco) {
+\node[output, text width=42mm, below left=11mm and 22mm of readout] (reco) {
   \textbf{Reconstruction}\\
   $\log_{10}E$: $1$\\
   core $(x,y,z)$: $3$\\
   direction $\hat{n}$: $3$
 };
-\node[output, text width=42mm, below right=11mm and 8mm of readout] (mass) {
-  \textbf{Optional mass}\\
-  $192\!\to\!96\!\to\!1$\\
+\node[output, text width=38mm, below=11mm of readout] (quality) {
+  \textbf{Reco quality/error}\\
+  quality logit: $1$\\
+  error raw: $3$\\
+  active in reco
+};
+\node[output, text width=42mm, below right=11mm and 22mm of readout] (mass) {
+  \textbf{Mass-only head}\\
+  enhanced input: $1963$\\
   proton/iron logit\\
-  disabled by default
+  active in mass-only
 };
 
 \draw[arrow] (graph.south) -- ++(0,-4mm) -| (x.north);
@@ -106,9 +112,10 @@
 \draw[arrow] (edge.south) -- ++(0,-5mm) -| ([xshift=20mm]mp.north);
 \draw[arrow] (mp) -- (readout);
 \draw[arrow] (readout.south) -- ++(0,-5mm) -| (reco.north);
+\draw[arrow] (readout.south) -- (quality.north);
 \draw[arrow] (readout.south) -- ++(0,-5mm) -| (mass.north);
 
-\node[note, below=5mm of reco.south east, text width=84mm, anchor=north] {
+\node[note, below=5mm of quality.south, text width=96mm, anchor=north] {
   The graph is pulse-based.  The four trace channels are auxiliary features attached to each accepted-pulse node; they are not a detector-plane CNN input.
 };
 

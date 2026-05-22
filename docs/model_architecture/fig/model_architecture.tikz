@@ -84,7 +84,11 @@
   Direction head\\
   $(\hat n_x,\hat n_y,\hat n_z)$
 };
-\node[output, text width=30mm, below=8mm of dir] (mass) {
+\node[output, text width=30mm, below=8mm of dir] (quality) {
+  Quality/error heads\\
+  quality, $\sigma_E,\sigma_\theta,\sigma_c$
+};
+\node[output, text width=30mm, below=8mm of quality] (mass) {
   Optional mass head\\
   $p(\mathrm{Fe})$
 };
@@ -101,6 +105,7 @@
 \draw[arrow] (shared) -- (energy);
 \draw[arrow] (shared) -- (core);
 \draw[arrow] (shared) -- (dir);
+\draw[arrow] (shared) |- (quality);
 \draw[arrow] (shared) |- (mass);
 
 \node[note, below=6mm of e, text width=70mm] (idnote) {
@@ -111,7 +116,7 @@
   \node[draw=gray!50, rounded corners=2pt, fit=(x)(w)(p)(e), inner sep=4mm, label={[font=\small]above:Inputs}] {};
   \node[draw=gray!50, rounded corners=2pt, fit=(wenc)(penc)(xenc), inner sep=4mm, label={[font=\small]above:Per-node encoders}] {};
   \node[draw=gray!50, rounded corners=2pt, fit=(mp)(pool), inner sep=4mm, label={[font=\small]above:Graph network}] {};
-  \node[draw=gray!50, rounded corners=2pt, fit=(shared)(energy)(core)(dir)(mass), inner sep=4mm, label={[font=\small]above:Outputs}] {};
+  \node[draw=gray!50, rounded corners=2pt, fit=(shared)(energy)(core)(dir)(quality)(mass), inner sep=4mm, label={[font=\small]above:Outputs}] {};
 \end{scope}
 
 \end{tikzpicture}

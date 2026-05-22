@@ -4,191 +4,461 @@
 \usepackage{booktabs}
 \usepackage{geometry}
 \usepackage{graphicx}
+\usepackage{longtable}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning,fit,calc,backgrounds}
 
 \geometry{margin=14mm}
-\pagestyle{empty}
+\pagestyle{plain}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+\sloppy
 
-\title{TALE-SD accepted-pulse graph GNN with waveform features}
+\title{TALE-SD waveform GNN model specification}
 \author{}
 \date{}
 
+\newcommand{\code}[1]{\ifmmode\text{\ttfamily #1}\else\texttt{#1}\fi}
+\newcommand{\R}{\mathbb{R}}
+
 \begin{document}
 \maketitle
-\vspace{-8mm}
+\vspace{-7mm}
 
-\section{目的}
+\section{Scope}
 
-TALE-SDは検出器配置が不均一であり、規則格子を仮定するCNNだけでは検出器配置の情報を自然に扱えない。
-本モデルでは、各検出器を任意のIDとして扱うのではなく、物理的に意味のある量だけを入力する。
-具体的には、絶対位置、標高、イベント内の重心からの相対位置、局所的な検出器間隔、信号時刻、信号量、校正量、ノイズ量、accepted pulseに付随する上下層の波形情報、検出器間の時空間的なedgeを用いる。
+This document describes the current TALE-SD GNN models used in this repository for two training tasks only:
+geometry/energy reconstruction and proton/iron mass classification.
+The goal is to specify the model in enough detail that the training can be reproduced from the code and the HDF5 graph shards without reading the implementation line by line.
 
-ノードは、Ising/noise filtering後に残ったaccepted pulseに対応する。
-各ノードには、通常の特徴量に加えて、上層/下層のraw pulse windowと、accepted pulse区間だけを時刻順に詰めたcompact traceを付与する。
-これにより、ノイズ除去後のパルス列を直接使う場合と、周辺波形を含めて使う場合を同じモデル内で比較できる。
+The current production entry points are
+\code{scripts/submit\_server\_waveform\_full\_training.sh} for reconstruction and
+\code{scripts/submit\_server\_mass\_only\_training.sh} for mass-only classification.
+Both scripts train from existing local HDF5 graph shards and do not read DST files during training.
+The default graph input on the server is
+\code{/dicos\_ui\_home/ikomae/work/gnn/graphs/waveform\_gnn\_stream\_20260520\_123802}.
 
-\begin{figure}[htbp]
-  \centering
-  \resizebox{\linewidth}{!}{\input{fig/model_architecture.tikz}}
-  \caption{General TALE-SD waveform GNN. Detector ID is not used as a physics input. Detector-dependent meaning is represented by physical station coordinates, elevation, local array density, calibration/noise quantities, accepted-pulse time traces, and graph connectivity.}
-  \label{fig:model_architecture}
-\end{figure}
+\section{Event graph}
 
-\section{今回の学習モデル}
+One air-shower event is represented as one directed graph.
+The graph definition follows the accepted-pulse graph used in the coincidence-analysis/Ising-noise-filter workflow.
+The graph is not a detector-plane image.
+It is a sparse, irregular graph whose nodes are accepted pulse candidates after waveform filtering.
+If one detector has more than one accepted pulse, that detector can contribute more than one graph node.
+The graph is discarded unless it has at least four pulse nodes and at least four unique detectors.
 
-図\ref{fig:concrete_training_model}は、\texttt{scripts/run\_waveform\_large\_training.sh}のdefault設定で今から学習するモデルを、具体的な次元と層の値を入れて書いたものである。
-主な設定は、physics architecture、CNN--GRU waveform encoder、hidden dimension $H=192$、message-passing layer数 $L_g=5$、readout head数 $K=4$である。
-任意のdetector-ID embeddingは使わず、\texttt{DETECTOR\_EMBEDDING\_DIM=0}とする。
-主入力はaccepted pulseをノードにしたグラフであり、波形は各pulse nodeに付く補助特徴量である。
-ここでのCNNは検出器平面上のCNNではなく、各pulse nodeに付随する4 channel traceに対する1次元畳み込みである。
+The HDF5 event group stores
+\[
+  \mathbf{X}\in\R^{N_v\times29},\quad
+  \mathbf{A}\in\R^{N_e\times13},\quad
+  \mathbf{P}_{\mathrm{raw}}\in\R^{N_p\times7},\quad
+  \mathbf{W}\in\R^{N_v\times4\times128},
+\]
+where $N_v$ is the number of accepted-pulse nodes and $N_e$ is the number of directed edges.
+The first column of $\mathbf{P}_{\mathrm{raw}}$ is the destination node index; the remaining six columns are the pulse-scalar input to the pulse encoder.
 
-\clearpage
-\begin{figure}[p]
-  \centering
-  \resizebox{!}{0.77\textheight}{\input{fig/concrete_training_model.tikz}}
-  \caption{Concrete model used by the default waveform training script. Dimensions are shown for the run configuration used before launching the next DST export and training.}
-  \label{fig:concrete_training_model}
-\end{figure}
-\clearpage
+\subsection{Node features}
+
+The node feature vector has 29 scalar features.
+It contains detector position, local detector spacing, event-local relative position, timing, signal-size proxies, waveform/calibration quantities, and pulse-order flags.
+The full order is fixed by \code{NODE\_FEATURE\_COLUMNS}:
+\[
+\begin{gathered}
+x,y,z,\ d_{\mathrm{nearest}},\ \overline{d}_{3},\ N_{\mathrm{neigh}},\rho_{\mathrm{local}},
+\Delta x,\Delta y,\Delta z,r,\\
+t_{\mathrm{first}},t_{\mathrm{trig}},\log_{10}\rho_{\mathrm{first}},\sqrt{\rho_{\mathrm{first}}},
+\log_{10}\rho_{\mathrm{total}},\sqrt{\rho_{\mathrm{total}}},
+\log_{10}\rho_{\max},\\
+N_{\mathrm{pulse}},\Delta t_{\mathrm{pulse}},N_{\mathrm{segment}},T_{\mathrm{wf}},
+\log_{10}\mathrm{FADC}_{\max},
+p_u,p_l,\sigma_u,\sigma_l,
+\mathrm{pulse\ order},\mathrm{first\ pulse\ flag}.
+\end{gathered}
+\]
+All distances are in km, times are in microseconds, and signal quantities are calibrated from the upper/lower FADC waveforms.
+No arbitrary detector-ID embedding is used in the current production scripts; \code{DETECTOR\_EMBEDDING\_DIM=0}.
+Detector-dependent roles therefore enter through physical coordinates, local spacing, calibration/noise, waveform response, and graph connectivity.
+
+\subsection{Waveform features}
+
+Each accepted-pulse node carries a four-channel trace with 128 bins:
+\[
+\mathbf{W}_v =
+\left(
+W^{u}_{\mathrm{raw}},
+W^{l}_{\mathrm{raw}},
+W^{u}_{\mathrm{compact}},
+W^{l}_{\mathrm{compact}}
+\right)\in\R^{4\times128}.
+\]
+The raw channels are upper/lower calibrated VEM windows centered on the accepted pulse.
+The compact channels concatenate only the accepted-pulse intervals after the Ising/noise filtering and then truncate or zero-pad to 128 bins.
+This gives the model both the local pulse shape and the cleaned pulse sequence.
+The waveform values are calibrated to VEM-like units and clipped in graph construction; they are not standardized by the training scaler.
+
+\subsection{Edges}
+
+Edges are built only between different detector IDs.
+A pair is considered if the detector distance is at most $1.5\,\mathrm{km}$ and $|\Delta t|\le 8\,\mu\mathrm{s}$.
+Accepted undirected pairs are written as two directed edges.
+The edge feature vector has 13 columns:
+\[
+(\Delta x,\Delta y,\Delta z,d,\Delta t,|\Delta t|,\Delta t/d,
+\Delta\log_{10}\rho,
+w_{\mathrm{ising}},w_{\mathrm{raw}},t_{\mathrm{excess}},s_{\mathrm{space}},s_{\mathrm{causal}}).
+\]
+The time-difference channels are important for shower-front geometry.
+In the current model, edge columns 4--6, namely $\Delta t$, $|\Delta t|$, and $\Delta t/d$, are also passed through a dedicated time-edge encoder before ordinary message passing.
+
+\subsection{Targets and labels}
+
+The reconstruction target is
+\[
+\mathbf{y}_{\mathrm{reco}}=
+(\log_{10}E,\ x_c,y_c,z_c,\ n_x,n_y,n_z)\in\R^7,
+\]
+where $E$ is in eV, the core is in km, and $\mathbf{n}$ is the shower direction vector.
+The mass label is derived from CORSIKA particle ID in \code{rusdmc}: proton is label 0 for particle ID 14, and iron is label 1 for particle ID 5626.
+
+\section{Preprocessing and splitting}
+
+Node, edge, pulse, and target scalers are fitted only on the training split.
+The scaler is a standard score transform,
+\[
+  x'=(x-\mu_{\mathrm{train}})/\sigma_{\mathrm{train}},
+\]
+with a unit standard deviation substituted for numerically constant columns.
+The model therefore predicts standardized target coordinates; the physics losses and metrics inverse-transform the prediction and target back to physical units before computing energy, core, and angular residuals.
+
+The default split is \code{source-stratified}: events are separated by source path while approximately preserving the physical parameter distribution.
+The default fractions are validation $10\%$ and test $20\%$.
+For training batches, the full list of training indices is shuffled at the start of each epoch before batches are formed.
+Validation and test order is not shuffled.
+This avoids HDF5/source ordering inside each batch while keeping validation and test deterministic.
+
+\section{Common network architecture}
+
+Both reconstruction and mass-only training use \code{PhysicsTaleSdGNN} by default.
+The server defaults are shown in Table~\ref{tab:common-defaults}.
 
 \begin{table}[htbp]
   \centering
-  \caption{Concrete default values for the next waveform training run.}
+  \caption{Common default network and training settings.}
+  \label{tab:common-defaults}
   \begin{tabular}{lll}
     \toprule
-    Quantity & Value & Meaning \\
+    Quantity & Default & Meaning \\
     \midrule
-    $F_{\mathrm{node}}$ & 29 & geometry, local array density, timing, signal, calibration/noise \\
-    $F_{\mathrm{edge}}$ & 13 & relative geometry, timing, signal ratio, Ising weights \\
-    $F_{\mathrm{pulse}}$ & 6 & pulse time, charge proxy, pulse order, first-pulse flag \\
-    waveform tensor & $4\times128$ & upper/lower raw window and upper/lower compact accepted-pulse trace \\
-    waveform embedding & 64 & CNN--GRU output per pulse-node \\
-    node encoder input & 477 & $29+64+2\times192+0$ \\
-    graph hidden dimension & 192 & node state dimension in message passing \\
-    message-passing layers & 5 & gated edge-message layers \\
-    readout dimension & 1152 & $192\times(2+4)$ from mean, max, and 4 attentive heads \\
-    reconstruction output & 7 & $\log_{10}E$, core $(x,y,z)$, direction $(n_x,n_y,n_z)$ \\
-    optimizer & AdamW & learning rate $3\times10^{-4}$, weight decay $10^{-4}$ \\
-    split & source-stratified & validation $10\%$, test $20\%$ \\
+    Architecture & \code{physics} & PhysicsTaleSdGNN with separate energy/core/direction heads \\
+    Hidden dimension $H$ & 224 & Node-state and shared-event dimension \\
+    GNN layers $L_g$ & 6 & Number of gated edge-message layers \\
+    Readout heads $K$ & 4 & Attentive graph-pooling heads \\
+    Dropout & 0.05 & Used in MLP blocks \\
+    Waveform encoder & \code{cnn-gru} & Conv1D followed by bidirectional GRU pooling \\
+    Waveform embedding $D_w$ & 64 & Per-node waveform embedding dimension \\
+    Detector-ID embedding & 0 & Disabled in the default model \\
+    Batch size & 256 & Graphs per optimizer step \\
+    Optimizer & AdamW & Learning rate $3\times10^{-4}$, weight decay $10^{-4}$ \\
+    LR schedule & cosine & CosineAnnealingLR over the requested epochs \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\section{グラフ定義}
+\subsection{Per-node encoders}
 
-グラフ化は\texttt{../coincidence\_analysis}で作成済みのIsing graph定義を使う。
-このGNNでも、ノードはSD番号そのものではなく、Ising/noise filtering後に残ったaccepted pulseである。
-同じ検出器に複数のaccepted pulseが残る場合は、その検出器から複数ノードが作られる。
-edgeは異なる検出器のpulse node間にのみ張り、距離、時刻差、信号量、Ising-style weightをedge featureとして持たせる。
+The pulse-scalar input has dimension 6 after removing the node-index routing column.
+It is encoded by
+\[
+  \mathrm{MLP}_{\mathrm{pulse}}:\R^6\rightarrow\R^{224}\rightarrow\R^{224},
+\]
+with SiLU activation and dropout.
+Encoded pulses are aggregated to their destination graph node by both mean and max pooling, producing $2H=448$ pulse features per node.
 
-\begin{figure}[htbp]
+The waveform encoder first applies
+\[
+\mathrm{Conv1D}(4\rightarrow32,k=5)\rightarrow\mathrm{SiLU}
+\rightarrow\mathrm{LayerNorm}
+\rightarrow\mathrm{Conv1D}(32\rightarrow64,k=5)\rightarrow\mathrm{SiLU}.
+\]
+For the \code{cnn-gru} mode, a bidirectional GRU with hidden size 32 processes the encoded time sequence.
+The final recurrent state, the mean of the CNN sequence, and the max of the CNN sequence are concatenated and projected to a 64-dimensional waveform embedding.
+
+The node encoder receives
+\[
+  29\ \oplus\ 448\ \oplus\ 64 = 541
+\]
+features per node in the current default.
+It applies
+\[
+  \R^{541}\rightarrow\R^{224}\rightarrow\R^{224}
+\]
+with SiLU activations and LayerNorm after each linear block.
+
+\subsection{Time-edge encoder and message passing}
+
+Before message passing, the time-edge encoder applies an MLP to the three timing edge features
+$(\Delta t,|\Delta t|,\Delta t/d)$ and averages the resulting messages over incoming edges.
+This timing aggregate is added to the node state with LayerNorm.
+
+Each of the six GNN layers is a gated edge-message layer.
+For a directed edge $i\rightarrow j$ with edge feature $a_{ij}$, the message input is
+\[
+  [h_i,h_j,a_{ij}]\in\R^{2H+13}=\R^{461}.
+\]
+The message MLP maps this to $\R^{224}$.
+A separate gate MLP outputs a scalar sigmoid gate, so the effective message is
+\[
+  m_{ij}=\mathrm{MLP}_m([h_i,h_j,a_{ij}])\,
+  \sigma(\mathrm{MLP}_g([h_i,h_j,a_{ij}])).
+\]
+For each destination node, both mean and max incoming message aggregates are formed.
+The node update uses $[h_j,\overline{m}_j,m^{\max}_j]\in\R^{3H}$, followed by a residual LayerNorm block and a feed-forward residual block.
+
+\subsection{Graph readout}
+
+After message passing, graph-level pooling concatenates mean pooling, max pooling, and four attentive readout heads:
+\[
+  g\in\R^{H(2+K)}=\R^{1344}.
+\]
+For reconstruction, this is passed through a shared MLP
+\[
+  \R^{1344}\rightarrow\R^{448}\rightarrow\R^{224}.
+\]
+The resulting event vector is used by the reconstruction, quality, and predicted-error heads.
+
+\begin{figure}[p]
   \centering
-  \includegraphics[width=0.70\linewidth]{fig/ising_edge_candidate_graph.pdf}
-  \caption{Ising edge candidate graph copied from \texttt{../coincidence\_analysis}. This is the layout-aware detector-pair graph used as the basis of the pulse-level GNN edge definition.}
-  \label{fig:ising_edge_candidate_graph}
+  \resizebox{\linewidth}{!}{\input{fig/model_architecture.tikz}}
+  \caption{Common model structure. The detector layout is represented by physical features and graph edges, not by placing detectors on a regular image grid.}
+  \label{fig:model_architecture}
 \end{figure}
 
-\begin{figure}[htbp]
+\begin{figure}[p]
   \centering
-  \includegraphics[width=0.92\linewidth]{fig/mc_ising_filter_event.pdf}
-  \caption{Representative pulse-candidate graph and Ising selection copied from \texttt{../coincidence\_analysis}. The GNN uses the same pulse-level idea: accepted pulse candidates become graph nodes, and local space-time relations become edges.}
-  \label{fig:mc_ising_filter_event}
+  \resizebox{0.92\linewidth}{!}{\input{fig/concrete_training_model.tikz}}
+  \caption{Concrete default architecture for the current server scripts. Reconstruction and mass-only training share the same encoder and graph network; they differ in the active output heads and loss.}
+  \label{fig:concrete_training_model}
 \end{figure}
 
-\vspace{-2mm}
-\begin{table}[htbp]
-  \centering
-  \caption{Main tensors and dimensions. $N_v$ is the number of accepted pulse-nodes in one shower graph, $N_e$ is the number of directed graph edges, $L=128$ is the trace length, $H$ is the graph hidden dimension, $D_w$ is the waveform embedding dimension, and $K$ is the number of attentive readout heads.}
-  \resizebox{\linewidth}{!}{%
-  \begin{tabular}{@{}lll@{}}
-    \toprule
-    Tensor & Dimension & Content \\
-    \midrule
-    $\mathbf{X}$ & $N_v \times F_{\mathrm{node}}$ &
-    position, elevation, local detector density, timing, signal size, calibration/noise \\
-    $\mathbf{W}$ & $N_v \times 4 \times 128$ &
-    upper/lower raw pulse windows and upper/lower accepted-pulse compact traces \\
-    $\mathbf{P}$ & $N_p \times F_{\mathrm{pulse}}$ &
-    accepted-pulse time, charge, pulse order, first-pulse flag \\
-    $\mathbf{A}$ & $N_e \times F_{\mathrm{edge}}$ &
-    relative position, distance, time difference, charge ratio, Ising edge weights \\
-    $\mathbf{h}_v$ & $N_v \times H$ &
-    node embeddings after waveform, pulse, and graph message passing \\
-    $\mathbf{g}$ & $H(2+K)$ &
-    graph-level mean, max, and attentive pooling vector \\
-    \bottomrule
-  \end{tabular}%
-  }
-\end{table}
+\clearpage
+\section{Reconstruction model}
 
-\vspace{-1mm}
-\begin{table}[htbp]
-  \centering
-  \caption{Layer definitions used in the default waveform model.}
-  \resizebox{\linewidth}{!}{%
-  \begin{tabular}{@{}lll@{}}
-    \toprule
-    Block & Operation & Output \\
-    \midrule
-    Waveform encoder &
-    Conv1D $\rightarrow$ SiLU $\rightarrow$ Conv1D $\rightarrow$ CNN--GRU or Transformer pooling &
-    $N_v \times D_w$ \\
-    Pulse encoder &
-    MLP on accepted-pulse features, then node-wise mean/max aggregation &
-    $N_v \times 2H$ \\
-    Node encoder &
-    MLP on $[\mathbf{X}, \mathbf{w}, \mathbf{p}]$ &
-    $N_v \times H$ \\
-    Message passing &
-    $L_g$ gated edge-message layers with residual normalization &
-    $N_v \times H$ \\
-    Readout &
-    mean pooling, max pooling, and $K$ attentive pooling heads &
-    $H(2+K)$ \\
-    Reconstruction heads &
-    shared MLP followed by energy, core, and direction heads &
-    $(\log_{10}E,\ x_c,y_c,z_c,\ \hat{n}_x,\hat{n}_y,\hat{n}_z)$ \\
-    Mass head &
-    optional binary head for proton/iron comparison &
-    $p({\mathrm{Fe}})$ \\
-    \bottomrule
-  \end{tabular}%
-  }
-\end{table}
+The reconstruction script trains energy, core, direction, event quality, and event-wise predicted errors.
+The default command is
+\[
+\code{scripts/submit\_server\_waveform\_full\_training.sh}.
+\]
+The active settings are \code{TRAINING\_TASK=reconstruction}, \code{LOSS\_MODE=physics-nll}, \code{QUALITY\_PREDICTION=1}, and \code{ERROR\_PREDICTION=1}.
+The default number of epochs is 96.
 
-\section{Baseline result}
+\subsection{Outputs}
 
-図\ref{fig:baseline_learning_curve}--\ref{fig:baseline_species_energy}は、既存graphで学習したbaseline GNNのtest結果である。
-このbaselineは波形trace encoderをまだ使っていないため、次の長時間学習で比較すべき下限性能として扱う。
-波形付きモデルの学習後は、同じ形式の図をここに差し替える。
+The reconstruction output has seven standardized target coordinates:
+\[
+  \hat{\mathbf{y}} =
+  (\widehat{\log_{10}E},\hat{x}_c,\hat{y}_c,\hat{z}_c,\hat{n}_x,\hat{n}_y,\hat{n}_z).
+\]
+The energy head is a single linear layer from the shared event vector.
+The core and direction heads are two-layer MLPs from the same shared vector.
+The direction vector is treated as a three-component vector; angular losses and metrics normalize it internally when computing angular separation.
 
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=0.72\linewidth]{fig/results/baseline_learning_curve.pdf}
-  \caption{Baseline training and validation losses.}
-  \label{fig:baseline_learning_curve}
-\end{figure}
+The quality head outputs one logit.
+After sigmoid, it is interpreted as a scalar event quality score between 0 and 1.
+The predicted-error head outputs three raw values.
+They are converted to positive physical sigmas by
+\[
+  (\sigma_E,\sigma_\theta,\sigma_c)
+  =\mathrm{softplus}(r)\odot(0.10,\ 0.8^\circ,\ 0.04\,\mathrm{km})
+\]
+for the default reconstruction script.
+These correspond to relative energy uncertainty, angular uncertainty in degrees, and core-position uncertainty in km.
 
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=0.78\linewidth]{fig/results/baseline_test_energy_resolution_by_true_energy.pdf}
-  \caption{Baseline energy bias and resolution as a function of true energy for the test set.}
-  \label{fig:baseline_energy}
-\end{figure}
+\subsection{Physics reconstruction loss}
 
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=0.82\linewidth]{fig/results/baseline_test_angular_core_resolution_by_true_energy.pdf}
-  \caption{Baseline angular and core-position resolution as a function of true energy for the test set.}
-  \label{fig:baseline_angle_core}
-\end{figure}
+The physics loss is computed in physical units after inverse-transforming the standardized target coordinates.
+With default weights
+\[
+  w_E=1.5,\quad w_c=1.2,\quad w_\theta=1.8,
+\]
+it is
+\[
+  L_{\mathrm{phys}} =
+  w_E L_E + w_c L_c + w_\theta L_\theta.
+\]
+The energy term is SmoothL1 on the difference in $\log_{10}E$ with $\beta=0.05$:
+\[
+  L_E=\mathrm{SmoothL1}(\widehat{\log_{10}E}-\log_{10}E;\beta=0.05).
+\]
+The core term uses the horizontal core error only:
+\[
+  L_c=\left\langle
+  \frac{(\hat{x}_c-x_c)^2+(\hat{y}_c-y_c)^2}{(0.10\,\mathrm{km})^2}
+  \right\rangle.
+\]
+The direction term computes the angular separation $\alpha$ between the predicted and true direction vectors and applies SmoothL1 to $\alpha/0.75^\circ$:
+\[
+  L_\theta=\mathrm{SmoothL1}\left(\frac{\alpha}{0.75^\circ};\beta=1\right).
+\]
 
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=0.78\linewidth]{fig/results/baseline_test_species_energy_resolution_by_true_energy.pdf}
-  \caption{Baseline energy reconstruction split by primary species. Proton and iron are overlaid in the same panel.}
-  \label{fig:baseline_species_energy}
-\end{figure}
+\subsection{Gaussian NLL loss for event-wise errors}
+
+The current reconstruction default adds a Gaussian negative-log-likelihood term to the physics loss:
+\[
+  L_{\mathrm{reco}}=L_{\mathrm{phys}}+\lambda_{\mathrm{NLL}}L_{\mathrm{NLL}},
+  \qquad \lambda_{\mathrm{NLL}}=0.2.
+\]
+The purpose is not to make the loss value approach zero.
+Instead, the predicted sigmas are trained because the NLL penalizes both underestimating and overestimating uncertainty:
+\[
+  \frac{1}{2}\frac{r^2}{\sigma^2}+\log\sigma.
+\]
+For a fixed residual $r$, this term is minimized at $\sigma^2=r^2$ before considering model capacity and conditioning on input features.
+Thus the model learns an event-dependent estimate of the expected residual scale.
+
+The implemented residuals are
+\[
+  r_E = 10^{\widehat{\log_{10}E}-\log_{10}E}-1,\qquad
+  r_\theta = \alpha\ [\mathrm{deg}],\qquad
+  r_c^2=(\hat{x}_c-x_c)^2+(\hat{y}_c-y_c)^2.
+\]
+The NLL is
+\[
+\begin{aligned}
+L_{\mathrm{NLL}} =
+\frac{
+w_E\langle \frac{1}{2}(r_E/\sigma_E)^2+\log\sigma_E\rangle
++w_c\langle \frac{1}{2}r_c^2/\sigma_c^2+2\log\sigma_c\rangle
++w_\theta\langle \frac{1}{2}(r_\theta/\sigma_\theta)^2+\log\sigma_\theta\rangle
+}{w_E+w_c+w_\theta}.
+\end{aligned}
+\]
+The sigma floors are $0.01$ for relative energy, $0.05^\circ$ for angle, and $0.005\,\mathrm{km}$ for core.
+These floors prevent the likelihood from driving $\sigma$ to zero for nearly perfect predictions.
+
+\subsection{Quality loss and optional error-calibration loss}
+
+The quality target is derived from the current prediction residual, detached from the computation graph:
+\[
+  q_{\mathrm{target}}=
+  \exp\left[-\frac{1}{3}\left(
+  \frac{|E_{\mathrm{rec}}/E_{\mathrm{true}}-1|}{0.10}
+  +\frac{\Delta r_c}{0.04\,\mathrm{km}}
+  +\frac{\alpha}{0.8^\circ}
+  \right)\right].
+\]
+The quality head is trained with binary cross entropy with logits:
+\[
+  L_q=\mathrm{BCEWithLogits}(q_{\mathrm{logit}},q_{\mathrm{target}}),
+  \qquad w_q=0.2.
+\]
+The quality score is intended for event selection and for plotting precision as a function of retained fraction.
+
+The code also contains an optional error-calibration loss:
+\[
+  L_{\mathrm{err}}=
+  \mathrm{SmoothL1}\left(
+  \log(1+\hat{s}),\log(1+s_{\mathrm{actual}})
+  \right),
+\]
+where $s_{\mathrm{actual}}$ is the actual normalized energy, angle, and core error.
+This loss directly calibrates the scale of the predicted error head.
+In the current reconstruction server script, \code{ERROR\_WEIGHT=0.0}; therefore the predicted-error head is trained by the NLL, not by this auxiliary calibration loss.
+
+The default reconstruction total loss is therefore
+\[
+  L_{\mathrm{total}}=
+  L_{\mathrm{phys}}
+  +0.2\,L_{\mathrm{NLL}}
+  +0.2\,L_q.
+\]
+
+\section{Mass-only model}
+
+The mass-only script is
+\[
+\code{scripts/submit\_server\_mass\_only\_training.sh}.
+\]
+It calls the same server training wrapper but sets \code{TRAINING\_TASK=mass}, \code{MASS\_CLASSIFICATION=1}, \code{QUALITY\_PREDICTION=0}, and \code{ERROR\_PREDICTION=0}.
+The default number of epochs is 48.
+The reconstruction heads are still present in the model module, but their loss is not used in mass-only training.
+
+\subsection{Mass head}
+
+The active mass head uses the enhanced classification architecture.
+Its input is not only the final shared reconstruction vector.
+It concatenates:
+\begin{itemize}
+  \item final graph readout, dimension $1344$;
+  \item initial node-encoder mean/max pooling, dimension $2H=448$;
+  \item graph context $(\log(1+N_v),\log(1+N_e),N_e/N_v)$, dimension 3;
+  \item direct waveform readout: waveform-embedding mean/max plus waveform-shape-summary mean/max, dimension $2D_w+2\times20=168$.
+\end{itemize}
+The resulting input dimension is
+\[
+  1344+448+3+168=1963.
+\]
+The enhanced classifier is
+\[
+\mathrm{LayerNorm}(1963)
+\rightarrow1963{\times}448
+\rightarrow224
+\rightarrow\mathrm{LayerNorm}
+\rightarrow224
+\rightarrow1,
+\]
+with SiLU activations and dropout between the linear layers.
+The output is one logit $z$.
+The probability plotted and thresholded as iron is
+\[
+  p(\mathrm{Fe})=\sigma(z).
+\]
+The fixed physical label convention is proton $=0$ and iron $=1$.
+
+\subsection{Mass loss}
+
+The current mass-only default uses binary cross entropy with logits:
+\[
+  L_{\mathrm{BCE}}=
+  -y\log\sigma(z)-(1-y)\log(1-\sigma(z)).
+\]
+The default positive-class weighting is disabled, \code{MASS\_POS\_WEIGHT\_MODE=none}.
+In addition, a ranking loss is enabled with weight 0.5 and margin 1.0.
+For iron logits $z^+$ and proton logits $z^-$ in the same batch,
+\[
+  L_{\mathrm{rank}}=
+  \left\langle
+  \mathrm{softplus}\left(1.0-(z^+-z^-)\right)
+  \right\rangle.
+\]
+The total mass-only loss is
+\[
+  L_{\mathrm{mass}} = L_{\mathrm{BCE}} + 0.5\,L_{\mathrm{rank}}.
+\]
+If a batch contains only one class, the ranking term is skipped for that batch.
+The intended decision threshold during training diagnostics is $p(\mathrm{Fe})=0.5$.
+The code also computes a tuned threshold from validation data for reporting, but the model itself is trained so that the natural boundary remains at the logit zero point.
+
+\section{Reproducibility checklist}
+
+To reproduce the current reconstruction run, use the graph shards above and the reconstruction script defaults:
+\[
+\begin{array}{ll}
+\code{MODEL\_ARCHITECTURE=physics}, & \code{HIDDEN\_DIM=224},\\
+\code{LAYERS=6}, & \code{WAVEFORM\_ENCODER=cnn-gru},\\
+\code{LOSS\_MODE=physics-nll}, & \code{TRAIN\_EPOCHS=96},\\
+\code{BATCH\_SIZE=256}, & \code{SPLIT\_MODE=source-stratified}.
+\end{array}
+\]
+To reproduce mass-only training, use the mass script defaults:
+\[
+\begin{array}{ll}
+\code{TRAINING\_TASK=mass}, & \code{MASS\_CLASSIFICATION=1},\\
+\code{MASS\_LOSS\_MODE=bce}, & \code{MASS\_RANKING\_WEIGHT=0.5},\\
+\code{MASS\_RANKING\_MARGIN=1.0}, & \code{TRAIN\_EPOCHS=48}.
+\end{array}
+\]
+
+The checkpoint stores the model configuration, target and feature scalers, split indices, training history, metrics, and diagnostic paths.
+The diagnostic directory also stores the prediction cache, so plots can be regenerated without rereading DST files.
 
 \end{document}
