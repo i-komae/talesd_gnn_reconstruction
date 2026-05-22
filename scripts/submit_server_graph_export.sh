@@ -12,15 +12,22 @@ GRAPH_RUN_DIR="${GRAPH_RUN_DIR:-${GRAPH_ROOT}/${RUN_NAME}}"
 GRAPH_OUTPUT="${GRAPH_OUTPUT:-${GRAPH_RUN_DIR}/${RUN_NAME}.h5}"
 
 DEFAULT_INPUT_DIRS="/dicos_ui_home/ikomae/work/taleMC/proton/sel/tale_proton5.5yr_16-16.9_v260313:/dicos_ui_home/ikomae/work/taleMC/proton/sel/tale_proton5.5yr_17-17.9_v260313:/dicos_ui_home/ikomae/work/taleMC/proton/sel/tale_proton5.5yr_18-18.9_v260313:/dicos_ui_home/ikomae/work/taleMC/iron/sel/tale_iron4yr_16-16.9_v260316:/dicos_ui_home/ikomae/work/taleMC/iron/sel/tale_iron4yr_17-17.9_v260316:/dicos_ui_home/ikomae/work/taleMC/iron/sel/tale_iron4yr_18-18.9_v260316"
+DEFAULT_MC_CALIB_DIR="/dicos_ui_home/ikomae/work/taleMC/calib"
 INPUT_DIRS="${INPUT_DIRS:-${DEFAULT_INPUT_DIRS}}"
 INPUT_LISTS="${INPUT_LISTS:-}"
 INPUT_FILES="${INPUT_FILES:-}"
 
 KIND="${KIND:-mc}"
 MC_CALIB_DIR="${MC_CALIB_DIR:-${TALE_MC_CALIB_DIR:-}}"
+if [[ -z "${MC_CALIB_DIR}" && -d "${DEFAULT_MC_CALIB_DIR}" ]]; then
+  MC_CALIB_DIR="${DEFAULT_MC_CALIB_DIR}"
+fi
 CONST_DST="${CONST_DST:-${TALESD_CONST_DST:-}}"
 if [[ -z "${CONST_DST}" && -n "${MC_CALIB_DIR}" && -f "${MC_CALIB_DIR%/}/talesdconst_pass2.dst" ]]; then
   CONST_DST="${MC_CALIB_DIR%/}/talesdconst_pass2.dst"
+fi
+if [[ -z "${CONST_DST}" && -n "${MC_CALIB_DIR}" && -f "${MC_CALIB_DIR%/}/talesdconst_pass2.dst.gz" ]]; then
+  CONST_DST="${MC_CALIB_DIR%/}/talesdconst_pass2.dst.gz"
 fi
 if [[ -z "${CONST_DST}" && -n "${TADIR:-}" ]]; then
   CONST_DST="${TADIR%/}/data/SD/talesdconst_pass2.dst"
@@ -69,6 +76,7 @@ CONST_DST is required for MC export.
 Set one of:
   CONST_DST=/path/to/talesdconst_pass2.dst
   TALESD_CONST_DST=/path/to/talesdconst_pass2.dst
+  MC_CALIB_DIR=/dicos_ui_home/ikomae/work/taleMC/calib
   TADIR=/path/to/TALE
 EOF
   exit 2
@@ -80,9 +88,10 @@ MC_CALIB_DIR is required for MC export.
 Use the calibration directory used by the Java TALE-SD analysis path.
 It must contain:
   talesdcalib_pass2_*.dst(.gz)
-  talesdcalib_pass2_typical.dst
+  talesdcalib_pass2_typical.dst(.gz)
 
-If the same directory contains talesdconst_pass2.dst, CONST_DST is inferred automatically.
+If the same directory contains talesdconst_pass2.dst(.gz), CONST_DST is inferred automatically.
+Default on DiCOS: ${DEFAULT_MC_CALIB_DIR}
 EOF
   exit 2
 fi

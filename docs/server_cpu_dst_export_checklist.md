@@ -34,10 +34,27 @@ done
 
 ## const DST と校正ファイル
 
-MC のグラフ作成では TALE-SD の検出器配置を読むため、`talesdconst_pass2.dst` が必要である。
-次のいずれかを設定する。
+DiCOS 上の標準配置では、MC の const DST と校正 DST は次のディレクトリに置く。
+
+```text
+/dicos_ui_home/ikomae/work/taleMC/calib
+```
+
+このディレクトリには、Java 解析で使う `talesdconst_pass2.dst` と日別の `talesdcalib_pass2_*` を置く。
+submit script はこの標準ディレクトリが存在する場合、`MC_CALIB_DIR` を自動で設定する。
+また、同じディレクトリに `talesdconst_pass2.dst` または `talesdconst_pass2.dst.gz` があれば、`CONST_DST` も自動で設定する。
+
+MC のグラフ作成では、TALE-SD の検出器配置を `talesdconst_pass2.dst` から読む。
+また、MC の `rusdraw` から `talesdcalibev` 相当の入力を作るには、Java 解析の `RUDSTBankUtil.convertRuSDRaw2TASDCalibev2` と同じ校正情報が必要である。
+`sdcalib_tale*.bin` は使わない。
+
+標準配置を使わない場合だけ、次のように明示する。
 
 ```bash
+export MC_CALIB_DIR=/path/to/tale_mc_calib
+# or
+export TALE_MC_CALIB_DIR=/path/to/tale_mc_calib
+
 export CONST_DST=/path/to/talesdconst_pass2.dst
 # or
 export TALESD_CONST_DST=/path/to/talesdconst_pass2.dst
@@ -45,28 +62,22 @@ export TALESD_CONST_DST=/path/to/talesdconst_pass2.dst
 export TADIR=/path/to/TALE
 ```
 
-MC の `rusdraw` から `talesdcalibev` 相当の入力を作るには、Java 解析の `RUDSTBankUtil.convertRuSDRaw2TASDCalibev2` と同じ校正情報も必要である。
-次のいずれかで校正ディレクトリを指定する。
-
-```bash
-export MC_CALIB_DIR=/path/to/tale_mc_calib
-# or
-export TALE_MC_CALIB_DIR=/path/to/tale_mc_calib
-```
-
 `MC_CALIB_DIR` には、Java の `SDCalibDSTBankReader` と同じ日別 DST が必要である。
 
 ```text
+talesdconst_pass2.dst
+talesdconst_pass2.dst.gz
 talesdcalib_pass2_*.dst
 talesdcalib_pass2_*.dst.gz
 talesdcalib_pass2_typical.dst
+talesdcalib_pass2_typical.dst.gz
 ```
 
-`MC_CALIB_DIR/talesdconst_pass2.dst` が存在する場合、submit script は `CONST_DST` をそこから自動設定する。
-
-`CONST_DST` を使う場合は、ジョブ投入前に次を確認する。
+ジョブ投入前に次を確認する。
 
 ```bash
+export MC_CALIB_DIR=${MC_CALIB_DIR:-/dicos_ui_home/ikomae/work/taleMC/calib}
+export CONST_DST=${CONST_DST:-$MC_CALIB_DIR/talesdconst_pass2.dst}
 test -r "$CONST_DST" && ls -lh "$CONST_DST"
 test -d "$MC_CALIB_DIR"
 ls "$MC_CALIB_DIR"/talesdcalib_pass2_*.dst* "$MC_CALIB_DIR"/talesdcalib_pass2_typical.dst* 2>/dev/null | head
@@ -148,8 +159,6 @@ module load gcc/13.1.0 cmake/3.28 hdf5/2.0.0 mkl/latest tbb/latest
 最初は 1 ファイルあたりの読み込み数を小さくして、DST 読み込み、const DST、HDF5 出力、summary 作成が通ることを確認する。
 
 ```bash
-CONST_DST=/path/to/talesdconst_pass2.dst \
-MC_CALIB_DIR=/path/to/tale_mc_calib \
 AUTO_RESOURCES=0 \
 PARTITION=edr1-al9_large \
 RUN_NAME=server_graph_export_smoke_$(date +%Y%m%d_%H%M%S) \
@@ -168,8 +177,6 @@ scripts/submit_server_graph_export.sh
 smoke test 後に、標準の energy-flat sampling で本番 export を投入する。
 
 ```bash
-CONST_DST=/path/to/talesdconst_pass2.dst \
-MC_CALIB_DIR=/path/to/tale_mc_calib \
 RUN_NAME=server_graph_export_energyflat200k_$(date +%Y%m%d_%H%M%S) \
 scripts/submit_server_graph_export.sh
 ```
