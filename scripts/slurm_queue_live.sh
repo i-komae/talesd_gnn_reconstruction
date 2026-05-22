@@ -7,6 +7,16 @@ INTERVAL="${INTERVAL:-5}"
 RESIZE_TERMINAL=1
 SUMMARY_ARGS=()
 
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  BOLD=$'\033[1m'
+  CYAN=$'\033[36m'
+  RESET=$'\033[0m'
+else
+  BOLD=""
+  CYAN=""
+  RESET=""
+fi
+
 usage() {
   cat <<'EOF'
 Usage: scripts/slurm_queue_live.sh [-i SEC] [--no-resize] [--] [slurm_queue_summary options]
@@ -100,6 +110,30 @@ request_resize() {
   RESIZED=1
 }
 
+summary_command_label() {
+  local label
+  label="$(basename "${SUMMARY_SCRIPT}")"
+  if [[ "${#SUMMARY_ARGS[@]}" -gt 0 ]]; then
+    printf "%s %s" "${label}" "${SUMMARY_ARGS[*]}"
+  else
+    printf "%s" "${label}"
+  fi
+}
+
+render_frame() {
+  local frame="$1"
+  local line
+  if [[ -t 1 ]]; then
+    printf '\033[H'
+    while IFS= read -r line; do
+      printf '\033[2K%s\n' "${line}"
+    done <<< "${frame}"
+    tput ed 2>/dev/null || true
+  else
+    printf "%s\n" "${frame}"
+  fi
+}
+
 ORIG_ROWS="$(terminal_rows)"
 ORIG_COLS="$(terminal_cols)"
 RESIZED=0
@@ -132,8 +166,14 @@ while true; do
   else
     status=$?
   fi
+  updated_at="$(date '+%Y-%m-%d %H:%M:%S')"
+  header="${BOLD}${CYAN}Every ${INTERVAL}s: $(summary_command_label)    updated: ${updated_at}    next in: ${INTERVAL}s    Ctrl+C to exit${RESET}"
+  frame="${header}"$'\n'"${output}"
+  if [[ "${status}" -ne 0 ]]; then
+    frame="${frame}"$'\n'$'\n'"slurm_queue_summary exited with status ${status}"
+  fi
 
-  plain="$(printf "%s\n" "${output}" | strip_ansi)"
+  plain="$(printf "%s\n" "${frame}" | strip_ansi)"
   needed_rows="$(printf "%s\n" "${plain}" | line_count)"
   needed_cols="$(printf "%s\n" "${plain}" | max_line_width)"
   current_rows="$(terminal_rows)"
@@ -148,14 +188,7 @@ while true; do
   fi
 
   request_resize "${target_rows}" "${target_cols}"
-
-  if [[ -t 1 ]]; then
-    printf '\033[H\033[2J'
-  fi
-  printf "%s\n" "${output}"
-  if [[ "${status}" -ne 0 ]]; then
-    printf "\nslurm_queue_summary exited with status %d\n" "${status}"
-  fi
+  render_frame "${frame}"
 
   sleep "${INTERVAL}"
 done
