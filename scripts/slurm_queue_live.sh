@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SUMMARY_SCRIPT="${SCRIPT_DIR}/slurm_queue_summary.sh"
 INTERVAL="${INTERVAL:-5}"
+LIVE_HEADER_MAX_WIDTH="${LIVE_HEADER_MAX_WIDTH:-80}"
 RESIZE_TERMINAL=1
 SUMMARY_ARGS=()
 
@@ -110,32 +111,44 @@ request_resize() {
   RESIZED=1
 }
 
-summary_command_label() {
-  local label
-  label="$(basename "${SUMMARY_SCRIPT}")"
+summary_args_label() {
   if [[ "${#SUMMARY_ARGS[@]}" -gt 0 ]]; then
-    printf "%s %s" "${label}" "${SUMMARY_ARGS[*]}"
+    printf "%s" "${SUMMARY_ARGS[*]}"
   else
-    printf "%s" "${label}"
+    printf "summary"
   fi
+}
+
+truncate_plain() {
+  local text="$1"
+  local max_width="$2"
+  if [[ "${#text}" -le "${max_width}" ]]; then
+    printf "%s" "${text}"
+    return
+  fi
+  if [[ "${max_width}" -le 3 ]]; then
+    printf "%.*s" "${max_width}" "${text}"
+    return
+  fi
+  printf "%s..." "${text:0:$((max_width - 3))}"
 }
 
 make_header() {
   local updated_at="$1"
   local remaining="$2"
-  printf "%sEvery %ss: %s    updated: %s    next in: %ss    Ctrl+C to exit%s" \
-    "${BOLD}${CYAN}" "${INTERVAL}" "$(summary_command_label)" "${updated_at}" "${remaining}" "${RESET}"
+  local updated_time
+  local text
+  updated_time="${updated_at##* }"
+  text="Every ${INTERVAL}s: $(summary_args_label) | updated ${updated_time} | next ${remaining}s | Ctrl+C"
+  printf "%s%s%s" "${CYAN}" "$(truncate_plain "${text}" "${LIVE_HEADER_MAX_WIDTH}")" "${RESET}"
 }
 
 render_frame() {
   local frame="$1"
-  local line
+  local rendered
   if [[ -t 1 ]]; then
-    printf '\033[H'
-    while IFS= read -r line; do
-      printf '\033[2K%s\n' "${line}"
-    done <<< "${frame}"
-    tput ed 2>/dev/null || true
+    rendered="$(printf "%s\n" "${frame}" | awk -v clear=$'\033[2K' '{ print clear $0 }')"
+    printf '\033[H%s\n\033[J' "${rendered}"
   else
     printf "%s\n" "${frame}"
   fi
