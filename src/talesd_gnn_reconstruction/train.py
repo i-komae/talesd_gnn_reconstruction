@@ -411,7 +411,10 @@ def _scan_stratified_source_paths_parallel(
         for _ in range(min(max_pending, len(payloads))):
             submit_next()
         while pending:
-            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            done, pending = wait(pending, timeout=progress.interval, return_when=FIRST_COMPLETED)
+            if not done:
+                progress.update(0)
+                continue
             for future in done:
                 count, shard_source_to_indices, shard_source_stats = future.result()
                 _merge_stratified_source_scan(
@@ -932,6 +935,7 @@ def train_model(
     if save_diagnostics:
         require_matplotlib_latex()
     stage_started = time.perf_counter()
+    _progress_write("stage=start dataset_init")
     dataset = H5GraphDataset(
         graphs_path,
         require_target=True,
@@ -945,6 +949,10 @@ def train_model(
         particle_filter=particle_filter,
     )
     stage_seconds["dataset_init"] = time.perf_counter() - stage_started
+    _progress_write(
+        f"stage=done dataset_init graphs={len(dataset)} shards={len(dataset.paths)} "
+        f"elapsed={stage_seconds['dataset_init']:.1f}s"
+    )
     if len(dataset) < 2:
         raise ValueError("training needs at least two graphs with MC targets")
     requested_num_workers = int(num_workers)
@@ -958,6 +966,7 @@ def train_model(
     preprocess_workers = max(int(preprocess_workers), 0)
 
     stage_started = time.perf_counter()
+    _progress_write(f"stage=start split mode={split_mode} preprocess_workers={preprocess_workers}")
     if split_mode == "event":
         split = split_indices(
             len(dataset),
@@ -988,6 +997,10 @@ def train_model(
     train_indices = split["train"]
     val_indices = split["val"]
     test_indices = split["test"]
+    _progress_write(
+        f"stage=done split train={len(train_indices)} val={len(val_indices)} test={len(test_indices)} "
+        f"elapsed={stage_seconds['split']:.1f}s"
+    )
 
     detector_lids: list[int] = []
     if int(detector_embedding_dim) > 0:
@@ -998,6 +1011,7 @@ def train_model(
         stage_seconds["scan_detector_ids"] = time.perf_counter() - stage_started
 
     stage_started = time.perf_counter()
+    _progress_write(f"stage=start fit_scalers train_graphs={len(train_indices)} preprocess_workers={preprocess_workers}")
     scalers = fit_scalers(
         dataset,
         sorted(train_indices),
@@ -1005,6 +1019,7 @@ def train_model(
         workers=preprocess_workers,
     )
     stage_seconds["fit_scalers"] = time.perf_counter() - stage_started
+    _progress_write(f"stage=done fit_scalers elapsed={stage_seconds['fit_scalers']:.1f}s")
     stage_started = time.perf_counter()
     first = dataset[train_indices[0]]
     model_kwargs = {
@@ -1065,6 +1080,7 @@ def train_model(
     mass_pos_weight_tensor = None
     if mass_classification:
         stage_started_labels = time.perf_counter()
+        _progress_write(f"stage=start scan_particle_labels train_graphs={len(train_indices)}")
         train_mass_labels = _particle_labels_for_indices(dataset, train_indices, show_progress=show_progress)
         finite_labels = train_mass_labels[np.isfinite(train_mass_labels)]
         if finite_labels.size == 0:
@@ -1077,6 +1093,10 @@ def train_model(
             mass_pos_weight_tensor = torch.tensor(mass_pos_weight, dtype=torch.float32, device=device)
         bce_loss_fn = True
         stage_seconds["scan_particle_labels"] = time.perf_counter() - stage_started_labels
+        _progress_write(
+            f"stage=done scan_particle_labels proton={int(negatives)} iron={int(positives)} "
+            f"elapsed={stage_seconds['scan_particle_labels']:.1f}s"
+        )
 
     train_loader = _make_graph_loader(
         dataset,

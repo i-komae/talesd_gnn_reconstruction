@@ -551,7 +551,10 @@ def _fit_scalers_parallel(
         for _ in range(min(max_pending, len(chunks))):
             submit_next()
         while pending:
-            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            done, pending = wait(pending, timeout=progress.interval, return_when=FIRST_COMPLETED)
+            if not done:
+                progress.update(0)
+                continue
             for future in done:
                 count, stats = future.result()
                 node_stats.merge(stats["node"])  # type: ignore[arg-type]
