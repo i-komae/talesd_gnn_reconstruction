@@ -818,7 +818,7 @@ def train_model(
     quality_loss_weight: float = 0.2,
     quality_angular_scale_deg: float = 1.0,
     quality_core_scale_km: float = 0.05,
-    quality_energy_scale: float = 0.25,
+    quality_energy_scale: float = 0.10,
     show_progress: bool = True,
     save_diagnostics: bool = True,
     diagnostic_energy_bin_width: float = 0.1,

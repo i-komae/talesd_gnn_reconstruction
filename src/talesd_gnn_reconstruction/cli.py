@@ -1015,7 +1015,7 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--quality-loss-weight", type=float, default=0.2, help="quality lossを再構成lossに足す重み")
     train.add_argument("--quality-angular-scale-deg", type=float, default=1.0, help="quality教師値で1/eに近づく角度誤差スケール[deg]")
     train.add_argument("--quality-core-scale-km", type=float, default=0.05, help="quality教師値で1/eに近づくcore誤差スケール[km]")
-    train.add_argument("--quality-energy-scale", type=float, default=0.25, help="quality教師値で1/eに近づく相対エネルギー誤差")
+    train.add_argument("--quality-energy-scale", type=float, default=0.10, help="quality教師値で1/eに近づく相対エネルギー誤差")
     train.add_argument("--no-progress", action="store_true", help="学習中のprogress barを表示しない")
     train.add_argument("--no-diagnostics", action="store_true", help="学習後のPDF診断図を保存しない")
     train.add_argument("--diagnostic-energy-bin-width", type=float, default=0.1, help="診断図で使うtrue log10(E/eV) bin幅")
