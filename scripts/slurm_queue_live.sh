@@ -145,11 +145,15 @@ make_header() {
 
 render_frame() {
   local frame="$1"
+  local max_rows="${2:-0}"
   local rows
   local visible_frame
   local rendered
   if [[ -t 1 ]]; then
-    rows="$(terminal_rows)"
+    rows="${max_rows}"
+    if [[ "${rows}" -le 0 ]]; then
+      rows="$(terminal_rows)"
+    fi
     if [[ "${rows}" -gt 0 ]]; then
       visible_frame="$(printf "%s\n" "${frame}" | awk -v max_rows="${rows}" 'NR <= max_rows { print }')"
     else
@@ -241,7 +245,7 @@ while true; do
   fi
 
   request_resize "${target_rows}" "${target_cols}"
-  render_frame "${frame}"
+  render_frame "${frame}" "${target_rows}"
 
   sleep_with_countdown "${updated_at}"
 done
