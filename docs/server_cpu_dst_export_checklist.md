@@ -53,11 +53,13 @@ test -r "$CONST_DST" && ls -lh "$CONST_DST"
 
 ## Slurm リソース
 
-CPU export の標準 submit script は `scripts/submit_server_graph_export.sh` である。
-標準設定は次の通り。
+CPU export の submit script は `scripts/submit_server_graph_export.sh` である。
+`PARTITION` は標準値を持たせず、投入時に明示する。
+これは、その時点の空き CPU、空きメモリ、待機列、利用可能 account を確認せずに投入先を固定しないためである。
+標準的な初期設定は次の通り。
 
 ```text
-partition        edr1-al9_large
+partition        explicit PARTITION required
 cpus-per-task    64
 memory           256G
 time-limit       2-00:00:00
@@ -68,6 +70,7 @@ summary workers  64
 投入前に、partition の時間制限、空き CPU、空きメモリ、自分の account から投入できるかを確認する。
 
 ```bash
+show_slurm_summary -c
 sinfo -p edr1-al9_large,edr2-al9_large -o "%P %a %l %D %t %c %m %N"
 sacctmgr show assoc user=$USER format=User,Account,Partition,QOS
 squeue -u "$USER"
@@ -113,6 +116,7 @@ module load gcc/13.1.0 cmake/3.28 hdf5/2.0.0 mkl/latest tbb/latest
 
 ```bash
 CONST_DST=/path/to/talesdconst_pass2.dst \
+PARTITION=edr1-al9_large \
 RUN_NAME=server_graph_export_smoke_$(date +%Y%m%d_%H%M%S) \
 MAX_EVENTS_PER_FILE=2 \
 ENERGY_SAMPLE_PER_BIN=0 \
@@ -130,6 +134,7 @@ smoke test 後に、標準の energy-flat sampling で本番 export を投入す
 
 ```bash
 CONST_DST=/path/to/talesdconst_pass2.dst \
+PARTITION=edr1-al9_large \
 RUN_NAME=server_graph_export_energyflat200k_$(date +%Y%m%d_%H%M%S) \
 scripts/submit_server_graph_export.sh
 ```

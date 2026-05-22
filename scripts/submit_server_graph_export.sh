@@ -22,7 +22,7 @@ if [[ -z "${CONST_DST}" && -n "${TADIR:-}" ]]; then
   CONST_DST="${TADIR%/}/data/SD/talesdconst_pass2.dst"
 fi
 
-PARTITION="${PARTITION:-edr1-al9_large}"
+PARTITION="${PARTITION:-}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-64}"
 MEM="${MEM:-256G}"
 TIME_LIMIT="${TIME_LIMIT:-2-00:00:00}"
@@ -53,6 +53,24 @@ DRY_RUN="${DRY_RUN:-0}"
 
 if [[ ! -d "${REPO}" ]]; then
   echo "repo not found: ${REPO}" >&2
+  exit 2
+fi
+if [[ -z "${PARTITION}" ]]; then
+  cat >&2 <<EOF
+PARTITION is required.
+
+Do not submit CPU DST export until current server resources have been checked.
+Check the current queue, usable partitions, and free capacity first, then set
+PARTITION explicitly.
+
+Examples:
+  show_slurm_summary -c
+  sinfo -p edr1-al9_large,edr2-al9_large -o "%P %a %l %D %t %c %m %N"
+  squeue -p edr1-al9_large,edr2-al9_large
+
+Then submit, for example:
+  PARTITION=edr1-al9_large scripts/submit_server_graph_export.sh
+EOF
   exit 2
 fi
 if [[ "${KIND}" == "mc" && -z "${CONST_DST}" ]]; then
