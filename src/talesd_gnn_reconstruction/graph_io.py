@@ -7,6 +7,7 @@ from typing import Any
 import h5py
 import numpy as np
 
+from .constants import WAVEFORM_SCHEMA
 from .event_graph import GraphEvent, graph_columns
 
 
@@ -15,8 +16,9 @@ def create_graph_file(path: str | Path, config: dict[str, Any] | None = None) ->
     output.parent.mkdir(parents=True, exist_ok=True)
     handle = h5py.File(output, "w")
     handle.attrs["format"] = "talesd_gnn_graphs"
-    handle.attrs["format_version"] = "0.3"
+    handle.attrs["format_version"] = "0.4"
     handle.attrs["charge_definition"] = "coincidence_onset_integral"
+    handle.attrs["waveform_schema"] = WAVEFORM_SCHEMA
     handle.attrs["columns_json"] = json.dumps(graph_columns())
     if config:
         handle.attrs["config_json"] = json.dumps(config, sort_keys=True)

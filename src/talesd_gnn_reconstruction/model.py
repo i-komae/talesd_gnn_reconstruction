@@ -88,11 +88,11 @@ def _waveform_shape_summary(
     tail = positive[:, :, length // 2 :].sum(dim=-1) / sums.clamp_min(1.0e-6)
 
     raw_sum = sums[:, 0] + sums[:, 1]
-    compact_sum = sums[:, 2] + sums[:, 3]
+    accepted_sum = sums[:, 2] + sums[:, 3]
     raw_asym = (sums[:, 0] - sums[:, 1]) / raw_sum.clamp_min(1.0e-6)
-    compact_asym = (sums[:, 2] - sums[:, 3]) / compact_sum.clamp_min(1.0e-6)
-    upper_compact_fraction = sums[:, 2] / sums[:, 0].clamp_min(1.0e-6)
-    lower_compact_fraction = sums[:, 3] / sums[:, 1].clamp_min(1.0e-6)
+    accepted_asym = (sums[:, 2] - sums[:, 3]) / accepted_sum.clamp_min(1.0e-6)
+    upper_accepted_fraction = sums[:, 2] / sums[:, 0].clamp_min(1.0e-6)
+    lower_accepted_fraction = sums[:, 3] / sums[:, 1].clamp_min(1.0e-6)
 
     summary = torch.cat(
         [
@@ -101,9 +101,9 @@ def _waveform_shape_summary(
             centroids,
             tail,
             raw_asym[:, None],
-            compact_asym[:, None],
-            upper_compact_fraction[:, None],
-            lower_compact_fraction[:, None],
+            accepted_asym[:, None],
+            upper_accepted_fraction[:, None],
+            lower_accepted_fraction[:, None],
         ],
         dim=-1,
     )

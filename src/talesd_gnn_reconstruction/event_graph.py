@@ -29,7 +29,7 @@ from .constants import (
     PROTON_PARTTYPE,
     TARGET_COLUMNS,
     WAVEFORM_FEATURE_CHANNELS,
-    WAVEFORM_PRE_PULSE_BINS,
+    WAVEFORM_RISE_ANCHOR_BIN,
     WAVEFORM_TRACE_BINS,
 )
 from .dst_reader import BankRecord
@@ -183,9 +183,9 @@ def _calibrated_vem_trace(wf: np.ndarray, ped: float, mev2cnt: float) -> np.ndar
     return np.clip(trace, -20.0, 200.0).astype(np.float32, copy=False)
 
 
-def _copy_window(values: np.ndarray, center_bin: int, length: int = WAVEFORM_TRACE_BINS) -> np.ndarray:
+def _copy_rise_aligned_window(values: np.ndarray, rise_bin: int, length: int = WAVEFORM_TRACE_BINS) -> np.ndarray:
     out = np.zeros(length, dtype=np.float32)
-    start = int(center_bin) - int(WAVEFORM_PRE_PULSE_BINS)
+    start = int(rise_bin) - int(WAVEFORM_RISE_ANCHOR_BIN)
     end = start + int(length)
     src_start = max(start, 0)
     src_end = min(end, int(values.shape[0]))
@@ -196,33 +196,46 @@ def _copy_window(values: np.ndarray, center_bin: int, length: int = WAVEFORM_TRA
     return out
 
 
-def _copy_compact_pulses(
+def _pulse_interval(pulse: Any, channel: str) -> tuple[int, int]:
+    if channel == "upper":
+        return int(pulse.upper_rise_bin), int(pulse.upper_fall_bin) + 1
+    if channel == "lower":
+        return int(pulse.lower_rise_bin), int(pulse.lower_fall_bin) + 1
+    raise ValueError(f"unknown waveform channel: {channel}")
+
+
+def _pulse_time_origin_bin(accepted_pulses: list[Any]) -> int:
+    return min(min(int(pulse.upper_rise_bin), int(pulse.lower_rise_bin)) for pulse in accepted_pulses)
+
+
+def _copy_accepted_gapped_pulses(
     values: np.ndarray,
     accepted_pulses: list[Any],
     *,
     channel: str,
     length: int = WAVEFORM_TRACE_BINS,
 ) -> np.ndarray:
-    pieces = []
+    out = np.zeros(length, dtype=np.float32)
+    if not accepted_pulses:
+        return out
+    origin_bin = _pulse_time_origin_bin(accepted_pulses)
     for pulse in accepted_pulses:
-        if channel == "upper":
-            start = int(pulse.upper_rise_bin)
-            end = int(pulse.upper_fall_bin) + 1
-        else:
-            start = int(pulse.lower_rise_bin)
-            end = int(pulse.lower_fall_bin) + 1
+        start, end = _pulse_interval(pulse, channel)
         start = max(start, 0)
         end = min(end, int(values.shape[0]))
-        if end > start:
-            pieces.append(values[start:end])
-    out = np.zeros(length, dtype=np.float32)
-    if not pieces:
-        return out
-    compact = np.concatenate(pieces).astype(np.float32, copy=False)
-    n_copy = min(int(length), int(compact.shape[0]))
-    if n_copy > 0:
-        out[:n_copy] = compact[:n_copy]
+        if end <= start:
+            continue
+        dst_start = max(start - origin_bin, 0)
+        if dst_start >= length:
+            continue
+        n_copy = min(end - start, int(length) - dst_start)
+        if n_copy > 0:
+            out[dst_start : dst_start + n_copy] = values[start : start + n_copy]
     return out
+
+
+def _coincident_pulse_rise_anchor_bin(pulse: Any) -> int:
+    return min(int(pulse.upper_rise_bin), int(pulse.lower_rise_bin))
 
 
 def _waveform_features_for_pulse(
@@ -238,13 +251,13 @@ def _waveform_features_for_pulse(
 ) -> np.ndarray:
     upper_vem = _calibrated_vem_trace(upper_wf, upper_ped, upper_mev2cnt)
     lower_vem = _calibrated_vem_trace(lower_wf, lower_ped, lower_mev2cnt)
-    center_bin = min(int(pulse.upper_rise_bin), int(pulse.lower_rise_bin))
+    rise_anchor_bin = _coincident_pulse_rise_anchor_bin(pulse)
     return np.stack(
         [
-            _copy_window(upper_vem, center_bin),
-            _copy_window(lower_vem, center_bin),
-            _copy_compact_pulses(upper_vem, accepted_pulses, channel="upper"),
-            _copy_compact_pulses(lower_vem, accepted_pulses, channel="lower"),
+            _copy_rise_aligned_window(upper_vem, rise_anchor_bin),
+            _copy_rise_aligned_window(lower_vem, rise_anchor_bin),
+            _copy_accepted_gapped_pulses(upper_vem, accepted_pulses, channel="upper"),
+            _copy_accepted_gapped_pulses(lower_vem, accepted_pulses, channel="lower"),
         ],
         axis=0,
     ).astype(np.float32, copy=False)

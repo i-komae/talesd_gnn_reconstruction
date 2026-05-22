@@ -92,10 +92,11 @@ PULSE_FEATURE_COLUMNS = [
 ]
 
 WAVEFORM_TRACE_BINS = 128
-WAVEFORM_PRE_PULSE_BINS = 32
+WAVEFORM_RISE_ANCHOR_BIN = 32
+WAVEFORM_SCHEMA = "rise_aligned_raw_plus_accepted_gapped_v1"
 WAVEFORM_FEATURE_CHANNELS = [
     "upper_raw_window_vem",
     "lower_raw_window_vem",
-    "upper_accepted_compact_vem",
-    "lower_accepted_compact_vem",
+    "upper_accepted_gapped_vem",
+    "lower_accepted_gapped_vem",
 ]

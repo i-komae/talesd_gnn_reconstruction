@@ -14,7 +14,8 @@
 \setlength{\parskip}{0.55em}
 \sloppy
 
-\title{TALE-SD waveform GNN model specification}
+\title{Telescope Array Low Energy Extension Surface Detector（TALE-SD）\\
+波形グラフニューラルネットワークモデル仕様}
 \author{}
 \date{}
 
@@ -25,43 +26,76 @@
 \maketitle
 \vspace{-7mm}
 
-\section{Scope}
+\section{目的と対象}
 
-This document describes the current TALE-SD GNN models used in this repository for two training tasks only:
-geometry/energy reconstruction and proton/iron mass classification.
-The goal is to specify the model in enough detail that the training can be reproduced from the code and the HDF5 graph shards without reading the implementation line by line.
+本書は、Telescope Array Low Energy Extension Surface Detector（TALE-SD、TALE 地表検出器）のモンテカルロ事象を対象とした、波形グラフニューラルネットワーク（Graph Neural Network: GNN）の現行仕様をまとめる。
+対象は、幾何とエネルギーの再構成、および陽子・鉄の二値分類である。
+本書の目的は、実装を逐一読まなくても、入力、グラフの作り方、ニューラルネットワークの層構成、出力、損失関数、学習設定を再現できるようにすることである。
 
-The current production entry points are
-\code{scripts/submit\_server\_waveform\_full\_training.sh} for reconstruction and
-\code{scripts/submit\_server\_mass\_only\_training.sh} for mass-only classification.
-Both scripts train from existing local HDF5 graph shards and do not read DST files during training.
-The default graph input on the server is
-\code{/dicos\_ui\_home/ikomae/work/gnn/graphs/waveform\_gnn\_stream\_20260520\_123802}.
+現行の実行入口は次の 2 つである。
+\begin{itemize}
+  \item 再構成: \code{scripts/submit\_server\_waveform\_full\_training.sh}
+  \item 質量分類のみ: \code{scripts/submit\_server\_mass\_only\_training.sh}
+\end{itemize}
+どちらのスクリプトも、Hierarchical Data Format version 5（HDF5）形式で保存済みのグラフ片を読み込む。
+学習中に Data Summary Tape（DST）ファイルは読まない。
+サーバー上の標準入力ディレクトリは次である。
+\begin{flushleft}
+\small\code{/dicos\_ui\_home/ikomae/work/gnn/graphs/waveform\_gnn\_stream\_20260520\_123802}
+\end{flushleft}
 
-\section{Event graph}
+\section{用語と表記}
 
-One air-shower event is represented as one directed graph.
-The graph definition follows the accepted-pulse graph used in the coincidence-analysis/Ising-noise-filter workflow.
-The graph is not a detector-plane image.
-It is a sparse, irregular graph whose nodes are accepted pulse candidates after waveform filtering.
-If one detector has more than one accepted pulse, that detector can contribute more than one graph node.
-The graph is discarded unless it has at least four pulse nodes and at least four unique detectors.
+本書では、略語を初めて用いる箇所で正式名称を示す。
+その後は、読みやすさを保つために略語を用いる。
+広く使われている日本語の用語がある場合は、日本語を主に用い、必要に応じて括弧内に英語名と略語を示す。
 
-The HDF5 event group stores
+本書で用いる主な機械学習用語は次の意味である。
+
+\begin{itemize}
+  \item 特徴量とは、モデルに入力する数値である。本解析では、検出器の位置、信号時刻、信号量、波形、検出器間の時刻差などが特徴量に相当する。
+  \item 教師ラベルとは、教師あり学習でモデルに与える正解値である。再構成では真のエネルギー、コア位置、到来方向を用い、質量分類では陽子または鉄のラベルを用いる。
+  \item 標準化とは、学習データの平均を引き、標準偏差で割る変換である。特徴量のスケールをそろえることで、最適化を安定させる。
+  \item バッチとは、1 回のパラメータ更新に使う事象の集合である。エポックとは、学習データ全体を 1 回使う単位である。
+  \item 損失関数とは、予測と正解のずれを数値化する関数である。学習では、この値が小さくなるようにモデルのパラメータを更新する。ただし、負の対数尤度を含む場合など、損失の最小値が 0 である必要はない。
+  \item 多層パーセプトロン（Multi-Layer Perceptron: MLP）とは、全結合層と非線形活性化関数を重ねたニューラルネットワークである。
+  \item 畳み込みニューラルネットワーク（Convolutional Neural Network: CNN）とは、近接する入力点を共有重みで処理するニューラルネットワークである。本モデルでは、検出器平面ではなく、各パルスノードに付いた 1 次元波形に対して CNN を用いる。
+  \item ゲート付き再帰ユニット（Gated Recurrent Unit: GRU）とは、時系列を順に処理する再帰型ニューラルネットワークである。波形の時間構造を要約するために用いる。
+  \item プーリングとは、複数のベクトルを 1 つのベクトルに要約する処理である。本モデルでは、平均プーリング、最大プーリング、注意機構付きプーリングを用いる。
+  \item 注意機構（attention）とは、入力要素ごとに重みを学習し、重要な要素を強く反映する仕組みである。
+  \item ドロップアウトとは、学習中に一部の中間成分を確率的に無効化する正則化である。過学習を抑える目的で用いる。
+  \item 層正規化（layer normalization: LayerNorm）とは、層の出力を正規化して学習を安定させる処理である。
+  \item softplus 関数とは、$\log(1+\exp x)$ で定義される滑らかな正値化関数である。予想誤差のように負になってはいけない量を出力するときに用いる。
+  \item 負の対数尤度（Negative Log-Likelihood: NLL）とは、確率モデルの尤もらしさを損失として表す量である。本モデルでは、事象ごとの再構成誤差の大きさを同時に学習するために用いる。
+  \item 二値交差エントロピー（Binary Cross Entropy: BCE）とは、二値分類で用いる標準的な損失関数である。本モデルでは陽子と鉄の分類に用いる。
+\end{itemize}
+
+\section{事象グラフ}
+
+1 つの空気シャワー事象を、1 つの有向グラフとして表す。
+ここでいうグラフは、検出器を規則格子に並べた画像ではない。
+Ising 型ノイズフィルタとは、パルス候補の採用・非採用を二値変数として扱い、時空間的に整合しないノイズ候補を落とす前処理である。
+この前処理で残ったパルス候補を accepted pulse（採用パルス）と呼ぶ。
+本モデルでは、accepted pulse をノードとし、検出器間の空間的・時間的な関係をエッジとする疎な不規則グラフを用いる。
+同じ検出器に複数の accepted pulse が残る場合、その検出器は複数のノードを持つ。
+ただし、パルスノード数が 4 未満、または異なる検出器数が 4 未満の事象は学習に使わない。
+
+1 事象の HDF5 グループには、次のテンソルを保存する。
 \[
   \mathbf{X}\in\R^{N_v\times29},\quad
   \mathbf{A}\in\R^{N_e\times13},\quad
   \mathbf{P}_{\mathrm{raw}}\in\R^{N_p\times7},\quad
-  \mathbf{W}\in\R^{N_v\times4\times128},
+  \mathbf{W}\in\R^{N_v\times4\times128}.
 \]
-where $N_v$ is the number of accepted-pulse nodes and $N_e$ is the number of directed edges.
-The first column of $\mathbf{P}_{\mathrm{raw}}$ is the destination node index; the remaining six columns are the pulse-scalar input to the pulse encoder.
+ここで、$N_v$ は accepted-pulse ノード数、$N_e$ は有向エッジ数である。
+$\mathbf{P}_{\mathrm{raw}}$ の第 1 列は、対応するノード番号である。
+残りの 6 列が、パルス特徴量としてパルスエンコーダに入力される。
 
-\subsection{Node features}
+\subsection{ノード特徴量}
 
-The node feature vector has 29 scalar features.
-It contains detector position, local detector spacing, event-local relative position, timing, signal-size proxies, waveform/calibration quantities, and pulse-order flags.
-The full order is fixed by \code{NODE\_FEATURE\_COLUMNS}:
+ノード特徴量は 29 個のスカラーで構成する。
+これらは、検出器の位置、局所的な検出器間隔、事象内での相対位置、時刻、信号量、波形と較正に関係する量、およびパルス順序を表す。
+列の順序は \code{NODE\_FEATURE\_COLUMNS} で固定されており、次の通りである。
 \[
 \begin{gathered}
 x,y,z,\ d_{\mathrm{nearest}},\ \overline{d}_{3},\ N_{\mathrm{neigh}},\rho_{\mathrm{local}},
@@ -75,253 +109,441 @@ p_u,p_l,\sigma_u,\sigma_l,
 \mathrm{pulse\ order},\mathrm{first\ pulse\ flag}.
 \end{gathered}
 \]
-All distances are in km, times are in microseconds, and signal quantities are calibrated from the upper/lower FADC waveforms.
-No arbitrary detector-ID embedding is used in the current production scripts; \code{DETECTOR\_EMBEDDING\_DIM=0}.
-Detector-dependent roles therefore enter through physical coordinates, local spacing, calibration/noise, waveform response, and graph connectivity.
+距離の単位は km、時刻の単位は $\mu\mathrm{s}$ である。
+信号量は上下層の Flash Analog-to-Digital Converter（FADC）波形から求める。
+また、信号量の一部は Vertical Equivalent Muon（VEM）相当の単位で較正される。
 
-\subsection{Waveform features}
+現行の標準設定では、任意の検出器番号埋め込みを用いない。
+すなわち、\code{DETECTOR\_EMBEDDING\_DIM=0} である。
+検出器ごとの意味の違いは、検出器番号そのものではなく、物理座標、局所的な検出器間隔、較正値、ノイズ量、波形応答、グラフの接続関係から学習させる。
 
-Each accepted-pulse node carries a four-channel trace with 128 bins:
+表~\ref{tab:node-feature-definitions} に、各ノード特徴量の定義と採用理由を示す。
+ここで「必要性」とは、物理的に入れる理由があるかどうかを示すものであり、最終的な有効性を保証するものではない。
+各特徴量群の本当の必要性は、特徴量群を 1 つずつ落として再学習する ablation test（要素削除試験）で確認する必要がある。
+特に、波形エンコーダを導入した後は、波形から再構成できる量と手作り特徴量の間に重複が生じる可能性がある。
+
+{\small
+\setlength{\tabcolsep}{3pt}
+\begin{longtable}{p{25mm}p{48mm}p{50mm}p{35mm}}
+  \caption{ノード特徴量の定義、採用理由、および必要性の位置づけ。}
+  \label{tab:node-feature-definitions}\\
+  \toprule
+  特徴量 & 定義 & 採用理由 & 必要性の位置づけ \\
+  \midrule
+  \endfirsthead
+  \toprule
+  特徴量 & 定義 & 採用理由 & 必要性の位置づけ \\
+  \midrule
+  \endhead
+  \bottomrule
+  \endfoot
+  $x,y,z$ &
+  TALE 局所座標系での検出器位置。単位は km。 &
+  TALE-SD は検出器配置が不均一である。絶対位置は、どの検出器が空間的にどの役割を持つかを表す。 &
+  重要度が高い。検出器 ID 埋め込みを使わないため、配置情報の主要な入力である。 \\
+  $d_{\mathrm{nearest}}$ &
+  同じ事象に含まれる異なる検出器のうち、最近接検出器までの水平距離。 &
+  局所的な検出器間隔を表す。疎な領域と密な領域では、同じ信号パターンでも再構成の制約が異なる。 &
+  有用候補。グラフ構造にも近接情報は含まれるため、冗長性は ablation test で確認する。 \\
+  $\overline{d}_{3}$ &
+  近い方から最大 3 台までの検出器距離の平均。 &
+  最近接距離だけでは局所配置の広がりを表しにくい。複数近傍の平均により局所的なサンプリング密度を補う。 &
+  有用候補。$d_{\mathrm{nearest}}$ や $\rho_{\mathrm{local}}$ との重複を検証する。 \\
+  $N_{\mathrm{neigh}}$ &
+  半径 $1.5\,\mathrm{km}$ 以内にある同一事象内の近傍検出器数。 &
+  エッジ候補の多さと局所的な観測制約の強さを表す。 &
+  有用候補。低 multiplicity 事象で効く可能性がある。 \\
+  $\rho_{\mathrm{local}}$ &
+  $N_{\mathrm{neigh}}/(\pi\times1.5^2)$ で定義する局所検出器密度。 &
+  近傍数を面積で規格化した量であり、検出器配置の粗密を連続量として与える。 &
+  有用候補。$N_{\mathrm{neigh}}$ と強く相関するため削除候補でもある。 \\
+  $\Delta x,\Delta y,\Delta z$ &
+  信号量 $\rho$ で重み付けした事象内重心から見たノード位置。 &
+  シャワー軸やコア位置は、事象内の相対的な信号配置に強く依存する。絶対座標だけではこの情報が直接表れない。 &
+  重要度が高い。再構成に直接関係するが、重心の定義依存性は検証が必要である。 \\
+  $r$ &
+  事象内重心からの水平・鉛直を含む距離 $|\Delta \mathbf{x}|$。 &
+  信号の横方向分布と到達時刻の広がりを表す簡潔な量である。 &
+  有用候補。$\Delta x,\Delta y,\Delta z$ から計算できるため、冗長性がある。 \\
+  $t_{\mathrm{first}}$ &
+  その accepted pulse の到達時刻から、事象内で最も早い accepted pulse の時刻を引いた値。 &
+  シャワー面の到達順序を表す。方向再構成に直接関係する。 &
+  重要度が高い。角度精度に効く主要な時刻入力である。 \\
+  $t_{\mathrm{trig}}$ &
+  イベント基準時刻から見た検出器トリガー時刻。 &
+  accepted pulse 時刻とは別に、検出器単位のトリガー時刻を与える。波形切り出しや時刻基準のずれに関する情報を持つ。 &
+  有用候補。$t_{\mathrm{first}}$ と重複する可能性がある。 \\
+  $\log_{10}\rho_{\mathrm{first}}$,
+  $\sqrt{\rho_{\mathrm{first}}}$ &
+  accepted pulse の信号密度 $\rho$ の対数と平方根。 &
+  信号量はエネルギーとコア距離に関係する。対数と平方根を併用することで、広いダイナミックレンジを扱いやすくする。 &
+  重要度が高い。ただし、対数と平方根の両方が必要かは検証が必要である。 \\
+  $\log_{10}\rho_{\mathrm{total}}$,
+  $\sqrt{\rho_{\mathrm{total}}}$ &
+  列名は total signal を示すが、現行実装では accepted pulse の $\rho$ と同じ値が入る。 &
+  もともとは検出器内の総信号量を入れる意図の列である。現行コードでは \code{first\_rho} と重複している。 &
+  修正または削除候補。現状では冗長であり、性能に寄与しても列名の意味とは一致しない。 \\
+  $\log_{10}\rho_{\max}$ &
+  同じ検出器に残った accepted pulse のうち、最大信号密度の対数。 &
+  複数パルスがある検出器で、その検出器が持つ最大信号の大きさを表す。 &
+  有用候補。波形入力が十分なら重複する可能性がある。 \\
+  $N_{\mathrm{pulse}}$ &
+  同じ検出器に残った accepted pulse の数。 &
+  パルスの分裂、後続パルス、ノイズ残りの程度を表す。核種分類では波形形状とともに効く可能性がある。 &
+  有用候補。波形エンコーダとの重複を確認する。 \\
+  $\Delta t_{\mathrm{pulse}}$ &
+  同じ検出器内の最終 accepted pulse と先頭 accepted pulse の時刻差。 &
+  パルス列の時間的な広がりを表す。シャワーの厚みやノイズ残りに関係する可能性がある。 &
+  有用候補。質量分類で特に検証すべきである。 \\
+  $N_{\mathrm{segment}}$,
+  $T_{\mathrm{wf}}$ &
+  波形セグメント数と、波形長を $\mu\mathrm{s}$ 単位に変換した量。 &
+  波形取得条件の違いをモデルに知らせる。入力波形の欠落や長さの違いを補正する役割を持つ。 &
+  補助量。学習データでほぼ一定なら不要である。 \\
+  $\log_{10}\mathrm{FADC}_{\max}$ &
+  上下層 FADC 波形の最大カウント値の対数。 &
+  飽和に近い波形や大信号事象を示す。信号量の信頼性を判断する補助情報である。 &
+  補助量。飽和事象を除外している場合は重要度が下がる。 \\
+  $p_u,p_l$ &
+  上層、下層の pedestal 平均値。 &
+  波形の基線を表す。較正状態やノイズ環境の違いを示す。 &
+  補助量。波形が十分に較正されていれば削除候補である。 \\
+  $\sigma_u,\sigma_l$ &
+  上層、下層の pedestal 標準偏差。 &
+  電子ノイズや基線揺らぎの大きさを表す。信号の信頼性とノイズ残りに関係する。 &
+  有用候補。低信号事象や質量分類で効く可能性がある。 \\
+  pulse order &
+  同じ検出器内での accepted pulse の順序。先頭を 0 とする。 &
+  複数パルスがある場合、先頭パルスと後続パルスでは物理的意味が異なる可能性がある。 &
+  有用候補。時系列波形と重複するため検証が必要である。 \\
+  first pulse flag &
+  同じ検出器内の先頭 accepted pulse なら 1、それ以外なら 0。 &
+  先頭パルスを明示する二値特徴量である。到来時刻と後続パルスを区別しやすくする。 &
+  有用候補。pulse order との重複を検証する。 \\
+\end{longtable}
+}
+
+この表から分かるように、すべての特徴量が同じ意味で「必須」ではない。
+$x,y,z$、相対位置、時刻、信号量は、再構成に直接関係するため優先度が高い。
+一方、局所密度、pedestal、パルス数、波形長などは補助情報であり、特定の条件でのみ効く可能性がある。
+また、現行実装には \code{log10\_total\_rho} と \code{sqrt\_total\_rho} のように、列名と実際の中身が一致していない冗長列がある。
+このような列は、モデルの次の比較では、修正するか、削除して性能差を調べるべきである。
+
+特徴量の必要性は、少なくとも次の単位で比較するのが妥当である。
+\begin{itemize}
+  \item 絶対位置のみを落とす比較。検出器 ID を使わない設計で、配置情報がどれだけ必要かを調べる。
+  \item 局所密度特徴量を落とす比較。グラフ構造だけで局所配置を表せるかを調べる。
+  \item 手作りの波形要約量を落とす比較。CNN--GRU 波形エンコーダが同じ情報を学習できるかを調べる。
+  \item 冗長な信号量変換を落とす比較。$\log_{10}\rho$ と $\sqrt{\rho}$ の併用が本当に必要かを調べる。
+  \item パルス順序特徴量を落とす比較。accepted-gapped 波形だけでパルス列情報を表せるかを調べる。
+\end{itemize}
+
+\subsection{波形特徴量}
+
+各 accepted-pulse ノードには、長さ 128 bin の 4 チャネル波形を付ける。
 \[
 \mathbf{W}_v =
 \left(
 W^{u}_{\mathrm{raw}},
 W^{l}_{\mathrm{raw}},
-W^{u}_{\mathrm{compact}},
-W^{l}_{\mathrm{compact}}
+W^{u}_{\mathrm{accepted}},
+W^{l}_{\mathrm{accepted}}
 \right)\in\R^{4\times128}.
 \]
-The raw channels are upper/lower calibrated VEM windows centered on the accepted pulse.
-The compact channels concatenate only the accepted-pulse intervals after the Ising/noise filtering and then truncate or zero-pad to 128 bins.
-This gives the model both the local pulse shape and the cleaned pulse sequence.
-The waveform values are calibrated to VEM-like units and clipped in graph construction; they are not standardized by the training scaler.
+$u$ は上層、$l$ は下層を表す。
+raw チャネルは、accepted pulse の立ち上がりを基準に切り出した較正済み波形窓である。
+基準 bin は、上層と下層で検出された立ち上がり bin のうち早い方、
+\[
+  b_{\mathrm{rise}}=\min(b^{u}_{\mathrm{rise}},b^{l}_{\mathrm{rise}})
+\]
+を指す。
+実装では、この bin の 32 bin 前から長さ 128 bin を切り出す。
+したがって、波形の範囲内に十分な pre-pulse 領域がある場合、$b_{\mathrm{rise}}$ は出力窓の配列添字 32 の bin に対応する。
+元の波形の先頭または末尾を越える部分は 0 で埋める。
+この raw チャネルは、各 accepted pulse ノードごとに作られる。
+この基準は、検出器間の絶対到達時刻をそろえるためではない。
+検出器間の時刻差は、$t_{\mathrm{first}}$ やエッジの $\Delta t$ として別に入力する。
+raw 波形窓では、各ノード内のパルス立ち上がり前後の形状を比較しやすくすることを目的として、立ち上がり位置を固定する。
 
-\subsection{Edges}
+accepted-gapped チャネルは、Ising 型ノイズフィルタ後に残った accepted pulse 区間だけを値として残し、それ以外の bin を 0 にした波形である。
+このチャネルでは、最も早い accepted pulse の立ち上がり bin を出力窓の先頭に置く。
+後続パルスは、元波形上での bin 間隔を保って配置する。
+したがって、パルスが存在しない区間は 0 で埋まり、パルス間の相対時刻差は bin 間隔として保存される。
+128 bin を超える後続部分は切り捨てる。
+この設計により、raw チャネルは各ノードの局所的なパルス形状と前後の基線を表し、accepted-gapped チャネルはノイズ除去後のパルス列とパルス間隔を表す。
+波形値はグラフ作成時に較正とクリップを行うが、学習時の標準化スケーラでは標準化しない。
+この波形定義は HDF5 属性 \code{waveform\_schema=rise\_aligned\_raw\_plus\_accepted\_gapped\_v1} として保存する。
+古い accepted-pulse compact 波形を含む HDF5 は、この定義と物理的に等価ではないため、学習時にエラーとして扱う。
 
-Edges are built only between different detector IDs.
-A pair is considered if the detector distance is at most $1.5\,\mathrm{km}$ and $|\Delta t|\le 8\,\mu\mathrm{s}$.
-Accepted undirected pairs are written as two directed edges.
-The edge feature vector has 13 columns:
+\subsection{エッジ特徴量}
+
+エッジは、異なる検出器 ID を持つノード間にだけ張る。
+検出器間距離が $1.5\,\mathrm{km}$ 以下であり、かつ時刻差が $|\Delta t|\le 8\,\mu\mathrm{s}$ の組を候補とする。
+採用した無向の組は、2 本の有向エッジとして保存する。
+エッジ特徴量は 13 列であり、次の量から成る。
 \[
 (\Delta x,\Delta y,\Delta z,d,\Delta t,|\Delta t|,\Delta t/d,
 \Delta\log_{10}\rho,
 w_{\mathrm{ising}},w_{\mathrm{raw}},t_{\mathrm{excess}},s_{\mathrm{space}},s_{\mathrm{causal}}).
 \]
-The time-difference channels are important for shower-front geometry.
-In the current model, edge columns 4--6, namely $\Delta t$, $|\Delta t|$, and $\Delta t/d$, are also passed through a dedicated time-edge encoder before ordinary message passing.
+シャワー面の幾何を決めるうえで、検出器間の時刻差は重要である。
+そのため、現行モデルでは $\Delta t$、$|\Delta t|$、$\Delta t/d$ を通常のエッジ特徴量として使うだけでなく、専用の時刻差エンコーダにも入力する。
 
-\subsection{Targets and labels}
+\subsection{教師ラベル}
 
-The reconstruction target is
+再構成の教師ラベルは
 \[
 \mathbf{y}_{\mathrm{reco}}=
-(\log_{10}E,\ x_c,y_c,z_c,\ n_x,n_y,n_z)\in\R^7,
+(\log_{10}E,\ x_c,y_c,z_c,\ n_x,n_y,n_z)\in\R^7
 \]
-where $E$ is in eV, the core is in km, and $\mathbf{n}$ is the shower direction vector.
-The mass label is derived from CORSIKA particle ID in \code{rusdmc}: proton is label 0 for particle ID 14, and iron is label 1 for particle ID 5626.
+である。
+$E$ は eV 単位のエネルギー、$(x_c,y_c,z_c)$ は km 単位のコア位置、$(n_x,n_y,n_z)$ はシャワー到来方向の単位ベクトルである。
 
-\section{Preprocessing and splitting}
+質量分類の教師ラベルは、\code{rusdmc} に記録された CORSIKA（COsmic Ray SImulations for KAscade）粒子番号から作る。
+陽子は粒子番号 14 であり、ラベル 0 とする。
+鉄は粒子番号 5626 であり、ラベル 1 とする。
 
-Node, edge, pulse, and target scalers are fitted only on the training split.
-The scaler is a standard score transform,
+\section{前処理とデータ分割}
+
+ノード特徴量、エッジ特徴量、パルス特徴量、再構成ターゲットには、学習データだけから求めた標準化を適用する。
+標準化は
 \[
-  x'=(x-\mu_{\mathrm{train}})/\sigma_{\mathrm{train}},
+  x'=(x-\mu_{\mathrm{train}})/\sigma_{\mathrm{train}}
 \]
-with a unit standard deviation substituted for numerically constant columns.
-The model therefore predicts standardized target coordinates; the physics losses and metrics inverse-transform the prediction and target back to physical units before computing energy, core, and angular residuals.
+で定義する。
+ここで、$\mu_{\mathrm{train}}$ と $\sigma_{\mathrm{train}}$ は学習データにおける平均と標準偏差である。
+標準偏差が数値的に 0 に近い列では、標準偏差を 1 として扱う。
 
-The default split is \code{source-stratified}: events are separated by source path while approximately preserving the physical parameter distribution.
-The default fractions are validation $10\%$ and test $20\%$.
-For training batches, the full list of training indices is shuffled at the start of each epoch before batches are formed.
-Validation and test order is not shuffled.
-This avoids HDF5/source ordering inside each batch while keeping validation and test deterministic.
+モデルは標準化後のターゲットを出力する。
+ただし、物理量に基づく損失関数と性能評価では、予測値と教師ラベルを物理単位に戻してから、エネルギー誤差、コア位置誤差、角度誤差を計算する。
+この処理により、学習の数値安定性と、物理的に解釈しやすい損失の両方を保つ。
 
-\section{Common network architecture}
+標準のデータ分割は \code{source-stratified} である。
+これは、同じソースパスに由来する事象が異なる分割に混ざりにくいようにしながら、物理パラメータの分布をできるだけ保つ分割である。
+標準設定では、検証データを $10\%$、テストデータを $20\%$ とする。
+学習時には、各エポックの開始時に学習インデックス全体をシャッフルしてからバッチを作る。
+検証データとテストデータの順序は固定する。
+この設計は、HDF5 内のエネルギー順、ソース順、粒子種順がバッチ内に残ることを防ぐためのものである。
 
-Both reconstruction and mass-only training use \code{PhysicsTaleSdGNN} by default.
-The server defaults are shown in Table~\ref{tab:common-defaults}.
+\section{共通のネットワーク構造}
+
+再構成と質量分類のみの学習は、どちらも標準で \code{PhysicsTaleSdGNN} を用いる。
+表~\ref{tab:common-defaults} に、サーバー学習で用いる主な設定を示す。
 
 \begin{table}[htbp]
   \centering
-  \caption{Common default network and training settings.}
+  \caption{共通の標準設定。}
   \label{tab:common-defaults}
   \begin{tabular}{lll}
     \toprule
-    Quantity & Default & Meaning \\
+    項目 & 標準値 & 意味 \\
     \midrule
-    Architecture & \code{physics} & PhysicsTaleSdGNN with separate energy/core/direction heads \\
-    Hidden dimension $H$ & 224 & Node-state and shared-event dimension \\
-    GNN layers $L_g$ & 6 & Number of gated edge-message layers \\
-    Readout heads $K$ & 4 & Attentive graph-pooling heads \\
-    Dropout & 0.05 & Used in MLP blocks \\
-    Waveform encoder & \code{cnn-gru} & Conv1D followed by bidirectional GRU pooling \\
-    Waveform embedding $D_w$ & 64 & Per-node waveform embedding dimension \\
-    Detector-ID embedding & 0 & Disabled in the default model \\
-    Batch size & 256 & Graphs per optimizer step \\
-    Optimizer & AdamW & Learning rate $3\times10^{-4}$, weight decay $10^{-4}$ \\
-    LR schedule & cosine & CosineAnnealingLR over the requested epochs \\
+    構造 & \code{physics} & エネルギー、コア、方向を別の出力層で予測する GNN \\
+    隠れ次元 $H$ & 224 & ノード状態と事象ベクトルの基本次元 \\
+    GNN 層数 $L_g$ & 6 & ゲート付きメッセージ伝播層の数 \\
+    読み出しヘッド数 $K$ & 4 & 注意機構付きグラフプーリングの数 \\
+    ドロップアウト率 & 0.05 & MLP 内で使う正則化の強さ \\
+    波形エンコーダ & \code{cnn-gru} & 1 次元 CNN と双方向 GRU による波形要約 \\
+    波形埋め込み次元 $D_w$ & 64 & 1 ノードあたりの波形表現の次元 \\
+    検出器 ID 埋め込み & 0 & 標準設定では使用しない \\
+    バッチサイズ & 256 & 1 回の更新で使うグラフ数 \\
+    最適化手法 & AdamW & Adam with Decoupled Weight Decay。学習率 $3\times10^{-4}$、重み減衰 $10^{-4}$ \\
+    学習率スケジュール & cosine & エポック全体で余弦関数的に学習率を下げる \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\subsection{Per-node encoders}
+\subsection{ノードごとのエンコーダ}
 
-The pulse-scalar input has dimension 6 after removing the node-index routing column.
-It is encoded by
+パルス特徴量は、ノード番号の列を除いた 6 次元の入力である。
+この入力を
 \[
-  \mathrm{MLP}_{\mathrm{pulse}}:\R^6\rightarrow\R^{224}\rightarrow\R^{224},
+  \mathrm{MLP}_{\mathrm{pulse}}:\R^6\rightarrow\R^{224}\rightarrow\R^{224}
 \]
-with SiLU activation and dropout.
-Encoded pulses are aggregated to their destination graph node by both mean and max pooling, producing $2H=448$ pulse features per node.
+で符号化する。
+活性化関数には Sigmoid Linear Unit（SiLU）を用い、過学習を抑えるためにドロップアウトを加える。
+同じノードに対応するパルス表現は、平均プーリングと最大プーリングで集約する。
+その結果、各ノードにつき $2H=448$ 次元のパルス表現が得られる。
 
-The waveform encoder first applies
+波形エンコーダは、まず次の 1 次元畳み込みを適用する。
 \[
 \mathrm{Conv1D}(4\rightarrow32,k=5)\rightarrow\mathrm{SiLU}
 \rightarrow\mathrm{LayerNorm}
 \rightarrow\mathrm{Conv1D}(32\rightarrow64,k=5)\rightarrow\mathrm{SiLU}.
 \]
-For the \code{cnn-gru} mode, a bidirectional GRU with hidden size 32 processes the encoded time sequence.
-The final recurrent state, the mean of the CNN sequence, and the max of the CNN sequence are concatenated and projected to a 64-dimensional waveform embedding.
+標準の \code{cnn-gru} モードでは、その後に隠れ次元 32 の双方向 GRU を適用する。
+GRU の最終状態、CNN 系列の平均、CNN 系列の最大値を連結し、64 次元の波形埋め込みに射影する。
 
-The node encoder receives
+ノードエンコーダは、ノード特徴量、波形埋め込み、パルス表現を連結した入力を受け取る。
+標準設定での入力次元は
 \[
-  29\ \oplus\ 448\ \oplus\ 64 = 541
+  29\ \oplus\ 64\ \oplus\ 448 = 541
 \]
-features per node in the current default.
-It applies
+である。
+この 541 次元の入力を
 \[
   \R^{541}\rightarrow\R^{224}\rightarrow\R^{224}
 \]
-with SiLU activations and LayerNorm after each linear block.
+の MLP で 224 次元のノード状態に変換する。
+各線形層の後には SiLU と LayerNorm を置く。
 
-\subsection{Time-edge encoder and message passing}
+\subsection{時刻差エンコーダとメッセージ伝播}
 
-Before message passing, the time-edge encoder applies an MLP to the three timing edge features
-$(\Delta t,|\Delta t|,\Delta t/d)$ and averages the resulting messages over incoming edges.
-This timing aggregate is added to the node state with LayerNorm.
+メッセージ伝播の前に、時刻差エンコーダがエッジの時刻差特徴量
+$(\Delta t,|\Delta t|,\Delta t/d)$
+を MLP で処理する。
+その出力を、到着先ノードごとに平均してノード状態に加え、LayerNorm で正規化する。
+この処理は、シャワー面の到達時刻差を通常のエッジ特徴量より明示的に使わせるためのものである。
 
-Each of the six GNN layers is a gated edge-message layer.
-For a directed edge $i\rightarrow j$ with edge feature $a_{ij}$, the message input is
+6 層の GNN は、ゲート付きエッジメッセージ伝播層で構成される。
+有向エッジ $i\rightarrow j$ のエッジ特徴量を $a_{ij}$ とすると、メッセージの入力は
 \[
-  [h_i,h_j,a_{ij}]\in\R^{2H+13}=\R^{461}.
+  [h_i,h_j,a_{ij}]\in\R^{2H+13}=\R^{461}
 \]
-The message MLP maps this to $\R^{224}$.
-A separate gate MLP outputs a scalar sigmoid gate, so the effective message is
+である。
+メッセージ MLP はこの入力を 224 次元に写す。
+別のゲート MLP はスカラーのシグモイド値を出力する。
+したがって、有効なメッセージは
 \[
   m_{ij}=\mathrm{MLP}_m([h_i,h_j,a_{ij}])\,
-  \sigma(\mathrm{MLP}_g([h_i,h_j,a_{ij}])).
+  \sigma(\mathrm{MLP}_g([h_i,h_j,a_{ij}]))
 \]
-For each destination node, both mean and max incoming message aggregates are formed.
-The node update uses $[h_j,\overline{m}_j,m^{\max}_j]\in\R^{3H}$, followed by a residual LayerNorm block and a feed-forward residual block.
+である。
 
-\subsection{Graph readout}
+各ノードでは、入力してくるメッセージの平均と最大値を計算する。
+ノード更新では、現在のノード状態、平均メッセージ、最大メッセージを連結した
+$[h_j,\overline{m}_j,m^{\max}_j]\in\R^{3H}$
+を用いる。
+更新後には、残差接続、LayerNorm、フィードフォワードネットワーク（feed-forward network: FFN）を適用する。
+残差接続は、入力を出力に足し戻す処理であり、深いネットワークの学習を安定させる。
 
-After message passing, graph-level pooling concatenates mean pooling, max pooling, and four attentive readout heads:
+\subsection{グラフ読み出し}
+
+メッセージ伝播後のノード状態を、グラフ全体の 1 つの事象ベクトルに変換する。
+この処理をグラフ読み出しと呼ぶ。
+本モデルでは、全ノードの平均、全ノードの最大値、4 個の注意機構付き読み出しヘッドを連結する。
+したがって、グラフ読み出しの次元は
 \[
-  g\in\R^{H(2+K)}=\R^{1344}.
+  H(2+K)=224\times6=1344
 \]
-For reconstruction, this is passed through a shared MLP
+である。
+再構成では、この 1344 次元ベクトルを共有 MLP
 \[
-  \R^{1344}\rightarrow\R^{448}\rightarrow\R^{224}.
+  \R^{1344}\rightarrow\R^{448}\rightarrow\R^{224}
 \]
-The resulting event vector is used by the reconstruction, quality, and predicted-error heads.
+に通す。
+得られた 224 次元の事象表現を、再構成出力、品質出力、予想誤差出力に入力する。
 
 \begin{figure}[p]
   \centering
   \resizebox{\linewidth}{!}{\input{fig/model_architecture.tikz}}
-  \caption{Common model structure. The detector layout is represented by physical features and graph edges, not by placing detectors on a regular image grid.}
+  \caption{共通のモデル構造。検出器配置は規則格子画像としてではなく、物理特徴量とグラフエッジとして入力する。}
   \label{fig:model_architecture}
 \end{figure}
 
 \begin{figure}[p]
   \centering
   \resizebox{0.92\linewidth}{!}{\input{fig/concrete_training_model.tikz}}
-  \caption{Concrete default architecture for the current server scripts. Reconstruction and mass-only training share the same encoder and graph network; they differ in the active output heads and loss.}
+  \caption{現行のサーバー学習スクリプトで用いる具体的な構造。再構成と質量分類のみの学習は、エンコーダと GNN を共有し、有効にする出力層と損失関数を切り替える。}
   \label{fig:concrete_training_model}
 \end{figure}
 
 \clearpage
-\section{Reconstruction model}
+\section{再構成モデル}
 
-The reconstruction script trains energy, core, direction, event quality, and event-wise predicted errors.
-The default command is
+再構成用スクリプトは、エネルギー、コア位置、到来方向、事象品質、および事象ごとの予想誤差を学習する。
+標準コマンドは
 \[
-\code{scripts/submit\_server\_waveform\_full\_training.sh}.
+\code{scripts/submit\_server\_waveform\_full\_training.sh}
 \]
-The active settings are \code{TRAINING\_TASK=reconstruction}, \code{LOSS\_MODE=physics-nll}, \code{QUALITY\_PREDICTION=1}, and \code{ERROR\_PREDICTION=1}.
-The default number of epochs is 96.
+である。
+標準設定では、\code{TRAINING\_TASK=reconstruction}、\code{LOSS\_MODE=physics-nll}、\code{QUALITY\_PREDICTION=1}、\code{ERROR\_PREDICTION=1} とする。
+標準の学習エポック数は 96 である。
 
-\subsection{Outputs}
+\subsection{出力}
 
-The reconstruction output has seven standardized target coordinates:
+再構成出力は、標準化された 7 つのターゲット座標である。
 \[
   \hat{\mathbf{y}} =
   (\widehat{\log_{10}E},\hat{x}_c,\hat{y}_c,\hat{z}_c,\hat{n}_x,\hat{n}_y,\hat{n}_z).
 \]
-The energy head is a single linear layer from the shared event vector.
-The core and direction heads are two-layer MLPs from the same shared vector.
-The direction vector is treated as a three-component vector; angular losses and metrics normalize it internally when computing angular separation.
+エネルギー出力層は、共有事象表現から 1 次元を出力する線形層である。
+コア出力層と方向出力層は、同じ共有事象表現を入力とする 2 層の MLP である。
+方向は 3 成分のベクトルとして出力する。
+角度誤差を計算するときは、予測ベクトルと真のベクトルを内部で正規化してから角距離を求める。
 
-The quality head outputs one logit.
-After sigmoid, it is interpreted as a scalar event quality score between 0 and 1.
-The predicted-error head outputs three raw values.
-They are converted to positive physical sigmas by
+品質出力層は 1 つのロジットを出力する。
+ロジットとは、シグモイド関数に入れる前の実数値である。
+シグモイド関数を適用した値を、0 から 1 までの事象品質スコアとして解釈する。
+
+予想誤差出力層は 3 つの raw 値を出力する。
+raw 値とは、正値制約をかける前の中間出力である。
+これらを softplus 関数で正の値に変換し、標準設定では
 \[
   (\sigma_E,\sigma_\theta,\sigma_c)
   =\mathrm{softplus}(r)\odot(0.10,\ 0.8^\circ,\ 0.04\,\mathrm{km})
 \]
-for the default reconstruction script.
-These correspond to relative energy uncertainty, angular uncertainty in degrees, and core-position uncertainty in km.
+とする。
+$\sigma_E$ は相対エネルギー誤差、$\sigma_\theta$ は角度誤差、$\sigma_c$ はコア位置誤差の予想値である。
 
-\subsection{Physics reconstruction loss}
+\subsection{物理再構成損失}
 
-The physics loss is computed in physical units after inverse-transforming the standardized target coordinates.
-With default weights
+物理再構成損失は、標準化された予測値と教師ラベルを物理単位に戻してから計算する。
+標準の重みは
 \[
-  w_E=1.5,\quad w_c=1.2,\quad w_\theta=1.8,
+  w_E=1.5,\quad w_c=1.2,\quad w_\theta=1.8
 \]
-it is
+であり、損失は
 \[
   L_{\mathrm{phys}} =
-  w_E L_E + w_c L_c + w_\theta L_\theta.
+  w_E L_E + w_c L_c + w_\theta L_\theta
 \]
-The energy term is SmoothL1 on the difference in $\log_{10}E$ with $\beta=0.05$:
+である。
+
+エネルギー項は、$\log_{10}E$ の差に対する SmoothL1 損失である。
+SmoothL1 損失は、誤差が小さい領域では二乗誤差に近く、誤差が大きい領域では絶対値誤差に近い。
+外れ値の影響を抑えながら、中心付近の精度を上げるために用いる。
 \[
   L_E=\mathrm{SmoothL1}(\widehat{\log_{10}E}-\log_{10}E;\beta=0.05).
 \]
-The core term uses the horizontal core error only:
+
+コア項は、水平方向のコア誤差を $0.10\,\mathrm{km}$ で規格化した二乗誤差である。
 \[
   L_c=\left\langle
   \frac{(\hat{x}_c-x_c)^2+(\hat{y}_c-y_c)^2}{(0.10\,\mathrm{km})^2}
   \right\rangle.
 \]
-The direction term computes the angular separation $\alpha$ between the predicted and true direction vectors and applies SmoothL1 to $\alpha/0.75^\circ$:
+
+方向項は、予測方向と真の方向の角距離 $\alpha$ を $0.75^\circ$ で規格化し、SmoothL1 損失を適用する。
 \[
   L_\theta=\mathrm{SmoothL1}\left(\frac{\alpha}{0.75^\circ};\beta=1\right).
 \]
+この規格化により、角度誤差が損失全体の中で過小評価されることを防ぐ。
 
-\subsection{Gaussian NLL loss for event-wise errors}
+\subsection{予想誤差に対する負の対数尤度}
 
-The current reconstruction default adds a Gaussian negative-log-likelihood term to the physics loss:
+現行の再構成設定では、物理再構成損失にガウス分布の負の対数尤度を加える。
 \[
   L_{\mathrm{reco}}=L_{\mathrm{phys}}+\lambda_{\mathrm{NLL}}L_{\mathrm{NLL}},
   \qquad \lambda_{\mathrm{NLL}}=0.2.
 \]
-The purpose is not to make the loss value approach zero.
-Instead, the predicted sigmas are trained because the NLL penalizes both underestimating and overestimating uncertainty:
+この項は、損失を 0 に近づけることだけを目的としたものではない。
+予測誤差 $\sigma$ を小さくしすぎると $r^2/\sigma^2$ が大きくなり、逆に大きくしすぎると $\log\sigma$ が大きくなる。
+そのため、固定された残差 $r$ に対して
 \[
-  \frac{1}{2}\frac{r^2}{\sigma^2}+\log\sigma.
+  \frac{1}{2}\frac{r^2}{\sigma^2}+\log\sigma
 \]
-For a fixed residual $r$, this term is minimized at $\sigma^2=r^2$ before considering model capacity and conditioning on input features.
-Thus the model learns an event-dependent estimate of the expected residual scale.
+を最小化すると、概念的には $\sigma^2\simeq r^2$ が好まれる。
+実際の学習では、モデルは入力特徴量から事象ごとの誤差スケールを予測するように学習する。
 
-The implemented residuals are
+実装で用いる残差は
 \[
   r_E = 10^{\widehat{\log_{10}E}-\log_{10}E}-1,\qquad
   r_\theta = \alpha\ [\mathrm{deg}],\qquad
-  r_c^2=(\hat{x}_c-x_c)^2+(\hat{y}_c-y_c)^2.
+  r_c^2=(\hat{x}_c-x_c)^2+(\hat{y}_c-y_c)^2
 \]
-The NLL is
+である。
+負の対数尤度は
 \[
 \begin{aligned}
 L_{\mathrm{NLL}} =
@@ -329,15 +551,18 @@ L_{\mathrm{NLL}} =
 w_E\langle \frac{1}{2}(r_E/\sigma_E)^2+\log\sigma_E\rangle
 +w_c\langle \frac{1}{2}r_c^2/\sigma_c^2+2\log\sigma_c\rangle
 +w_\theta\langle \frac{1}{2}(r_\theta/\sigma_\theta)^2+\log\sigma_\theta\rangle
-}{w_E+w_c+w_\theta}.
+}{w_E+w_c+w_\theta}
 \end{aligned}
 \]
-The sigma floors are $0.01$ for relative energy, $0.05^\circ$ for angle, and $0.005\,\mathrm{km}$ for core.
-These floors prevent the likelihood from driving $\sigma$ to zero for nearly perfect predictions.
+である。
+下限値として、相対エネルギーには 0.01、角度には $0.05^\circ$、コア位置には $0.005\,\mathrm{km}$ を加える。
+この下限値は、ほぼ完全に再構成できた事象で $\sigma$ が 0 に潰れることを防ぐための数値安定化である。
 
-\subsection{Quality loss and optional error-calibration loss}
+\subsection{品質損失と誤差較正損失}
 
-The quality target is derived from the current prediction residual, detached from the computation graph:
+品質教師値は、現在の予測から計算した残差を用いて作る。
+ただし、この教師値は計算グラフから切り離す。
+したがって、品質出力は再構成出力を直接改善するためではなく、「この事象の再構成がどの程度信用できるか」を学習するために用いる。
 \[
   q_{\mathrm{target}}=
   \exp\left[-\frac{1}{3}\left(
@@ -346,101 +571,118 @@ The quality target is derived from the current prediction residual, detached fro
   +\frac{\alpha}{0.8^\circ}
   \right)\right].
 \]
-The quality head is trained with binary cross entropy with logits:
+品質出力層は、ロジット付き二値交差エントロピーで学習する。
 \[
   L_q=\mathrm{BCEWithLogits}(q_{\mathrm{logit}},q_{\mathrm{target}}),
   \qquad w_q=0.2.
 \]
-The quality score is intended for event selection and for plotting precision as a function of retained fraction.
+品質スコアは、解析に使う事象を選ぶための 1 つの総合指標として用いる。
+例えば、品質スコア上位 $95\%$、$90\%$、$80\%$ を残した場合の精度と残存率を評価する。
 
-The code also contains an optional error-calibration loss:
+実装には、予想誤差を直接較正する補助損失もある。
 \[
   L_{\mathrm{err}}=
   \mathrm{SmoothL1}\left(
   \log(1+\hat{s}),\log(1+s_{\mathrm{actual}})
-  \right),
+  \right).
 \]
-where $s_{\mathrm{actual}}$ is the actual normalized energy, angle, and core error.
-This loss directly calibrates the scale of the predicted error head.
-In the current reconstruction server script, \code{ERROR\_WEIGHT=0.0}; therefore the predicted-error head is trained by the NLL, not by this auxiliary calibration loss.
+ここで、$s_{\mathrm{actual}}$ は実際のエネルギー誤差、角度誤差、コア誤差を規格化した量である。
+この補助損失は、予想誤差の絶対スケールを実際の誤差に近づける目的を持つ。
+ただし、現行の再構成スクリプトでは \code{ERROR\_WEIGHT=0.0} である。
+したがって、現行設定で予想誤差出力層を主に学習させる項は、上で述べた負の対数尤度である。
 
-The default reconstruction total loss is therefore
+標準設定での再構成の全損失は
 \[
   L_{\mathrm{total}}=
   L_{\mathrm{phys}}
   +0.2\,L_{\mathrm{NLL}}
-  +0.2\,L_q.
+  +0.2\,L_q
 \]
+である。
 
-\section{Mass-only model}
+\section{質量分類のみのモデル}
 
-The mass-only script is
+質量分類のみの学習には
 \[
-\code{scripts/submit\_server\_mass\_only\_training.sh}.
+\code{scripts/submit\_server\_mass\_only\_training.sh}
 \]
-It calls the same server training wrapper but sets \code{TRAINING\_TASK=mass}, \code{MASS\_CLASSIFICATION=1}, \code{QUALITY\_PREDICTION=0}, and \code{ERROR\_PREDICTION=0}.
-The default number of epochs is 48.
-The reconstruction heads are still present in the model module, but their loss is not used in mass-only training.
+を用いる。
+このスクリプトは、同じ学習ラッパーを呼び出し、\code{TRAINING\_TASK=mass}、\code{MASS\_CLASSIFICATION=1}、\code{QUALITY\_PREDICTION=0}、\code{ERROR\_PREDICTION=0} を設定する。
+標準の学習エポック数は 48 である。
+モデル定義上は再構成出力層も存在するが、質量分類のみの学習では再構成損失を使わない。
 
-\subsection{Mass head}
+\subsection{質量分類ヘッド}
 
-The active mass head uses the enhanced classification architecture.
-Its input is not only the final shared reconstruction vector.
-It concatenates:
+現行の質量分類では、拡張分類構造（enhanced classification architecture）を用いる。
+これは、最終的な共有事象表現だけでなく、初期ノード表現や波形の直接要約も分類に使う構造である。
+入力は次の 4 種類のベクトルを連結したものである。
+
 \begin{itemize}
-  \item final graph readout, dimension $1344$;
-  \item initial node-encoder mean/max pooling, dimension $2H=448$;
-  \item graph context $(\log(1+N_v),\log(1+N_e),N_e/N_v)$, dimension 3;
-  \item direct waveform readout: waveform-embedding mean/max plus waveform-shape-summary mean/max, dimension $2D_w+2\times20=168$.
+  \item 最終グラフ読み出し。次元は 1344 である。
+  \item ノードエンコーダ直後の平均プーリングと最大プーリング。次元は $2H=448$ である。
+  \item グラフの規模を表す文脈量 $(\log(1+N_v),\log(1+N_e),N_e/N_v)$。次元は 3 である。
+  \item 波形の直接読み出し。波形埋め込みの平均と最大値、および波形形状要約の平均と最大値を連結する。次元は $2D_w+2\times20=168$ である。
 \end{itemize}
-The resulting input dimension is
+
+したがって、分類ヘッドの入力次元は
 \[
-  1344+448+3+168=1963.
+  1344+448+3+168=1963
 \]
-The enhanced classifier is
+である。
+分類ヘッドは
 \[
 \mathrm{LayerNorm}(1963)
 \rightarrow1963{\times}448
 \rightarrow224
 \rightarrow\mathrm{LayerNorm}
 \rightarrow224
-\rightarrow1,
+\rightarrow1
 \]
-with SiLU activations and dropout between the linear layers.
-The output is one logit $z$.
-The probability plotted and thresholded as iron is
+である。
+各中間層には SiLU とドロップアウトを用いる。
+出力は 1 つのロジット $z$ である。
+シグモイド関数を適用した
 \[
-  p(\mathrm{Fe})=\sigma(z).
+  p(\mathrm{Fe})=\sigma(z)
 \]
-The fixed physical label convention is proton $=0$ and iron $=1$.
+を、鉄である確率として扱う。
+ラベルの定義は、陽子が 0、鉄が 1 である。
 
-\subsection{Mass loss}
+\subsection{質量分類損失}
 
-The current mass-only default uses binary cross entropy with logits:
+標準の質量分類損失は、ロジット付き二値交差エントロピーである。
 \[
   L_{\mathrm{BCE}}=
   -y\log\sigma(z)-(1-y)\log(1-\sigma(z)).
 \]
-The default positive-class weighting is disabled, \code{MASS\_POS\_WEIGHT\_MODE=none}.
-In addition, a ranking loss is enabled with weight 0.5 and margin 1.0.
-For iron logits $z^+$ and proton logits $z^-$ in the same batch,
+現行設定では、正例である鉄に対する追加のクラス重みは使わない。
+すなわち、\code{MASS\_POS\_WEIGHT\_MODE=none} である。
+
+さらに、同じバッチに陽子と鉄が含まれる場合にはランキング損失を加える。
+鉄事象のロジットを $z^+$、陽子事象のロジットを $z^-$ とすると、
 \[
   L_{\mathrm{rank}}=
   \left\langle
   \mathrm{softplus}\left(1.0-(z^+-z^-)\right)
-  \right\rangle.
+  \right\rangle
 \]
-The total mass-only loss is
+である。
+この項は、鉄のロジットが陽子のロジットより大きくなるように促す。
+バッチ内に片方の粒子種しか含まれない場合、このランキング項はそのバッチでは計算しない。
+
+標準設定での質量分類の全損失は
 \[
-  L_{\mathrm{mass}} = L_{\mathrm{BCE}} + 0.5\,L_{\mathrm{rank}}.
+  L_{\mathrm{mass}} = L_{\mathrm{BCE}} + 0.5\,L_{\mathrm{rank}}
 \]
-If a batch contains only one class, the ranking term is skipped for that batch.
-The intended decision threshold during training diagnostics is $p(\mathrm{Fe})=0.5$.
-The code also computes a tuned threshold from validation data for reporting, but the model itself is trained so that the natural boundary remains at the logit zero point.
+である。
+学習中の自然な分類境界は $p(\mathrm{Fe})=0.5$ である。
+診断では、検証データを用いて分類しきい値を後から調整することもできる。
+しかし、モデル自体は、ロジット 0 が陽子と鉄の境界になるように学習させる。
 
-\section{Reproducibility checklist}
+\section{再現に必要な設定}
 
-To reproduce the current reconstruction run, use the graph shards above and the reconstruction script defaults:
+現行の再構成学習を再現するには、前述の HDF5 グラフ片を用い、再構成スクリプトの標準設定を使う。
+主な設定は次の通りである。
 \[
 \begin{array}{ll}
 \code{MODEL\_ARCHITECTURE=physics}, & \code{HIDDEN\_DIM=224},\\
@@ -449,7 +691,9 @@ To reproduce the current reconstruction run, use the graph shards above and the 
 \code{BATCH\_SIZE=256}, & \code{SPLIT\_MODE=source-stratified}.
 \end{array}
 \]
-To reproduce mass-only training, use the mass script defaults:
+
+質量分類のみの学習を再現するには、質量分類スクリプトの標準設定を使う。
+主な設定は次の通りである。
 \[
 \begin{array}{ll}
 \code{TRAINING\_TASK=mass}, & \code{MASS\_CLASSIFICATION=1},\\
@@ -458,7 +702,8 @@ To reproduce mass-only training, use the mass script defaults:
 \end{array}
 \]
 
-The checkpoint stores the model configuration, target and feature scalers, split indices, training history, metrics, and diagnostic paths.
-The diagnostic directory also stores the prediction cache, so plots can be regenerated without rereading DST files.
+チェックポイントには、モデル設定、特徴量スケーラ、ターゲットスケーラ、データ分割のインデックス、学習履歴、評価指標、診断図の出力先を保存する。
+また、診断ディレクトリには予測キャッシュを保存する。
+そのため、テストデータの図を作り直すときに DST を再度読む必要はない。
 
 \end{document}

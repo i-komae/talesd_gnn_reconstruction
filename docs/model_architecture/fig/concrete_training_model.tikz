@@ -11,92 +11,92 @@
 ]
 
 \node[input, text width=58mm] (graph) at (0,0) {
-  \textbf{Input graph}\\
-  accepted pulse nodes\\
-  $N_v$ nodes, $N_e$ directed edges\\
-  detector-ID embedding: $0$
+  \textbf{入力グラフ}\\
+  accepted pulse ノード\\
+  $N_v$ ノード、$N_e$ 有向エッジ\\
+  検出器 ID 埋め込み: $0$
 };
 
 \node[input, text width=34mm, below left=12mm and 28mm of graph] (x) {
-  \textbf{Node scalars}\\
+  \textbf{ノード特徴量}\\
   $\mathbf{X}:N_v\times29$\\
-  geometry, timing\\
-  signal, calibration
+  幾何、時刻\\
+  信号、較正
 };
 \node[input, text width=34mm, below=12mm of graph] (w) {
-  \textbf{Pulse traces}\\
+  \textbf{パルス波形}\\
   $\mathbf{W}:N_v\times4\times128$\\
-  upper/lower raw\\
-  upper/lower compact
+  上下層 raw\\
+  上下層 accepted-gapped
 };
 \node[input, text width=34mm, below right=12mm and 28mm of graph] (p) {
-  \textbf{Pulse scalars}\\
+  \textbf{パルス特徴量}\\
   $\mathbf{P}:N_v\times6$\\
-  time, charge\\
-  order, first flag
+  時刻、電荷\\
+  順序、先頭フラグ
 };
 
 \node[enc, text width=34mm, below=10mm of w] (wenc) {
-  \textbf{1D CNN--GRU}\\
+  \textbf{1 次元 CNN--GRU}\\
   Conv $4\!\to\!32\!\to\!64$\\
-  BiGRU pooling\\
+  双方向 GRU プーリング\\
   $N_v\times64$
 };
 \node[enc, text width=34mm, below=10mm of p] (penc) {
-  \textbf{Pulse MLP}\\
+  \textbf{パルス MLP}\\
   $6\!\to\!224\!\to\!224$\\
-  mean $\oplus$ max\\
+  平均 $\oplus$ 最大\\
   $N_v\times448$
 };
 
 \node[enc, text width=52mm, below=18mm of wenc] (concat) {
-  \textbf{Per-node concatenation}\\
+  \textbf{ノードごとの連結}\\
   $29\oplus64\oplus448$\\
   $N_v\times541$
 };
 \node[enc, text width=52mm, below=10mm of concat] (nenc) {
-  \textbf{Node encoder}\\
+  \textbf{ノードエンコーダ}\\
   MLP $541\!\to\!224\!\to\!224$\\
   $\mathbf{h}_v:N_v\times224$
 };
 
 \node[input, text width=32mm, right=8mm of nenc] (edge) {
-  \textbf{Edge scalars}\\
+  \textbf{エッジ特徴量}\\
   $\mathbf{A}:N_e\times13$\\
-  geometry, time\\
-  charge, Ising
+  幾何、時刻\\
+  電荷、Ising
 };
 
 \node[gnn, text width=58mm, below=10mm of nenc] (mp) {
-  \textbf{Gated GNN layers}\\
-  $6$ message-passing layers\\
-  edge input $2H+13=461$\\
-  hidden dimension $H=224$
+  \textbf{ゲート付き GNN 層}\\
+  $6$ 層のメッセージ伝播\\
+  エッジ入力 $2H+13=461$\\
+  隠れ次元 $H=224$
 };
 
 \node[readout, text width=58mm, below=10mm of mp] (readout) {
-  \textbf{Graph readout}\\
-  mean $\oplus$ max $\oplus$ $4$ attention heads\\
+  \textbf{グラフ読み出し}\\
+  平均 $\oplus$ 最大 $\oplus$ $4$ 注意ヘッド\\
   $1344\!\to\!448\!\to\!224$
 };
 
 \node[output, text width=42mm, below left=11mm and 22mm of readout] (reco) {
-  \textbf{Reconstruction}\\
+  \textbf{再構成}\\
   $\log_{10}E$: $1$\\
-  core $(x,y,z)$: $3$\\
-  direction $\hat{n}$: $3$
+  コア $(x,y,z)$: $3$\\
+  方向 $\hat{n}$: $3$
 };
 \node[output, text width=38mm, below=11mm of readout] (quality) {
-  \textbf{Reco quality/error}\\
-  quality logit: $1$\\
-  error raw: $3$\\
-  active in reco
+  \textbf{品質/予想誤差}\\
+  品質ロジット: $1$\\
+  誤差 raw: $3$\\
+  再構成で使用
 };
 \node[output, text width=42mm, below right=11mm and 22mm of readout] (mass) {
-  \textbf{Mass-only head}\\
-  enhanced input: $1963$\\
-  proton/iron logit\\
-  active in mass-only
+  \textbf{質量分類ヘッド}\\
+  enhanced 入力: $1963$\\
+  陽子/鉄ロジット\\
+  質量分類で使用
 };
 
 \draw[arrow] (graph.south) -- ++(0,-4mm) -| (x.north);
@@ -116,7 +116,7 @@
 \draw[arrow] (readout.south) -- ++(0,-5mm) -| (mass.north);
 
 \node[note, below=5mm of quality.south, text width=96mm, anchor=north] {
-  The graph is pulse-based.  The four trace channels are auxiliary features attached to each accepted-pulse node; they are not a detector-plane CNN input.
+  グラフはパルス単位で定義する。4 チャネル波形は各 accepted-pulse ノードに付く補助特徴量であり、検出器平面上の CNN 入力ではない。
 };
 
 \end{tikzpicture}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from bisect import bisect_right
 from collections import OrderedDict
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any
 import h5py
 import numpy as np
 
-from .constants import PULSE_FEATURE_COLUMNS, WAVEFORM_FEATURE_CHANNELS, WAVEFORM_TRACE_BINS
+from .constants import PULSE_FEATURE_COLUMNS, WAVEFORM_FEATURE_CHANNELS, WAVEFORM_SCHEMA, WAVEFORM_TRACE_BINS
 from .progress import progress as _progress
 from .progress import progress_bar as _progress_bar
 
@@ -105,6 +106,39 @@ def _as_paths(paths: str | Path | Sequence[str | Path]) -> list[Path]:
     return [Path(path).expanduser() for path in paths]
 
 
+def _text_attr(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
+
+
+def _validate_waveform_schema(path: Path, handle: h5py.File) -> None:
+    stored_schema = _text_attr(handle.attrs.get("waveform_schema"), "")
+    if stored_schema and stored_schema != WAVEFORM_SCHEMA:
+        raise ValueError(
+            f"{path} uses waveform_schema={stored_schema!r}, but this code expects {WAVEFORM_SCHEMA!r}. "
+            "Re-export the graph HDF5 files from DST before training with this waveform definition."
+        )
+
+    columns_text = _text_attr(handle.attrs.get("columns_json"), "{}")
+    try:
+        columns = json.loads(columns_text)
+    except json.JSONDecodeError:
+        return
+    waveform_columns = columns.get("waveform_features")
+    if waveform_columns is None:
+        return
+    if list(waveform_columns) != list(WAVEFORM_FEATURE_CHANNELS):
+        raise ValueError(
+            f"{path} stores waveform_features={list(waveform_columns)!r}, "
+            f"but this code expects {list(WAVEFORM_FEATURE_CHANNELS)!r}. "
+            "Re-export the graph HDF5 files from DST; old compact accepted-pulse waveforms cannot be "
+            "interpreted as accepted-gapped waveforms."
+        )
+
+
 class H5GraphDataset:
     def __init__(
         self,
@@ -150,6 +184,7 @@ class H5GraphDataset:
                 with h5py.File(graph_path, "r") as handle:
                     if path_index == 0:
                         self.columns_json = handle.attrs.get("columns_json", "{}")
+                    _validate_waveform_schema(graph_path, handle)
                     events = handle["events"]
                     key_list_all = sorted(events.keys())
                     n_events = len(key_list_all)
