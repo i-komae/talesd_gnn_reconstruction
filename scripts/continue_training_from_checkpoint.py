@@ -117,6 +117,12 @@ def main() -> None:
         collate_threads = max(int(args.collate_threads), 0)
         pin_memory = device.startswith("cuda")
         target_dim = int(model_config.get("target_dim", 7))
+        quality_prediction = int(model_config.get("quality_dim", 0)) > 0
+        error_prediction = int(model_config.get("error_dim", 0)) > 0
+        runtime = dict(ckpt.get("runtime", {}))
+        error_angular_scale_deg = float(runtime.get("error_angular_scale_deg", runtime.get("quality_angular_scale_deg", 1.0)))
+        error_core_scale_km = float(runtime.get("error_core_scale_km", runtime.get("quality_core_scale_km", 0.05)))
+        error_energy_scale = float(runtime.get("error_energy_scale", runtime.get("quality_energy_scale", 0.10)))
         target_weights_np = _parse_target_weights(args.target_weights, target_dim)
         target_weights = torch.as_tensor(target_weights_np, dtype=torch.float32, device=device)
 
@@ -214,7 +220,13 @@ def main() -> None:
             ):
                 batch = _batch_to_device(batch_cpu, device, non_blocking=pin_memory)
                 pred_all = model(batch)
-                pred, _mass_logit, _quality_logit = _split_model_output(pred_all, target_dim, mass_classification=False)
+                pred, _mass_logit, _quality_logit, _error_raw = _split_model_output(
+                    pred_all,
+                    target_dim,
+                    mass_classification=False,
+                    quality_prediction=quality_prediction,
+                    error_prediction=error_prediction,
+                )
                 loss = torch.mean((pred - batch["y"]) ** 2 * target_weights)
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
@@ -236,7 +248,13 @@ def main() -> None:
                 ):
                     batch = _batch_to_device(batch_cpu, device, non_blocking=pin_memory)
                     pred_all = model(batch)
-                    pred, _mass_logit, _quality_logit = _split_model_output(pred_all, target_dim, mass_classification=False)
+                    pred, _mass_logit, _quality_logit, _error_raw = _split_model_output(
+                        pred_all,
+                        target_dim,
+                        mass_classification=False,
+                        quality_prediction=quality_prediction,
+                        error_prediction=error_prediction,
+                    )
                     loss = torch.mean((pred - batch["y"]) ** 2 * target_weights)
                     val_losses.append(float(loss.detach().cpu()))
 
@@ -262,7 +280,7 @@ def main() -> None:
         model.load_state_dict(best_state)
 
         stage_started = time.perf_counter()
-        pred_val, target_val, _mass_logit_val, mass_label_val, _quality_val = _predict_numpy(
+        pred_val, target_val, _mass_logit_val, mass_label_val, _quality_val, predicted_error_val = _predict_numpy(
             model,
             val_loader,
             scalers,
@@ -271,13 +289,18 @@ def main() -> None:
             desc="validation predict",
             show_progress=not args.no_progress,
             mass_classification=False,
+            quality_prediction=quality_prediction,
+            error_prediction=error_prediction,
             target_dim=target_dim,
+            error_angular_scale_deg=error_angular_scale_deg,
+            error_core_scale_km=error_core_scale_km,
+            error_energy_scale=error_energy_scale,
         )
         val_metrics = reconstruction_metrics(pred_val, target_val)
         stage_seconds["validation_predict"] = time.perf_counter() - stage_started
 
         stage_started = time.perf_counter()
-        pred_test, target_test, _mass_logit_test, mass_label_test, _quality_test = _predict_numpy(
+        pred_test, target_test, _mass_logit_test, mass_label_test, _quality_test, predicted_error_test = _predict_numpy(
             model,
             test_loader,
             scalers,
@@ -286,7 +309,12 @@ def main() -> None:
             desc="test predict",
             show_progress=not args.no_progress,
             mass_classification=False,
+            quality_prediction=quality_prediction,
+            error_prediction=error_prediction,
             target_dim=target_dim,
+            error_angular_scale_deg=error_angular_scale_deg,
+            error_core_scale_km=error_core_scale_km,
+            error_energy_scale=error_energy_scale,
         )
         test_metrics = reconstruction_metrics(pred_test, target_test)
         stage_seconds["test_predict"] = time.perf_counter() - stage_started
@@ -301,6 +329,8 @@ def main() -> None:
             test=(pred_test, target_test),
             validation_particle_labels=mass_label_val,
             test_particle_labels=mass_label_test,
+            validation_predicted_errors=predicted_error_val,
+            test_predicted_errors=predicted_error_test,
             energy_bin_width=args.diagnostic_energy_bin_width,
             min_bin_count=args.diagnostic_min_bin_count,
         )
@@ -328,6 +358,11 @@ def main() -> None:
                 "learning_rate": float(args.lr),
                 "additional_epochs": int(args.additional_epochs),
                 "target_weights": target_weights_np.tolist(),
+                "quality_prediction": quality_prediction,
+                "error_prediction": error_prediction,
+                "error_angular_scale_deg": error_angular_scale_deg,
+                "error_core_scale_km": error_core_scale_km,
+                "error_energy_scale": error_energy_scale,
                 "stage_seconds": {name: round(value, 3) for name, value in stage_seconds.items()},
             },
         }

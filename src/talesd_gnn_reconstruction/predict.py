@@ -39,6 +39,11 @@ def predict_graphs(
     target_dim = int(model_config.get("target_dim", 7))
     classification_dim = int(model_config.get("classification_dim", 0))
     quality_dim = int(model_config.get("quality_dim", 0))
+    error_dim = int(model_config.get("error_dim", 0))
+    runtime = dict(checkpoint.get("runtime", {}))
+    error_energy_scale = float(runtime.get("error_energy_scale", runtime.get("quality_energy_scale", 0.10)))
+    error_angular_scale_deg = float(runtime.get("error_angular_scale_deg", runtime.get("quality_angular_scale_deg", 1.0)))
+    error_core_scale_km = float(runtime.get("error_core_scale_km", runtime.get("quality_core_scale_km", 0.05)))
     load_detector_lids = int(model_config.get("detector_embedding_dim", 0)) > 0
 
     dataset = H5GraphDataset(
@@ -68,6 +73,8 @@ def predict_graphs(
         fieldnames.extend(["p_iron", "p_proton", "pred_parttype"])
     if quality_dim > 0:
         fieldnames.append("quality")
+    if error_dim > 0:
+        fieldnames.extend(["pred_energy_abs_relative_error", "pred_opening_angle_deg", "pred_core_error_km"])
     truth_fields = [
         "true_log10_energy_eV",
         "true_core_x_km",
@@ -100,6 +107,7 @@ def predict_graphs(
                 p_iron = None
                 pred_is_iron = None
                 quality = None
+                predicted_errors = None
                 offset = target_dim
                 if classification_dim > 0:
                     logits = pred_all[:, offset]
@@ -108,7 +116,16 @@ def predict_graphs(
                     pred_is_iron = p_iron >= 0.5
                 if quality_dim > 0:
                     quality_logits = pred_all[:, offset]
+                    offset += quality_dim
                     quality = 1.0 / (1.0 + np.exp(-np.clip(quality_logits, -80.0, 80.0)))
+                if error_dim > 0:
+                    raw = pred_all[:, offset : offset + error_dim]
+                    raw = raw[:, :3]
+                    softplus = np.log1p(np.exp(-np.abs(raw))) + np.maximum(raw, 0.0)
+                    predicted_errors = softplus * np.asarray(
+                        [error_energy_scale, error_angular_scale_deg, error_core_scale_km],
+                        dtype=np.float64,
+                    )
 
                 for row_idx, sample in enumerate(samples):
                     attrs = sample["attrs"]
@@ -136,6 +153,14 @@ def predict_graphs(
                         )
                     if quality_dim > 0 and quality is not None:
                         row["quality"] = float(quality[row_idx])
+                    if error_dim > 0 and predicted_errors is not None:
+                        row.update(
+                            {
+                                "pred_energy_abs_relative_error": float(predicted_errors[row_idx, 0]),
+                                "pred_opening_angle_deg": float(predicted_errors[row_idx, 1]),
+                                "pred_core_error_km": float(predicted_errors[row_idx, 2]),
+                            }
+                        )
                     target = sample["target"]
                     if include_truth and target is not None:
                         target_dir = normalize_directions(target[None, :])

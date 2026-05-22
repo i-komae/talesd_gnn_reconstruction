@@ -477,6 +477,7 @@ class TaleSdGNN(nn.Module):
         target_dim: int = 7,
         classification_dim: int = 0,
         quality_dim: int = 0,
+        error_dim: int = 0,
         hidden_dim: int = 128,
         num_layers: int = 4,
         dropout: float = 0.05,
@@ -505,6 +506,7 @@ class TaleSdGNN(nn.Module):
             "target_dim": target_dim,
             "classification_dim": classification_dim,
             "quality_dim": quality_dim,
+            "error_dim": error_dim,
             "hidden_dim": hidden_dim,
             "num_layers": num_layers,
             "dropout": dropout,
@@ -524,6 +526,7 @@ class TaleSdGNN(nn.Module):
         self.target_dim = int(target_dim)
         self.classification_dim = int(classification_dim)
         self.quality_dim = int(quality_dim)
+        self.error_dim = int(error_dim)
         self.classification_arch = classification_arch
         self.waveform_shape_summary_enabled = int(waveform_channels) > 0 and int(waveform_length) > 0
         self.detector_encoder = DetectorIdEmbedding(detector_lids_list, detector_embedding_dim)
@@ -579,6 +582,14 @@ class TaleSdGNN(nn.Module):
                 nn.SiLU(),
                 nn.Dropout(dropout),
                 nn.Linear(hidden_dim // 2, self.quality_dim),
+            )
+        self.error_head = None
+        if self.error_dim > 0:
+            self.error_head = nn.Sequential(
+                nn.Linear(hidden_dim * 2, hidden_dim // 2),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim // 2, self.error_dim),
             )
 
     def _pool(self, node: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
@@ -694,6 +705,8 @@ class TaleSdGNN(nn.Module):
             outputs.append(self.class_head(class_input))
         if self.quality_head is not None:
             outputs.append(self.quality_head(pooled))
+        if self.error_head is not None:
+            outputs.append(self.error_head(pooled))
         return torch.cat(outputs, dim=-1)
 
 
@@ -706,6 +719,7 @@ class PhysicsTaleSdGNN(nn.Module):
         target_dim: int = 7,
         classification_dim: int = 0,
         quality_dim: int = 0,
+        error_dim: int = 0,
         hidden_dim: int = 160,
         num_layers: int = 5,
         dropout: float = 0.05,
@@ -735,6 +749,7 @@ class PhysicsTaleSdGNN(nn.Module):
             "target_dim": target_dim,
             "classification_dim": classification_dim,
             "quality_dim": quality_dim,
+            "error_dim": error_dim,
             "hidden_dim": hidden_dim,
             "num_layers": num_layers,
             "dropout": dropout,
@@ -755,6 +770,7 @@ class PhysicsTaleSdGNN(nn.Module):
         self.target_dim = int(target_dim)
         self.classification_dim = int(classification_dim)
         self.quality_dim = int(quality_dim)
+        self.error_dim = int(error_dim)
         self.classification_arch = classification_arch
         self.waveform_shape_summary_enabled = int(waveform_channels) > 0 and int(waveform_length) > 0
         self.detector_encoder = DetectorIdEmbedding(detector_lids_list, detector_embedding_dim)
@@ -821,6 +837,14 @@ class PhysicsTaleSdGNN(nn.Module):
                 nn.SiLU(),
                 nn.Dropout(dropout),
                 nn.Linear(hidden_dim // 2, self.quality_dim),
+            )
+        self.error_head = None
+        if self.error_dim > 0:
+            self.error_head = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim // 2, self.error_dim),
             )
 
     def _pulse_pool(self, pulse_x: torch.Tensor, pulse_node_index: torch.Tensor, num_nodes: int) -> torch.Tensor:
@@ -933,6 +957,8 @@ class PhysicsTaleSdGNN(nn.Module):
             outputs.append(self.class_head(class_input))
         if self.quality_head is not None:
             outputs.append(self.quality_head(shared))
+        if self.error_head is not None:
+            outputs.append(self.error_head(shared))
         return torch.cat(outputs, dim=-1)
 
 

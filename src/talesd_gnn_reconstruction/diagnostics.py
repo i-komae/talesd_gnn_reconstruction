@@ -37,7 +37,7 @@ QUALITY_THRESHOLD_KEEP_FRACTIONS = (0.95, 0.90, 0.80, 0.70, 0.50, 0.30, 0.10, 0.
 QUALITY_CUT_KEEP_FRACTIONS = (1.00, 0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.10, 0.05)
 QUALITY_ENERGY_KEEP_FRACTIONS = (1.00, 0.95, 0.90, 0.80, 0.50, 0.10)
 QUALITY_MARKER_KEEP_FRACTIONS = (0.95, 0.90, 0.80, 0.50, 0.10)
-QUALITY_CUT_OUTPUT_FRACTIONS = (0.95, 0.90, 0.80, 0.50, 0.10)
+ERROR_SCATTER_MAX_POINTS = 50000
 
 
 def require_matplotlib_latex() -> None:
@@ -108,6 +108,8 @@ def save_prediction_cache(
     test_mass: tuple[np.ndarray, np.ndarray] | None = None,
     validation_quality: np.ndarray | None = None,
     test_quality: np.ndarray | None = None,
+    validation_predicted_errors: np.ndarray | None = None,
+    test_predicted_errors: np.ndarray | None = None,
 ) -> Path:
     cache_path = _diagnostics_root(Path(output_path).expanduser()) / "prediction_cache.npz"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,11 +120,13 @@ def save_prediction_cache(
         mass_logit_val=_none_to_cache_array(validation_mass[0] if validation_mass is not None else None),
         mass_label_val=_none_to_cache_array(validation_mass[1] if validation_mass is not None else None),
         quality_val=_none_to_cache_array(validation_quality),
+        predicted_error_val=_none_to_cache_array(validation_predicted_errors),
         pred_test=np.asarray(test[0]),
         target_test=np.asarray(test[1]),
         mass_logit_test=_none_to_cache_array(test_mass[0] if test_mass is not None else None),
         mass_label_test=_none_to_cache_array(test_mass[1] if test_mass is not None else None),
         quality_test=_none_to_cache_array(test_quality),
+        predicted_error_test=_none_to_cache_array(test_predicted_errors),
     )
     return cache_path
 
@@ -610,6 +614,26 @@ def _quality_for_finite_pair(pred: np.ndarray, target: np.ndarray, quality: np.n
     return values
 
 
+def _predicted_errors_for_finite_pair(
+    pred: np.ndarray,
+    target: np.ndarray,
+    predicted_errors: np.ndarray | None,
+) -> np.ndarray | None:
+    if predicted_errors is None:
+        return None
+    values = np.asarray(predicted_errors, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] < 3:
+        return None
+    mask = _finite_mask(pred, target)
+    if mask.size == 0 or values.shape[0] != mask.shape[0]:
+        return None
+    values = values[mask, :3]
+    values = np.where(np.isfinite(values), np.clip(values, 0.0, None), np.nan)
+    if values.size == 0 or not np.any(np.isfinite(values)):
+        return None
+    return values
+
+
 def _quality_cut_mask(quality: np.ndarray, keep_fraction: float) -> tuple[np.ndarray, float]:
     values = np.asarray(quality, dtype=np.float64)
     valid = np.isfinite(values)
@@ -705,6 +729,333 @@ def _quality_energy_rows(
             energy_bin_width,
         ),
     }
+
+
+def _average_ranks(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float64)
+    order = np.argsort(values, kind="mergesort")
+    sorted_values = values[order]
+    ranks = np.empty(values.shape[0], dtype=np.float64)
+    start = 0
+    while start < values.shape[0]:
+        end = start + 1
+        while end < values.shape[0] and sorted_values[end] == sorted_values[start]:
+            end += 1
+        ranks[order[start:end]] = 0.5 * (start + end - 1) + 1.0
+        start = end
+    return ranks
+
+
+def _safe_correlation(x: np.ndarray, y: np.ndarray, *, method: str) -> float | None:
+    x = np.asarray(x, dtype=np.float64).reshape(-1)
+    y = np.asarray(y, dtype=np.float64).reshape(-1)
+    mask = np.isfinite(x) & np.isfinite(y)
+    x = x[mask]
+    y = y[mask]
+    if x.size < 3 or np.nanstd(x) <= 0.0 or np.nanstd(y) <= 0.0:
+        return None
+    if method == "spearman":
+        x = _average_ranks(x)
+        y = _average_ranks(y)
+    elif method != "pearson":
+        raise ValueError("method must be 'pearson' or 'spearman'")
+    corr = float(np.corrcoef(x, y)[0, 1])
+    return corr if math.isfinite(corr) else None
+
+
+def _error_correlation_summary_from_variables(variables: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    names = list(variables)
+    rows: list[dict[str, Any]] = []
+    for y_index, y_name in enumerate(names):
+        for x_name in names[:y_index]:
+            x = variables[x_name]["values"]
+            y = variables[y_name]["values"]
+            mask = np.isfinite(x) & np.isfinite(y)
+            rows.append(
+                {
+                    "x": x_name,
+                    "y": y_name,
+                    "n": int(np.sum(mask)),
+                    "pearson": _safe_correlation(x, y, method="pearson"),
+                    "spearman": _safe_correlation(x, y, method="spearman"),
+                }
+            )
+    return {
+        "variables": [
+            {
+                "name": name,
+                "label": str(info["label"]),
+                "unit": str(info["unit"]),
+                "n": int(np.sum(np.isfinite(info["values"]))),
+                "median": _to_float(np.nanmedian(info["values"])),
+                "p68": _to_float(_percentile(info["values"], 68.0)),
+                "p95": _to_float(_percentile(info["values"], 95.0)),
+            }
+            for name, info in variables.items()
+        ],
+        "pairs": rows,
+    }
+
+
+def _actual_error_correlation_inputs(q: dict[str, np.ndarray]) -> dict[str, dict[str, Any]]:
+    return {
+        "energy_abs_relative_error": {
+            "values": np.abs(q["rel_energy"]),
+            "label": r"$|E_{\mathrm{rec}}/E_{\mathrm{true}}-1|$",
+            "unit": "",
+        },
+        "opening_angle_deg": {
+            "values": q["opening_deg"],
+            "label": "opening angle [deg]",
+            "unit": "deg",
+        },
+        "core_xy_error_m": {
+            "values": q["core_xy_km"] * 1000.0,
+            "label": "core error [m]",
+            "unit": "m",
+        },
+    }
+
+
+def _error_correlation_summary(q: dict[str, np.ndarray]) -> dict[str, Any]:
+    return _error_correlation_summary_from_variables(_actual_error_correlation_inputs(q))
+
+
+def _predicted_error_correlation_inputs(predicted_errors: np.ndarray) -> dict[str, dict[str, Any]]:
+    values = np.asarray(predicted_errors, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] < 3:
+        values = np.full((0, 3), np.nan, dtype=np.float64)
+    return {
+        "predicted_energy_abs_relative_error": {
+            "values": values[:, 0],
+            "label": r"pred. $|E_{\mathrm{rec}}/E_{\mathrm{true}}-1|$",
+            "unit": "",
+        },
+        "predicted_opening_angle_deg": {
+            "values": values[:, 1],
+            "label": "pred. opening angle [deg]",
+            "unit": "deg",
+        },
+        "predicted_core_xy_error_m": {
+            "values": values[:, 2] * 1000.0,
+            "label": "pred. core error [m]",
+            "unit": "m",
+        },
+    }
+
+
+def _predicted_actual_error_inputs(
+    q: dict[str, np.ndarray],
+    predicted_errors: np.ndarray,
+) -> dict[str, dict[str, Any]]:
+    values = np.asarray(predicted_errors, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] < 3:
+        values = np.full((0, 3), np.nan, dtype=np.float64)
+    actual = _actual_error_correlation_inputs(q)
+    return {
+        "energy_abs_relative_error": {
+            "actual": actual["energy_abs_relative_error"]["values"],
+            "predicted": values[:, 0],
+            "label": r"$|E_{\mathrm{rec}}/E_{\mathrm{true}}-1|$",
+            "unit": "",
+        },
+        "opening_angle_deg": {
+            "actual": actual["opening_angle_deg"]["values"],
+            "predicted": values[:, 1],
+            "label": "opening angle [deg]",
+            "unit": "deg",
+        },
+        "core_xy_error_m": {
+            "actual": actual["core_xy_error_m"]["values"],
+            "predicted": values[:, 2] * 1000.0,
+            "label": "core error [m]",
+            "unit": "m",
+        },
+    }
+
+
+def _predicted_actual_error_summary(calibration: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for name, info in calibration.items():
+        actual = np.asarray(info["actual"], dtype=np.float64)
+        predicted = np.asarray(info["predicted"], dtype=np.float64)
+        mask = np.isfinite(actual) & np.isfinite(predicted)
+        rows.append(
+            {
+                "name": name,
+                "label": str(info["label"]),
+                "unit": str(info["unit"]),
+                "n": int(np.sum(mask)),
+                "pearson": _safe_correlation(predicted, actual, method="pearson"),
+                "spearman": _safe_correlation(predicted, actual, method="spearman"),
+                "actual_median": _to_float(np.nanmedian(actual[mask])) if np.any(mask) else None,
+                "predicted_median": _to_float(np.nanmedian(predicted[mask])) if np.any(mask) else None,
+                "actual_p68": _to_float(_percentile(actual[mask], 68.0)) if np.any(mask) else None,
+                "predicted_p68": _to_float(_percentile(predicted[mask], 68.0)) if np.any(mask) else None,
+            }
+        )
+    return {"variables": rows}
+
+
+def _save_error_correlation_scatter(
+    variables: dict[str, dict[str, Any]],
+    summary: dict[str, Any],
+    title: str,
+    rng_seed: int = 314159,
+) -> Any:
+    import matplotlib.pyplot as plt
+
+    names = list(variables)
+    arrays = [np.asarray(variables[name]["values"], dtype=np.float64).reshape(-1) for name in names]
+    finite = np.ones(arrays[0].shape[0], dtype=bool)
+    for values in arrays:
+        finite &= np.isfinite(values)
+    indices = np.flatnonzero(finite)
+    if indices.size == 0:
+        fig, ax = plt.subplots(figsize=FIGSIZE_SINGLE)
+        ax.text(0.5, 0.5, "no finite reconstruction errors", ha="center", va="center", transform=ax.transAxes)
+        ax.axis("off")
+        return fig
+    if indices.size > ERROR_SCATTER_MAX_POINTS:
+        rng = np.random.default_rng(rng_seed)
+        indices = np.sort(rng.choice(indices, size=ERROR_SCATTER_MAX_POINTS, replace=False))
+
+    limits: list[tuple[float, float]] = []
+    for values in arrays:
+        finite_values = values[np.isfinite(values)]
+        high = _percentile(finite_values, 99.5)
+        if not math.isfinite(high) or high <= 0.0:
+            high = float(np.nanmax(finite_values)) if finite_values.size else 1.0
+        high = max(float(high), 1.0e-12)
+        limits.append((0.0, high))
+
+    fig, axes = plt.subplots(3, 3, figsize=(8.4, 8.0))
+    pair_rows = {
+        (str(row["y"]), str(row["x"])): row
+        for row in summary.get("pairs", [])
+    }
+    for row_index, y_name in enumerate(names):
+        for col_index, x_name in enumerate(names):
+            ax = axes[row_index, col_index]
+            x = np.asarray(variables[x_name]["values"], dtype=np.float64)
+            y = np.asarray(variables[y_name]["values"], dtype=np.float64)
+            if col_index > row_index:
+                ax.axis("off")
+                continue
+            if row_index == col_index:
+                values = x[np.isfinite(x)]
+                ax.hist(
+                    values,
+                    bins=np.linspace(limits[col_index][0], limits[col_index][1], 41),
+                    histtype="stepfilled",
+                    color="#4c78a8",
+                    alpha=0.35,
+                    edgecolor="#4c78a8",
+                )
+                ax.set_xlim(*limits[col_index])
+            else:
+                ax.scatter(
+                    x[indices],
+                    y[indices],
+                    s=2.0,
+                    alpha=0.12,
+                    color=NEUTRAL_COLOR,
+                    rasterized=True,
+                    linewidths=0,
+                )
+                ax.set_xlim(*limits[col_index])
+                ax.set_ylim(*limits[row_index])
+                row = pair_rows.get((y_name, x_name), {})
+                pearson = row.get("pearson")
+                spearman = row.get("spearman")
+                label_parts = []
+                if pearson is not None:
+                    label_parts.append(f"r={float(pearson):.3f}")
+                if spearman is not None:
+                    label_parts.append(r"$\rho$=" + f"{float(spearman):.3f}")
+                if label_parts:
+                    ax.text(
+                        0.04,
+                        0.94,
+                        "\n".join(label_parts),
+                        ha="left",
+                        va="top",
+                        transform=ax.transAxes,
+                        fontsize=9,
+                    )
+            if row_index == len(names) - 1:
+                ax.set_xlabel(str(variables[x_name]["label"]))
+            else:
+                ax.set_xticklabels([])
+            if col_index == 0:
+                ax.set_ylabel(str(variables[y_name]["label"]) if row_index != col_index else "events")
+            else:
+                ax.set_yticklabels([])
+            _style_axes(ax)
+    fig.suptitle(title)
+    fig.tight_layout()
+    return fig
+
+
+def _save_predicted_actual_error_scatter(
+    calibration: dict[str, dict[str, Any]],
+    summary: dict[str, Any],
+    title: str,
+    rng_seed: int = 271828,
+) -> Any:
+    import matplotlib.pyplot as plt
+
+    names = list(calibration)
+    fig, axes = plt.subplots(1, 3, figsize=(13.2, 4.2))
+    rows = {str(row["name"]): row for row in summary.get("variables", [])}
+    for axis_index, name in enumerate(names):
+        ax = axes[axis_index]
+        actual = np.asarray(calibration[name]["actual"], dtype=np.float64).reshape(-1)
+        predicted = np.asarray(calibration[name]["predicted"], dtype=np.float64).reshape(-1)
+        finite = np.isfinite(actual) & np.isfinite(predicted)
+        indices = np.flatnonzero(finite)
+        if indices.size > ERROR_SCATTER_MAX_POINTS:
+            rng = np.random.default_rng(rng_seed + axis_index)
+            indices = np.sort(rng.choice(indices, size=ERROR_SCATTER_MAX_POINTS, replace=False))
+        finite_actual = actual[finite]
+        finite_predicted = predicted[finite]
+        if finite_actual.size == 0:
+            ax.text(0.5, 0.5, "no finite entries", ha="center", va="center", transform=ax.transAxes)
+            ax.set_axis_off()
+            continue
+        high = max(_percentile(finite_actual, 99.5), _percentile(finite_predicted, 99.5))
+        if not math.isfinite(high) or high <= 0.0:
+            high = max(float(np.nanmax(finite_actual)), float(np.nanmax(finite_predicted)), 1.0)
+        high = max(float(high), 1.0e-12)
+        ax.scatter(
+            predicted[indices],
+            actual[indices],
+            s=2.0,
+            alpha=0.12,
+            color=NEUTRAL_COLOR,
+            rasterized=True,
+            linewidths=0,
+        )
+        ax.plot([0.0, high], [0.0, high], color=PROTON_COLOR, linewidth=LINEWIDTH_THIN, label="ideal")
+        row = rows.get(name, {})
+        pearson = row.get("pearson")
+        spearman = row.get("spearman")
+        text_lines = []
+        if pearson is not None:
+            text_lines.append(f"r={float(pearson):.3f}")
+        if spearman is not None:
+            text_lines.append(r"$\rho$=" + f"{float(spearman):.3f}")
+        if text_lines:
+            ax.text(0.04, 0.94, "\n".join(text_lines), ha="left", va="top", transform=ax.transAxes, fontsize=9)
+        ax.set_xlim(0.0, high)
+        ax.set_ylim(0.0, high)
+        ax.set_xlabel("predicted " + str(calibration[name]["label"]))
+        ax.set_ylabel("actual " + str(calibration[name]["label"]))
+        ax.legend(frameon=False)
+        _style_axes(ax)
+    fig.suptitle(title)
+    fig.tight_layout()
+    return fig
 
 
 def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Path:
@@ -1635,12 +1986,14 @@ def _save_reconstruction_pdf(
     energy_bin_width: float,
     min_bin_count: int,
     quality: np.ndarray | None = None,
+    predicted_errors: np.ndarray | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     _prepare_matplotlib()
     import matplotlib.pyplot as plt
 
     q = _prediction_quantities(pred, target)
     quality_values = _quality_for_finite_pair(pred, target, quality)
+    predicted_error_values = _predicted_errors_for_finite_pair(pred, target, predicted_errors)
     bin_rows = _energy_bin_table(q["true_log10_energy"], q["rel_energy"], energy_bin_width)
     resolution_rows = _resolution_bin_table(
         q["true_log10_energy"],
@@ -1655,9 +2008,15 @@ def _save_reconstruction_pdf(
         "core_dy_central68_km": _to_float(_central68_half_width(q["core_dy_km"])),
         "core_xy_68_km": _to_float(_percentile(q["core_xy_km"], 68.0)),
         "energy_relative_error": _fit_gaussian_hist(q["rel_energy"]),
+        "error_correlations": _error_correlation_summary(q),
         "energy_bins": bin_rows,
         "resolution_bins": resolution_rows,
     }
+    if predicted_error_values is not None:
+        predicted_variables = _predicted_error_correlation_inputs(predicted_error_values)
+        calibration_variables = _predicted_actual_error_inputs(q, predicted_error_values)
+        summary["predicted_error_correlations"] = _error_correlation_summary_from_variables(predicted_variables)
+        summary["predicted_actual_error"] = _predicted_actual_error_summary(calibration_variables)
     if quality_values is not None:
         quality_cut_rows = _quality_cut_rows(q, quality_values, min_bin_count)
         quality_energy_dependence = [
@@ -1671,7 +2030,6 @@ def _save_reconstruction_pdf(
             "thresholds": _quality_threshold_summary(quality_values),
             "cut_rows": quality_cut_rows,
             "energy_dependence": quality_energy_dependence,
-            "cut_directories": [],
         }
 
     split_dir = _diagnostics_root(output_path) / split_name
@@ -1683,10 +2041,12 @@ def _save_reconstruction_pdf(
         "energy_relative_error",
         "energy_resolution_by_true_energy",
         "angular_core_resolution_by_true_energy",
-        "quality_histograms",
-        "quality_cut_performance",
-        "quality_energy_dependence",
+        "actual_error_correlations",
     ]
+    if predicted_error_values is not None:
+        page_names.extend(["predicted_error_correlations", "predicted_vs_actual_error"])
+    if quality_values is not None:
+        page_names.extend(["quality_histograms", "quality_cut_performance", "quality_energy_dependence"])
     with _SplitPdfWriter(split_dir, page_names, pdf_files) as pdf:
         fig, ax = plt.subplots(figsize=(6.4, 4.4))
         ax.hist(q["opening_deg"], bins=_hist_bins(q["opening_deg"]), histtype="stepfilled", color="#4c78a8", alpha=0.4, edgecolor="#4c78a8")
@@ -1803,6 +2163,33 @@ def _save_reconstruction_pdf(
         fig.tight_layout()
         pdf.savefig(fig)
         plt.close(fig)
+
+        fig = _save_error_correlation_scatter(
+            _actual_error_correlation_inputs(q),
+            summary["error_correlations"],
+            f"{split_name}: actual reconstruction error correlations",
+        )
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        if predicted_error_values is not None:
+            predicted_variables = _predicted_error_correlation_inputs(predicted_error_values)
+            fig = _save_error_correlation_scatter(
+                predicted_variables,
+                summary["predicted_error_correlations"],
+                f"{split_name}: predicted error correlations",
+            )
+            pdf.savefig(fig)
+            plt.close(fig)
+
+            calibration_variables = _predicted_actual_error_inputs(q, predicted_error_values)
+            fig = _save_predicted_actual_error_scatter(
+                calibration_variables,
+                summary["predicted_actual_error"],
+                f"{split_name}: predicted vs actual error",
+            )
+            pdf.savefig(fig)
+            plt.close(fig)
 
         if quality_values is not None:
             finite_quality = quality_values[np.isfinite(quality_values)]
@@ -1942,28 +2329,6 @@ def _save_reconstruction_pdf(
             pdf.savefig(fig, name=f"energy_relative_error_bins_{start // rows_per_page:02d}")
             plt.close(fig)
 
-    if quality_values is not None:
-        cut_summaries: list[dict[str, Any]] = []
-        for keep_fraction in QUALITY_CUT_OUTPUT_FRACTIONS:
-            mask, threshold = _quality_cut_mask(quality_values, keep_fraction)
-            if not np.any(mask):
-                continue
-            cut_q = _subset_prediction_quantities(q, mask)
-            cut_dir = split_dir / "quality_cuts" / _quality_cut_directory_name(keep_fraction)
-            cut_label = f"{split_name}: quality top {100.0 * keep_fraction:.0f}\\%"
-            cut_summary = _save_reconstruction_cut_pages(
-                cut_dir,
-                cut_label,
-                cut_q,
-                energy_bin_width,
-                min_bin_count,
-            )
-            cut_summary["keep_fraction"] = _to_float(keep_fraction)
-            cut_summary["quality_threshold"] = _to_float(threshold)
-            cut_summaries.append(cut_summary)
-            pdf_files.extend(cut_summary.get("pdfs", []))
-        summary["quality"]["cut_directories"] = cut_summaries
-
     summary["directory"] = str(split_dir)
     summary["pdfs"] = pdf_files
     return split_dir, summary
@@ -1980,6 +2345,8 @@ def save_training_diagnostics(
     test_particle_labels: np.ndarray | None = None,
     validation_quality: np.ndarray | None = None,
     test_quality: np.ndarray | None = None,
+    validation_predicted_errors: np.ndarray | None = None,
+    test_predicted_errors: np.ndarray | None = None,
     energy_bin_width: float = 0.1,
     min_bin_count: int = 20,
     save_reconstruction: bool = True,
@@ -1997,6 +2364,8 @@ def save_training_diagnostics(
         test_mass=test_mass,
         validation_quality=validation_quality,
         test_quality=test_quality,
+        validation_predicted_errors=validation_predicted_errors,
+        test_predicted_errors=test_predicted_errors,
     )
     diagnostics: dict[str, Any] = {
         "directory": str(diagnostics_dir),
@@ -2004,9 +2373,9 @@ def save_training_diagnostics(
         "prediction_cache": str(prediction_cache),
     }
     if save_reconstruction:
-        for split_name, pair, quality in [
-            ("validation", validation, validation_quality),
-            ("test", test, test_quality),
+        for split_name, pair, quality, predicted_errors in [
+            ("validation", validation, validation_quality, validation_predicted_errors),
+            ("test", test, test_quality, test_predicted_errors),
         ]:
             _pdf, summary = _save_reconstruction_pdf(
                 output,
@@ -2016,6 +2385,7 @@ def save_training_diagnostics(
                 energy_bin_width=energy_bin_width,
                 min_bin_count=min_bin_count,
                 quality=quality,
+                predicted_errors=predicted_errors,
             )
             diagnostics[split_name] = summary
         for split_name, labels, pair in [

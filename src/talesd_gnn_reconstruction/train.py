@@ -581,7 +581,8 @@ def _split_model_output(
     target_dim: int,
     mass_classification: bool,
     quality_prediction: bool = False,
-) -> tuple[Any, Any | None, Any | None]:
+    error_prediction: bool = False,
+) -> tuple[Any, Any | None, Any | None, Any | None]:
     offset = int(target_dim)
     reconstruction = pred[:, :offset]
     mass_logit = None
@@ -591,7 +592,11 @@ def _split_model_output(
     quality_logit = None
     if quality_prediction:
         quality_logit = pred[:, offset]
-    return reconstruction, mass_logit, quality_logit
+        offset += 1
+    error_raw = None
+    if error_prediction:
+        error_raw = pred[:, offset : offset + 3]
+    return reconstruction, mass_logit, quality_logit, error_raw
 
 
 def _target_scaler_tensors(
@@ -729,6 +734,83 @@ def _quality_prediction_loss(
     return F.binary_cross_entropy_with_logits(quality_logit.reshape(-1), quality_target)
 
 
+def _reconstruction_error_targets(
+    pred_scaled: Any,
+    target_scaled: Any,
+    *,
+    target_mean: Any,
+    target_std: Any,
+    angular_scale_deg: float,
+    core_scale_km: float,
+    energy_scale: float,
+) -> Any:
+    import torch
+    import torch.nn.functional as F
+
+    pred = _inverse_scaled_target(pred_scaled, target_mean, target_std)
+    target = _inverse_scaled_target(target_scaled, target_mean, target_std)
+    loge_delta = pred[:, 0] - target[:, 0]
+    energy_error = torch.abs(torch.exp(loge_delta * math.log(10.0)) - 1.0)
+    core_error = torch.linalg.vector_norm(pred[:, 1:3] - target[:, 1:3], dim=1)
+    pred_dir = F.normalize(pred[:, 4:7], dim=1, eps=1.0e-8)
+    target_dir = F.normalize(target[:, 4:7], dim=1, eps=1.0e-8)
+    dot = torch.sum(pred_dir * target_dir, dim=1).clamp(-1.0 + 1.0e-7, 1.0 - 1.0e-7)
+    angle_error_deg = torch.rad2deg(torch.acos(dot))
+    return torch.stack(
+        [
+            energy_error / max(float(energy_scale), 1.0e-6),
+            angle_error_deg / max(float(angular_scale_deg), 1.0e-6),
+            core_error / max(float(core_scale_km), 1.0e-6),
+        ],
+        dim=1,
+    )
+
+
+def _error_prediction_loss(
+    error_raw: Any,
+    pred_scaled: Any,
+    target_scaled: Any,
+    *,
+    target_mean: Any,
+    target_std: Any,
+    angular_scale_deg: float,
+    core_scale_km: float,
+    energy_scale: float,
+) -> Any:
+    import torch
+    import torch.nn.functional as F
+
+    predicted_error = F.softplus(error_raw)
+    target_error = _reconstruction_error_targets(
+        pred_scaled.detach(),
+        target_scaled,
+        target_mean=target_mean,
+        target_std=target_std,
+        angular_scale_deg=angular_scale_deg,
+        core_scale_km=core_scale_km,
+        energy_scale=energy_scale,
+    ).detach()
+    return F.smooth_l1_loss(torch.log1p(predicted_error), torch.log1p(target_error), beta=0.5)
+
+
+def _physical_error_predictions(
+    error_raw: Any,
+    *,
+    angular_scale_deg: float,
+    core_scale_km: float,
+    energy_scale: float,
+) -> Any:
+    import torch
+    import torch.nn.functional as F
+
+    scales = torch.as_tensor(
+        [float(energy_scale), float(angular_scale_deg), float(core_scale_km)],
+        dtype=error_raw.dtype,
+        device=error_raw.device,
+    )
+    return F.softplus(error_raw) * scales
+
+
 def _mass_classification_loss(
     logits: Any,
     labels: Any,
@@ -822,26 +904,32 @@ def _predict_numpy(
     show_progress: bool = True,
     mass_classification: bool = False,
     quality_prediction: bool = False,
+    error_prediction: bool = False,
     target_dim: int = 7,
     mass_logit_offset: float = 0.0,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+    error_angular_scale_deg: float = 1.0,
+    error_core_scale_km: float = 0.05,
+    error_energy_scale: float = 0.10,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     model.eval()
     pred_rows: list[np.ndarray] = []
     target_rows: list[np.ndarray] = []
     mass_logit_rows: list[np.ndarray] = []
     mass_label_rows: list[np.ndarray] = []
     quality_score_rows: list[np.ndarray] = []
+    error_prediction_rows: list[np.ndarray] = []
     import torch
 
     with torch.no_grad():
         for batch_cpu in _progress(loader, desc=desc, total=len(loader), enabled=show_progress, leave=False):
             batch = _batch_to_device(batch_cpu, device, non_blocking=non_blocking)
             pred_all = model(batch)
-            pred_scaled_tensor, mass_logit_tensor, quality_logit_tensor = _split_model_output(
+            pred_scaled_tensor, mass_logit_tensor, quality_logit_tensor, error_raw_tensor = _split_model_output(
                 pred_all,
                 target_dim,
                 mass_classification,
                 quality_prediction,
+                error_prediction,
             )
             pred_scaled = pred_scaled_tensor.detach().cpu().numpy()
             target_scaled = batch["y"].detach().cpu().numpy()
@@ -852,12 +940,28 @@ def _predict_numpy(
                 mass_logit_rows.append(calibrated.detach().cpu().numpy())
             if quality_prediction and quality_logit_tensor is not None:
                 quality_score_rows.append(torch.sigmoid(quality_logit_tensor).detach().cpu().numpy())
+            if error_prediction and error_raw_tensor is not None:
+                predicted_errors = _physical_error_predictions(
+                    error_raw_tensor,
+                    angular_scale_deg=error_angular_scale_deg,
+                    core_scale_km=error_core_scale_km,
+                    energy_scale=error_energy_scale,
+                )
+                error_prediction_rows.append(predicted_errors.detach().cpu().numpy())
             if "mass_label" in batch:
                 mass_label_rows.append(batch["mass_label"].detach().cpu().numpy())
     mass_logits = np.concatenate(mass_logit_rows, axis=0) if mass_logit_rows else None
     mass_labels = np.concatenate(mass_label_rows, axis=0) if mass_label_rows else None
     quality_scores = np.concatenate(quality_score_rows, axis=0) if quality_score_rows else None
-    return np.concatenate(pred_rows, axis=0), np.concatenate(target_rows, axis=0), mass_logits, mass_labels, quality_scores
+    error_predictions = np.concatenate(error_prediction_rows, axis=0) if error_prediction_rows else None
+    return (
+        np.concatenate(pred_rows, axis=0),
+        np.concatenate(target_rows, axis=0),
+        mass_logits,
+        mass_labels,
+        quality_scores,
+        error_predictions,
+    )
 
 
 def train_model(
@@ -917,6 +1021,11 @@ def train_model(
     quality_angular_scale_deg: float = 1.0,
     quality_core_scale_km: float = 0.05,
     quality_energy_scale: float = 0.10,
+    error_prediction: bool = False,
+    error_loss_weight: float = 0.2,
+    error_angular_scale_deg: float = 1.0,
+    error_core_scale_km: float = 0.05,
+    error_energy_scale: float = 0.10,
     show_progress: bool = True,
     save_diagnostics: bool = True,
     diagnostic_energy_bin_width: float = 0.1,
@@ -942,6 +1051,7 @@ def train_model(
         raise ValueError("training_task must be 'reconstruction' or 'mass'")
     if training_task == "mass":
         mass_classification = True
+        error_prediction = False
     classification_arch = str(classification_arch).lower()
     if classification_arch not in {"legacy", "enhanced"}:
         raise ValueError("classification_arch must be 'legacy' or 'enhanced'")
@@ -1077,6 +1187,7 @@ def train_model(
         "target_dim": first["target"].shape[0],
         "classification_dim": 1 if mass_classification else 0,
         "quality_dim": 1 if quality_prediction else 0,
+        "error_dim": 3 if error_prediction else 0,
         "hidden_dim": hidden_dim,
         "num_layers": num_layers,
         "dropout": dropout,
@@ -1192,6 +1303,7 @@ def train_model(
         + f" training_task={training_task} loss_mode={loss_mode}"
         + f" angular_loss_scale_deg={angular_loss_scale_deg}"
         + f" mass_classification={mass_classification} quality_prediction={quality_prediction}"
+        + f" error_prediction={error_prediction}"
         + (
             f" mass_loss_mode={mass_loss_mode} mass_pos_weight_mode={mass_pos_weight_mode}"
             f" mass_pos_weight={mass_pos_weight:.6g} mass_primary_threshold=0.5"
@@ -1222,6 +1334,7 @@ def train_model(
         train_reco_losses = []
         train_mass_losses = []
         train_quality_losses = []
+        train_error_losses = []
         train_mass_counts = _empty_binary_counts()
         train_desc = f"epoch {epoch}/{epochs} train"
         train_started = time.perf_counter()
@@ -1235,11 +1348,12 @@ def train_model(
         ):
             batch = _batch_to_device(batch_cpu, device, non_blocking=pin_memory)
             pred_all = model(batch)
-            pred, mass_logit, quality_logit = _split_model_output(
+            pred, mass_logit, quality_logit, error_raw = _split_model_output(
                 pred_all,
                 target_dim,
                 mass_classification,
                 quality_prediction,
+                error_prediction,
             )
             reco_loss = None
             loss = None
@@ -1270,6 +1384,19 @@ def train_model(
                     energy_scale=quality_energy_scale,
                 )
                 loss = quality_loss if loss is None else loss + float(quality_loss_weight) * quality_loss
+            error_loss = None
+            if error_prediction and error_raw is not None and training_task != "mass":
+                error_loss = _error_prediction_loss(
+                    error_raw,
+                    pred,
+                    batch["y"],
+                    target_mean=target_mean,
+                    target_std=target_std,
+                    angular_scale_deg=error_angular_scale_deg,
+                    core_scale_km=error_core_scale_km,
+                    energy_scale=error_energy_scale,
+                )
+                loss = error_loss if loss is None else loss + float(error_loss_weight) * error_loss
             mass_loss = None
             if mass_classification and mass_logit is not None and bce_loss_fn is not None:
                 labels = batch["mass_label"].to(dtype=mass_logit.dtype)
@@ -1302,6 +1429,8 @@ def train_model(
                 train_mass_losses.append(float(mass_loss.detach().cpu()))
             if quality_loss is not None:
                 train_quality_losses.append(float(quality_loss.detach().cpu()))
+            if error_loss is not None:
+                train_error_losses.append(float(error_loss.detach().cpu()))
         train_seconds = time.perf_counter() - train_started
 
         model.eval()
@@ -1309,6 +1438,7 @@ def train_model(
         val_reco_losses = []
         val_mass_losses = []
         val_quality_losses = []
+        val_error_losses = []
         val_mass_counts = _empty_binary_counts()
         val_started = time.perf_counter()
         with torch.no_grad():
@@ -1323,11 +1453,12 @@ def train_model(
             ):
                 batch = _batch_to_device(batch_cpu, device, non_blocking=pin_memory)
                 pred_all = model(batch)
-                pred, mass_logit, quality_logit = _split_model_output(
+                pred, mass_logit, quality_logit, error_raw = _split_model_output(
                     pred_all,
                     target_dim,
                     mass_classification,
                     quality_prediction,
+                    error_prediction,
                 )
                 reco_loss = None
                 loss = None
@@ -1358,6 +1489,19 @@ def train_model(
                         energy_scale=quality_energy_scale,
                     )
                     loss = quality_loss if loss is None else loss + float(quality_loss_weight) * quality_loss
+                error_loss = None
+                if error_prediction and error_raw is not None and training_task != "mass":
+                    error_loss = _error_prediction_loss(
+                        error_raw,
+                        pred,
+                        batch["y"],
+                        target_mean=target_mean,
+                        target_std=target_std,
+                        angular_scale_deg=error_angular_scale_deg,
+                        core_scale_km=error_core_scale_km,
+                        energy_scale=error_energy_scale,
+                    )
+                    loss = error_loss if loss is None else loss + float(error_loss_weight) * error_loss
                 mass_loss = None
                 if mass_classification and mass_logit is not None and bce_loss_fn is not None:
                     labels = batch["mass_label"].to(dtype=mass_logit.dtype)
@@ -1386,6 +1530,8 @@ def train_model(
                     val_mass_losses.append(float(mass_loss.detach().cpu()))
                 if quality_loss is not None:
                     val_quality_losses.append(float(quality_loss.detach().cpu()))
+                if error_loss is not None:
+                    val_error_losses.append(float(error_loss.detach().cpu()))
         val_seconds = time.perf_counter() - val_started
         epoch_seconds = time.perf_counter() - epoch_started
 
@@ -1420,6 +1566,10 @@ def train_model(
             epoch_row["train_quality_loss"] = float(np.mean(train_quality_losses))
         if val_quality_losses:
             epoch_row["val_quality_loss"] = float(np.mean(val_quality_losses))
+        if train_error_losses:
+            epoch_row["train_error_loss"] = float(np.mean(train_error_losses))
+        if val_error_losses:
+            epoch_row["val_error_loss"] = float(np.mean(val_error_losses))
         history.append(epoch_row)
         if epoch_row["val_loss"] < best_val:
             best_val = epoch_row["val_loss"]
@@ -1444,6 +1594,7 @@ def train_model(
                     f" mass_score_std={epoch_row['val_mass_score_std']:.4g}"
                 )
             quality_text = f" quality_loss={epoch_row['val_quality_loss']:.6f}" if "val_quality_loss" in epoch_row else ""
+            error_text = f" error_loss={epoch_row['val_error_loss']:.6f}" if "val_error_loss" in epoch_row else ""
             lr_text = f" lr={epoch_row['lr']:.3g}"
             if "next_lr" in epoch_row and epoch_row["next_lr"] != epoch_row["lr"]:
                 lr_text += f" next_lr={epoch_row['next_lr']:.3g}"
@@ -1454,7 +1605,7 @@ def train_model(
             )
             _progress_write(
                 f"epoch={epoch:04d} train_loss={epoch_row['train_loss']:.6f} "
-                f"val_loss={epoch_row['val_loss']:.6f}{mass_text}{quality_text}{timing_text}{lr_text}",
+                f"val_loss={epoch_row['val_loss']:.6f}{mass_text}{quality_text}{error_text}{timing_text}{lr_text}",
             )
         if hasattr(epoch_iter, "set_postfix"):
             epoch_iter.set_postfix(
@@ -1497,7 +1648,7 @@ def train_model(
         model.load_state_dict(best_state)
 
     stage_started = time.perf_counter()
-    pred_val, target_val, mass_logit_val, mass_label_val, quality_val = _predict_numpy(
+    pred_val, target_val, mass_logit_val, mass_label_val, quality_val, error_val = _predict_numpy(
         model,
         val_loader,
         scalers,
@@ -1507,8 +1658,12 @@ def train_model(
         show_progress=show_progress,
         mass_classification=mass_classification,
         quality_prediction=quality_prediction,
+        error_prediction=error_prediction,
         target_dim=target_dim,
         mass_logit_offset=0.0,
+        error_angular_scale_deg=error_angular_scale_deg,
+        error_core_scale_km=error_core_scale_km,
+        error_energy_scale=error_energy_scale,
     )
     val_metrics = None if training_task == "mass" else reconstruction_metrics(pred_val, target_val)
     mass_threshold = 0.5
@@ -1529,7 +1684,7 @@ def train_model(
     )
     stage_seconds["validation_predict"] = time.perf_counter() - stage_started
     stage_started = time.perf_counter()
-    pred_test, target_test, mass_logit_test, mass_label_test, quality_test = _predict_numpy(
+    pred_test, target_test, mass_logit_test, mass_label_test, quality_test, error_test = _predict_numpy(
         model,
         test_loader,
         scalers,
@@ -1539,8 +1694,12 @@ def train_model(
         show_progress=show_progress,
         mass_classification=mass_classification,
         quality_prediction=quality_prediction,
+        error_prediction=error_prediction,
         target_dim=target_dim,
         mass_logit_offset=0.0,
+        error_angular_scale_deg=error_angular_scale_deg,
+        error_core_scale_km=error_core_scale_km,
+        error_energy_scale=error_energy_scale,
     )
     test_metrics = None if training_task == "mass" else reconstruction_metrics(pred_test, target_test)
     test_mass_metrics = (
@@ -1587,6 +1746,8 @@ def train_model(
             test_particle_labels=mass_label_test,
             validation_quality=quality_val,
             test_quality=quality_test,
+            validation_predicted_errors=error_val,
+            test_predicted_errors=error_test,
             energy_bin_width=diagnostic_energy_bin_width,
             min_bin_count=diagnostic_min_bin_count,
             save_reconstruction=training_task != "mass",
@@ -1646,6 +1807,11 @@ def train_model(
             "quality_angular_scale_deg": quality_angular_scale_deg,
             "quality_core_scale_km": quality_core_scale_km,
             "quality_energy_scale": quality_energy_scale,
+            "error_prediction": error_prediction,
+            "error_loss_weight": error_loss_weight,
+            "error_angular_scale_deg": error_angular_scale_deg,
+            "error_core_scale_km": error_core_scale_km,
+            "error_energy_scale": error_energy_scale,
             "learning_rate": learning_rate,
             "weight_decay": weight_decay,
             "lr_scheduler": lr_scheduler,

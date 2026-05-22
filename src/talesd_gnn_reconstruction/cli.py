@@ -872,6 +872,11 @@ def _cmd_train(args: argparse.Namespace) -> None:
         quality_angular_scale_deg=args.quality_angular_scale_deg,
         quality_core_scale_km=args.quality_core_scale_km,
         quality_energy_scale=args.quality_energy_scale,
+        error_prediction=args.error_prediction,
+        error_loss_weight=args.error_loss_weight,
+        error_angular_scale_deg=args.error_angular_scale_deg,
+        error_core_scale_km=args.error_core_scale_km,
+        error_energy_scale=args.error_energy_scale,
         show_progress=not args.no_progress,
         save_diagnostics=not args.no_diagnostics,
         diagnostic_energy_bin_width=args.diagnostic_energy_bin_width,
@@ -1039,6 +1044,11 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--quality-angular-scale-deg", type=float, default=1.0, help="quality教師値で1/eに近づく角度誤差スケール[deg]")
     train.add_argument("--quality-core-scale-km", type=float, default=0.05, help="quality教師値で1/eに近づくcore誤差スケール[km]")
     train.add_argument("--quality-energy-scale", type=float, default=0.10, help="quality教師値で1/eに近づく相対エネルギー誤差")
+    train.add_argument("--error-prediction", action="store_true", help="energy/angle/coreのevent-wise予想誤差headも同時に学習する")
+    train.add_argument("--error-loss-weight", type=float, default=0.2, help="予想誤差lossを再構成lossに足す重み")
+    train.add_argument("--error-angular-scale-deg", type=float, default=1.0, help="予想角度誤差headの教師値スケール[deg]")
+    train.add_argument("--error-core-scale-km", type=float, default=0.05, help="予想core誤差headの教師値スケール[km]")
+    train.add_argument("--error-energy-scale", type=float, default=0.10, help="予想相対エネルギー誤差headの教師値スケール")
     train.add_argument("--no-progress", action="store_true", help="学習中のprogress barを表示しない")
     train.add_argument("--no-diagnostics", action="store_true", help="学習後のPDF診断図を保存しない")
     train.add_argument("--diagnostic-energy-bin-width", type=float, default=0.1, help="診断図で使うtrue log10(E/eV) bin幅")

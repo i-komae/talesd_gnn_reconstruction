@@ -34,6 +34,31 @@ class QualityModelTest(unittest.TestCase):
 
         self.assertEqual(tuple(out.shape), (1, 9))
 
+    def test_physics_model_outputs_eventwise_error_head_when_enabled(self) -> None:
+        model = PhysicsTaleSdGNN(
+            node_dim=5,
+            edge_dim=7,
+            pulse_dim=0,
+            target_dim=7,
+            classification_dim=1,
+            quality_dim=1,
+            error_dim=3,
+            hidden_dim=16,
+            num_layers=1,
+            readout_heads=2,
+        )
+        batch = {
+            "x": torch.randn(3, 5),
+            "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+            "edge_attr": torch.randn(2, 7),
+            "batch": torch.zeros(3, dtype=torch.long),
+            "num_graphs": 1,
+        }
+
+        out = model(batch)
+
+        self.assertEqual(tuple(out.shape), (1, 12))
+
     def test_old_checkpoint_config_disables_new_time_encoder_by_default(self) -> None:
         model = build_model_from_config(
             {
