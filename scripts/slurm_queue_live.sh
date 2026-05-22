@@ -240,8 +240,12 @@ while true; do
   if [[ "${needed_rows}" -gt "${target_rows}" ]]; then
     target_rows="${needed_rows}"
   fi
-  if [[ "${needed_cols}" -gt "${target_cols}" ]]; then
-    target_cols="${needed_cols}"
+  # Keep one spare column. Writing printable text into the final terminal
+  # column can trigger automatic wrap in some terminals and make the last
+  # visible character appear to vanish during redraw.
+  needed_cols_with_margin=$((needed_cols + 1))
+  if [[ "${needed_cols_with_margin}" -gt "${target_cols}" ]]; then
+    target_cols="${needed_cols_with_margin}"
   fi
 
   request_resize "${target_rows}" "${target_cols}"
