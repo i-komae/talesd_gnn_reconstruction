@@ -22,13 +22,16 @@ if [[ -z "${CONST_DST}" && -n "${TADIR:-}" ]]; then
   CONST_DST="${TADIR%/}/data/SD/talesdconst_pass2.dst"
 fi
 
-PARTITION="${PARTITION:-}"
-CPUS_PER_TASK="${CPUS_PER_TASK:-64}"
-MEM="${MEM:-256G}"
+CPU_EXPORT_PARTITIONS="${CPU_EXPORT_PARTITIONS:-edr1-al9_large,edr2-al9_large}"
+AUTO_RESOURCES="${AUTO_RESOURCES:-1}"
+PARTITION="${PARTITION:-auto}"
+NODELIST="${NODELIST:-}"
+CPUS_PER_TASK="${CPUS_PER_TASK:-auto}"
+MEM="${MEM:-auto}"
 TIME_LIMIT="${TIME_LIMIT:-2-00:00:00}"
 
-EXPORT_WORKERS="${EXPORT_WORKERS:-${CPUS_PER_TASK}}"
-SUMMARY_WORKERS="${SUMMARY_WORKERS:-${CPUS_PER_TASK}}"
+EXPORT_WORKERS="${EXPORT_WORKERS:-auto}"
+SUMMARY_WORKERS="${SUMMARY_WORKERS:-auto}"
 WORKER_MAX_FILES="${WORKER_MAX_FILES:-200}"
 MAX_EVENTS="${MAX_EVENTS:-}"
 MAX_EVENTS_PER_FILE="${MAX_EVENTS_PER_FILE:-0}"
@@ -55,24 +58,6 @@ if [[ ! -d "${REPO}" ]]; then
   echo "repo not found: ${REPO}" >&2
   exit 2
 fi
-if [[ -z "${PARTITION}" ]]; then
-  cat >&2 <<EOF
-PARTITION is required.
-
-Do not submit CPU DST export until current server resources have been checked.
-Check the current queue, usable partitions, and free capacity first, then set
-PARTITION explicitly.
-
-Examples:
-  show_slurm_summary -c
-  sinfo -p edr1-al9_large,edr2-al9_large -o "%P %a %l %D %t %c %m %N"
-  squeue -p edr1-al9_large,edr2-al9_large
-
-Then submit, for example:
-  PARTITION=edr1-al9_large scripts/submit_server_graph_export.sh
-EOF
-  exit 2
-fi
 if [[ "${KIND}" == "mc" && -z "${CONST_DST}" ]]; then
   cat >&2 <<EOF
 CONST_DST is required for MC export.
@@ -97,6 +82,89 @@ q() {
   printf "%q" "$1"
 }
 
+split_csv() {
+  local value="$1"
+  value="${value//,/ }"
+  printf "%s\n" ${value}
+}
+
+select_cpu_resources() {
+  local report_path="$1"
+  local best_partition=""
+  local best_node=""
+  local best_free_cpu=-1
+  local best_free_mem=-1
+  local part node node_info parsed cpu_alloc cpu_tot real_mem alloc_mem free_cpu free_mem state
+
+  if ! command -v sinfo >/dev/null 2>&1 || ! command -v scontrol >/dev/null 2>&1; then
+    echo "sinfo and scontrol are required for AUTO_RESOURCES=1." >&2
+    return 2
+  fi
+
+  : > "${report_path}"
+  printf "partition\tnode\tstate\tfree_cpu\tcpu_total\tcpu_alloc\tfree_mem_mb\treal_mem_mb\talloc_mem_mb\n" >> "${report_path}"
+
+  for part in $(split_csv "${PARTITION}" | sed '/^auto$/d'); do
+    [[ -n "${part}" ]] || continue
+    while IFS= read -r node; do
+      [[ -n "${node}" ]] || continue
+      node_info="$(scontrol show node "${node}")"
+      parsed="$(
+        printf "%s\n" "${node_info}" | awk '
+          {
+            for (i = 1; i <= NF; i++) {
+              split($i, f, "=")
+              if (f[1] == "CPUAlloc") cpu_alloc = f[2]
+              if (f[1] == "CPUTot") cpu_tot = f[2]
+              if (f[1] == "RealMemory") real_mem = f[2]
+              if (f[1] == "AllocMem") alloc_mem = f[2]
+              if (f[1] == "State") state = f[2]
+            }
+          }
+          END {
+            if (cpu_alloc == "") cpu_alloc = 0
+            if (cpu_tot == "") cpu_tot = 0
+            if (real_mem == "") real_mem = 0
+            if (alloc_mem == "") alloc_mem = 0
+            if (state == "") state = "unknown"
+            print cpu_alloc, cpu_tot, real_mem, alloc_mem, state
+          }
+        '
+      )"
+      read -r cpu_alloc cpu_tot real_mem alloc_mem state <<< "${parsed}"
+      free_cpu=$((cpu_tot - cpu_alloc))
+      free_mem=$((real_mem - alloc_mem))
+      if (( free_cpu < 0 )); then
+        free_cpu=0
+      fi
+      if (( free_mem < 0 )); then
+        free_mem=0
+      fi
+      printf "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\n" \
+        "${part}" "${node}" "${state}" "${free_cpu}" "${cpu_tot}" "${cpu_alloc}" \
+        "${free_mem}" "${real_mem}" "${alloc_mem}" >> "${report_path}"
+      if (( free_cpu > best_free_cpu || (free_cpu == best_free_cpu && free_mem > best_free_mem) )); then
+        best_partition="${part}"
+        best_node="${node}"
+        best_free_cpu="${free_cpu}"
+        best_free_mem="${free_mem}"
+      fi
+    done < <(sinfo -h -p "${part}" -N -o "%N" 2>/dev/null | sort -u)
+  done
+
+  if [[ -z "${best_partition}" || -z "${best_node}" || "${best_free_cpu}" -le 0 || "${best_free_mem}" -le 0 ]]; then
+    echo "No usable free CPU node was found in candidate partitions: ${PARTITION}" >&2
+    echo "Resource scan:" >&2
+    cat "${report_path}" >&2
+    return 2
+  fi
+
+  PARTITION="${best_partition}"
+  NODELIST="${best_node}"
+  CPUS_PER_TASK="${best_free_cpu}"
+  MEM="${best_free_mem}M"
+}
+
 SBATCH_DIR="${RUN_DIR}/slurm"
 SLURM_LOG_DIR="${RUN_DIR}/slurm_logs"
 LOG_DIR="${RUN_DIR}/logs"
@@ -105,6 +173,40 @@ SUMMARY_DIR="${RUN_DIR}/summaries"
 mkdir -p "${SBATCH_DIR}" "${SLURM_LOG_DIR}" "${LOG_DIR}" "${CONFIG_DIR}" "${SUMMARY_DIR}" "${GRAPH_RUN_DIR}"
 
 SBATCH_FILE="${SBATCH_DIR}/${RUN_NAME}.sbatch"
+RESOURCE_REPORT="${CONFIG_DIR}/resource_selection.tsv"
+
+if [[ "${AUTO_RESOURCES}" == "1" ]]; then
+  if [[ "${PARTITION}" == "auto" ]]; then
+    PARTITION="${CPU_EXPORT_PARTITIONS}"
+  fi
+  select_cpu_resources "${RESOURCE_REPORT}"
+else
+  if [[ "${PARTITION}" == "auto" || -z "${PARTITION}" || "${CPUS_PER_TASK}" == "auto" || "${MEM}" == "auto" ]]; then
+    cat >&2 <<EOF
+AUTO_RESOURCES=0 requires explicit PARTITION, CPUS_PER_TASK, and MEM.
+
+Example:
+  AUTO_RESOURCES=0 PARTITION=edr1-al9_large CPUS_PER_TASK=8 MEM=32G scripts/submit_server_graph_export.sh
+EOF
+    exit 2
+  fi
+  {
+    printf "partition\tnode\tstate\tfree_cpu\tcpu_total\tcpu_alloc\tfree_mem_mb\treal_mem_mb\talloc_mem_mb\n"
+    printf "%s\t%s\tmanual\tunknown\tunknown\tunknown\tunknown\tunknown\tunknown\n" "${PARTITION}" "${NODELIST:-any}"
+  } > "${RESOURCE_REPORT}"
+fi
+
+if [[ "${EXPORT_WORKERS}" == "auto" ]]; then
+  EXPORT_WORKERS="${CPUS_PER_TASK}"
+fi
+if [[ "${SUMMARY_WORKERS}" == "auto" ]]; then
+  SUMMARY_WORKERS="${CPUS_PER_TASK}"
+fi
+
+SBATCH_NODELIST_DIRECTIVE=""
+if [[ -n "${NODELIST}" ]]; then
+  SBATCH_NODELIST_DIRECTIVE="#SBATCH --nodelist=${NODELIST}"
+fi
 
 cat > "${CONFIG_DIR}/export_submit.env" <<EOF
 REPO=${REPO}
@@ -121,6 +223,9 @@ INPUT_FILES=${INPUT_FILES}
 KIND=${KIND}
 CONST_DST=${CONST_DST}
 PARTITION=${PARTITION}
+CPU_EXPORT_PARTITIONS=${CPU_EXPORT_PARTITIONS}
+AUTO_RESOURCES=${AUTO_RESOURCES}
+NODELIST=${NODELIST}
 CPUS_PER_TASK=${CPUS_PER_TASK}
 MEM=${MEM}
 TIME_LIMIT=${TIME_LIMIT}
@@ -152,6 +257,7 @@ cat > "${SBATCH_FILE}" <<EOF
 #!/usr/bin/env bash
 #SBATCH --job-name=${RUN_NAME}
 #SBATCH --partition=${PARTITION}
+${SBATCH_NODELIST_DIRECTIVE}
 #SBATCH --cpus-per-task=${CPUS_PER_TASK}
 #SBATCH --mem=${MEM}
 #SBATCH --time=${TIME_LIMIT}
@@ -188,6 +294,7 @@ echo "date=\$(date)"
 echo "hostname=\$(hostname)"
 echo "slurm_job_id=\${SLURM_JOB_ID:-}"
 echo "partition=${PARTITION}"
+echo "nodelist=${NODELIST:-}"
 echo "cpus_per_task=${CPUS_PER_TASK}"
 echo "mem=${MEM}"
 echo "time_limit=${TIME_LIMIT}"
@@ -372,6 +479,8 @@ job_log:
   ${LOG_DIR}/${RUN_NAME}.job.log
 
 partition=${PARTITION}
+nodelist=${NODELIST:-}
+auto_resources=${AUTO_RESOURCES}
 time_limit=${TIME_LIMIT}
 cpus_per_task=${CPUS_PER_TASK}
 mem=${MEM}
@@ -382,6 +491,9 @@ energy_sample_stratify_particle=${ENERGY_SAMPLE_STRATIFY_PARTICLE}
 
 Default DST inputs:
   ${INPUT_DIRS}
+
+Resource scan:
+  ${RESOURCE_REPORT}
 ======================================================================
 EOF
 

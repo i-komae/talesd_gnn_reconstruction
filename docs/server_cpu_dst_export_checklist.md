@@ -54,20 +54,32 @@ test -r "$CONST_DST" && ls -lh "$CONST_DST"
 ## Slurm リソース
 
 CPU export の submit script は `scripts/submit_server_graph_export.sh` である。
-`PARTITION` は標準値を持たせず、投入時に明示する。
-これは、その時点の空き CPU、空きメモリ、待機列、利用可能 account を確認せずに投入先を固定しないためである。
+標準では、script が `edr1-al9_large,edr2-al9_large` の各ノードを調べ、単一ノード内で空いている CPU と Slurm 上の未割当メモリが最も大きいノードを選ぶ。
+選んだノードは `--nodelist` で固定し、その時点で空いている CPU 数を `--cpus-per-task`、未割当メモリを `--mem` に使う。
+これにより、DST export の 1 プロセスが実際に使える単一ノード資源をフルに要求する。
 標準的な初期設定は次の通り。
 
 ```text
-partition        explicit PARTITION required
-cpus-per-task    64
-memory           256G
+candidate partitions  edr1-al9_large,edr2-al9_large
+partition             auto-selected
+nodelist              auto-selected
+cpus-per-task         free CPUs on selected node
+memory                unallocated Slurm memory on selected node
 time-limit       2-00:00:00
-export workers   64
-summary workers  64
+export workers   cpus-per-task
+summary workers  cpus-per-task
 ```
 
-投入前に、partition の時間制限、空き CPU、空きメモリ、自分の account から投入できるかを確認する。
+候補 partition を変える場合は、`CPU_EXPORT_PARTITIONS` にカンマ区切りで指定する。
+特定 partition だけで自動選択したい場合は、`PARTITION` を指定する。
+
+```bash
+CPU_EXPORT_PARTITIONS=edr1-al9_large,edr2-al9_large scripts/submit_server_graph_export.sh
+PARTITION=edr2-al9_large scripts/submit_server_graph_export.sh
+```
+
+投入前に、partition の時間制限、自分の account から投入できるか、待機列を確認する。
+空き CPU とメモリは submit script でも確認し、`config/resource_selection.tsv` に保存する。
 
 ```bash
 show_slurm_summary -c
@@ -76,7 +88,7 @@ sacctmgr show assoc user=$USER format=User,Account,Partition,QOS
 squeue -u "$USER"
 ```
 
-CPU を増やす場合は、`CPUS_PER_TASK` と `EXPORT_WORKERS` を同じ値にする。
+小規模試験などで意図的に小さく投げる場合だけ、`AUTO_RESOURCES=0` を設定し、`PARTITION`、`CPUS_PER_TASK`、`MEM` を明示する。
 OpenMP 系の内部並列化で worker 数が実質的に増えすぎないように、submit script は `OMP_NUM_THREADS=1` を設定する。
 
 ## 容量と出力先
@@ -116,6 +128,7 @@ module load gcc/13.1.0 cmake/3.28 hdf5/2.0.0 mkl/latest tbb/latest
 
 ```bash
 CONST_DST=/path/to/talesdconst_pass2.dst \
+AUTO_RESOURCES=0 \
 PARTITION=edr1-al9_large \
 RUN_NAME=server_graph_export_smoke_$(date +%Y%m%d_%H%M%S) \
 MAX_EVENTS_PER_FILE=2 \
@@ -134,7 +147,6 @@ smoke test 後に、標準の energy-flat sampling で本番 export を投入す
 
 ```bash
 CONST_DST=/path/to/talesdconst_pass2.dst \
-PARTITION=edr1-al9_large \
 RUN_NAME=server_graph_export_energyflat200k_$(date +%Y%m%d_%H%M%S) \
 scripts/submit_server_graph_export.sh
 ```
