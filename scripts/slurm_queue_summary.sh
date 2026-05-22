@@ -36,6 +36,7 @@ Usage: scripts/slurm_queue_summary.sh [1] [-g|-c|-a] [-p] [-d] [-n] [-r] [-h]
 
 Default output is compact:
   - GPU/CPU/MEM Used/Total summary for GPU partitions
+  - CPU/MEM Used/Total summary for CPU partitions
   - my summary
   - job queue length by resource class and partition
 
@@ -1133,14 +1134,100 @@ print_job_queue_summary() {
     }'
 }
 
+strip_ansi() {
+  sed -E $'s/\x1B\\[[0-9;?]*[ -/]*[@-~]//g'
+}
+
+terminal_cols() {
+  tput cols 2>/dev/null || printf "0"
+}
+
+visible_width() {
+  local plain
+  plain="$(printf "%s" "$1" | strip_ansi)"
+  printf "%d" "${#plain}"
+}
+
+max_visible_width() {
+  local line width max=0
+  while IFS= read -r line; do
+    width="$(visible_width "${line}")"
+    if [[ "${width}" -gt "${max}" ]]; then
+      max="${width}"
+    fi
+  done <<< "$1"
+  printf "%d" "${max}"
+}
+
+pad_ansi_line() {
+  local line="$1"
+  local target_width="$2"
+  local width pad
+  width="$(visible_width "${line}")"
+  pad=$((target_width - width))
+  if [[ "${pad}" -lt 0 ]]; then
+    pad=0
+  fi
+  printf "%s%*s" "${line}" "${pad}" ""
+}
+
+print_side_by_side() {
+  local left="$1"
+  local right="$2"
+  local left_width="$3"
+  local gap="$4"
+  local -a left_lines right_lines
+  local n_left n_right n_lines i left_line right_line
+
+  mapfile -t left_lines <<< "${left}"
+  mapfile -t right_lines <<< "${right}"
+  n_left="${#left_lines[@]}"
+  n_right="${#right_lines[@]}"
+  n_lines="${n_left}"
+  if [[ "${n_right}" -gt "${n_lines}" ]]; then
+    n_lines="${n_right}"
+  fi
+
+  for ((i = 0; i < n_lines; i++)); do
+    left_line="${left_lines[i]:-}"
+    right_line="${right_lines[i]:-}"
+    pad_ansi_line "${left_line}" "${left_width}"
+    printf "%*s%s\n" "${gap}" "" "${right_line}"
+  done
+}
+
+print_resource_info_auto() {
+  local gpu_output cpu_output cols gap gpu_width cpu_width required
+
+  if [[ "${PARTITION_FILTER}" == "gpu" ]]; then
+    print_resource_info
+    return
+  fi
+  if [[ "${PARTITION_FILTER}" == "cpu" ]]; then
+    print_cpu_resource_info
+    return
+  fi
+
+  gpu_output="$(print_resource_info | sed '1{/^$/d;}')"
+  cpu_output="$(print_cpu_resource_info | sed '1{/^$/d;}')"
+  cols="$(terminal_cols)"
+  gap=4
+  gpu_width="$(max_visible_width "${gpu_output}")"
+  cpu_width="$(max_visible_width "${cpu_output}")"
+  required=$((gpu_width + gap + cpu_width))
+
+  echo
+  if [[ "${cols}" -gt 0 && "${required}" -le "${cols}" ]]; then
+    print_side_by_side "${gpu_output}" "${cpu_output}" "${gpu_width}" "${gap}"
+  else
+    printf "%s\n\n%s\n" "${gpu_output}" "${cpu_output}"
+  fi
+}
+
 need_command sinfo
 need_command squeue
 
-if [[ "${PARTITION_FILTER}" == "cpu" ]]; then
-  print_cpu_resource_info
-elif [[ "${PARTITION_FILTER}" != "cpu" ]]; then
-  print_resource_info
-fi
+print_resource_info_auto
 if [[ "${SHOW_PARTITIONS}" == "1" ]]; then
   print_partition_info
 fi
