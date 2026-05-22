@@ -3,6 +3,7 @@ set -euo pipefail
 
 GPU_PARTITIONS_DEFAULT="a100_devel-al9,a100_short-al9,a100-al9,a100_long-al9,b6000-al9,b6000-al9_short,b6000-al9_long,v100-al9,v100-al9_short,v100-al9_long"
 GPU_PARTITIONS="${GPU_PARTITIONS:-${GPU_PARTITIONS_DEFAULT}}"
+SLURM_QUEUE_LAYOUT="${SLURM_QUEUE_LAYOUT:-auto}"
 MY_ONLY=0
 DETAILS=0
 SHOW_NODES=0
@@ -181,7 +182,7 @@ print_resource_info() {
         }
       }
       width = 25
-      printf "%s%-2s %-10s %-4s %-25s %7s %9s %9s%s\n", bold, "", "GPU CLASS", "RSC", "USE", "USED%", "USED", "TOTAL", reset
+      printf "%s%-2s %-10s %-4s %-25s %8s %8s %8s%s\n", bold, "", "GPU CLASS", "RSC", "USE", "USED%", "USED", "TOTAL", reset
     }
 
     function class_from_part(part) {
@@ -361,9 +362,9 @@ print_resource_info() {
           print ""
         }
         printed++
-        printf "%s*%s  %-10s %-4s %s%s%s %6.1f%% %9d %9d\n", class_color(class), reset, class, "GPU", bar_color, bar, reset, pct, used[class], total[class]
-        printf "   %-10s %-4s %s%s%s %6.1f%% %9d %9d\n", "", "CPU", cpu_bar_color, cpu_bar, reset, cpu_pct, used_cpu[class], total_cpu[class]
-        printf "   %-10s %-4s %s%s%s %6.1f%% %9s %9s\n", "", "MEM", mem_bar_color, mem_bar, reset, mem_pct, mem_string(used_mem[class]), mem_string(total_mem[class])
+        printf "%s*%s  %-10s %-4s %s%s%s %7.1f%% %8d %8d\n", class_color(class), reset, class, "GPU", bar_color, bar, reset, pct, used[class], total[class]
+        printf "   %-10s %-4s %s%s%s %7.1f%% %8d %8d\n", "", "CPU", cpu_bar_color, cpu_bar, reset, cpu_pct, used_cpu[class], total_cpu[class]
+        printf "   %-10s %-4s %s%s%s %7.1f%% %8s %8s\n", "", "MEM", mem_bar_color, mem_bar, reset, mem_pct, mem_string(used_mem[class]), mem_string(total_mem[class])
       }
     }'
 }
@@ -389,7 +390,7 @@ print_cpu_resource_info() {
     BEGIN {
       nclasses = 0
       width = 25
-      printf "%s%-2s %-12s %-4s %-25s %7s %9s %9s%s\n", bold, "", "GROUP", "RSC", "USE", "USED%", "USED", "TOTAL", reset
+      printf "%s%-2s %-12s %-4s %-25s %8s %8s %8s%s\n", bold, "", "GROUP", "RSC", "USE", "USED%", "USED", "TOTAL", reset
     }
 
     function group_rank(group) {
@@ -527,8 +528,8 @@ print_cpu_resource_info() {
             print ""
           }
           printed++
-          printf "%s*%s  %-12s %-4s %s%s%s %6.1f%% %9d %9d\n", group_color(group), reset, group, "CPU", cpu_color, cpu_bar, reset, cpu_pct, used_cpu[group], total_cpu[group]
-          printf "   %-12s %-4s %s%s%s %6.1f%% %9s %9s\n", "", "MEM", mem_color, mem_bar, reset, mem_pct, mem_string(used_mem[group]), mem_string(total_mem[group])
+          printf "%s*%s  %-12s %-4s %s%s%s %7.1f%% %8d %8d\n", group_color(group), reset, group, "CPU", cpu_color, cpu_bar, reset, cpu_pct, used_cpu[group], total_cpu[group]
+          printf "   %-12s %-4s %s%s%s %7.1f%% %8s %8s\n", "", "MEM", mem_color, mem_bar, reset, mem_pct, mem_string(used_mem[group]), mem_string(total_mem[group])
         }
       }
     }'
@@ -1176,28 +1177,58 @@ print_side_by_side() {
   local right="$2"
   local left_width="$3"
   local gap="$4"
-  local -a left_lines right_lines
-  local n_left n_right n_lines i left_line right_line
+  local left_line right_line left_status right_status
 
-  mapfile -t left_lines <<< "${left}"
-  mapfile -t right_lines <<< "${right}"
-  n_left="${#left_lines[@]}"
-  n_right="${#right_lines[@]}"
-  n_lines="${n_left}"
-  if [[ "${n_right}" -gt "${n_lines}" ]]; then
-    n_lines="${n_right}"
-  fi
-
-  for ((i = 0; i < n_lines; i++)); do
-    left_line="${left_lines[i]:-}"
-    right_line="${right_lines[i]:-}"
-    pad_ansi_line "${left_line}" "${left_width}"
-    printf "%*s%s\n" "${gap}" "" "${right_line}"
+  exec 3< <(printf "%s\n" "${left}")
+  exec 4< <(printf "%s\n" "${right}")
+  while true; do
+    if IFS= read -r left_line <&3; then
+      left_status=0
+    else
+      left_status=$?
+      left_line=""
+    fi
+    if IFS= read -r right_line <&4; then
+      right_status=0
+    else
+      right_status=$?
+      right_line=""
+    fi
+    if [[ "${left_status}" -ne 0 && "${right_status}" -ne 0 ]]; then
+      break
+    fi
+    pad_ansi_line "${left_line:-}" "${left_width}"
+    printf "%*s%s\n" "${gap}" "" "${right_line:-}"
   done
+  exec 3<&-
+  exec 4<&-
+}
+
+print_block_pair_auto() {
+  local left="$1"
+  local right="$2"
+  local cols gap left_width right_width required
+
+  gap=4
+  cols="$(terminal_cols)"
+  left_width="$(max_visible_width "${left}")"
+  right_width="$(max_visible_width "${right}")"
+  required=$((left_width + gap + right_width))
+
+  echo
+  if [[ "${SLURM_QUEUE_LAYOUT}" == "wide" ]]; then
+    print_side_by_side "${left}" "${right}" "${left_width}" "${gap}"
+  elif [[ "${SLURM_QUEUE_LAYOUT}" == "vertical" ]]; then
+    printf "%s\n\n%s\n" "${left}" "${right}"
+  elif [[ "${cols}" -gt 0 && "${required}" -le "${cols}" ]]; then
+    print_side_by_side "${left}" "${right}" "${left_width}" "${gap}"
+  else
+    printf "%s\n\n%s\n" "${left}" "${right}"
+  fi
 }
 
 print_resource_info_auto() {
-  local gpu_output cpu_output cols gap gpu_width cpu_width required
+  local gpu_output cpu_output
 
   if [[ "${PARTITION_FILTER}" == "gpu" ]]; then
     print_resource_info
@@ -1210,18 +1241,45 @@ print_resource_info_auto() {
 
   gpu_output="$(print_resource_info | sed '1{/^$/d;}')"
   cpu_output="$(print_cpu_resource_info | sed '1{/^$/d;}')"
-  cols="$(terminal_cols)"
-  gap=4
-  gpu_width="$(max_visible_width "${gpu_output}")"
-  cpu_width="$(max_visible_width "${cpu_output}")"
-  required=$((gpu_width + gap + cpu_width))
+  print_block_pair_auto "${gpu_output}" "${cpu_output}"
+}
 
-  echo
-  if [[ "${cols}" -gt 0 && "${required}" -le "${cols}" ]]; then
-    print_side_by_side "${gpu_output}" "${cpu_output}" "${gpu_width}" "${gap}"
-  else
-    printf "%s\n\n%s\n" "${gpu_output}" "${cpu_output}"
+print_my_summary_auto() {
+  local gpu_output cpu_output
+
+  if [[ "${PARTITION_FILTER}" != "regular" ]]; then
+    print_summary "MY JOBS" "mine"
+    return
   fi
+
+  gpu_output="$(
+    PARTITION_FILTER="gpu"
+    print_summary "MY GPU JOBS" "mine" | sed '1{/^$/d;}'
+  )"
+  cpu_output="$(
+    PARTITION_FILTER="cpu"
+    print_summary "MY CPU JOBS" "mine" | sed '1{/^$/d;}'
+  )"
+  print_block_pair_auto "${gpu_output}" "${cpu_output}"
+}
+
+print_job_queue_summary_auto() {
+  local gpu_output cpu_output
+
+  if [[ "${PARTITION_FILTER}" != "regular" ]]; then
+    print_job_queue_summary
+    return
+  fi
+
+  gpu_output="$(
+    PARTITION_FILTER="gpu"
+    print_job_queue_summary | sed '1{/^$/d;}'
+  )"
+  cpu_output="$(
+    PARTITION_FILTER="cpu"
+    print_job_queue_summary | sed '1{/^$/d;}'
+  )"
+  print_block_pair_auto "${gpu_output}" "${cpu_output}"
 }
 
 need_command sinfo
@@ -1237,7 +1295,7 @@ fi
 if [[ "${DETAILS}" == "1" ]]; then
   print_job_table "MY JOBS" "mine"
 fi
-print_summary "MY JOBS" "mine"
+print_my_summary_auto
 if [[ "${SHOW_REASONS}" == "1" ]]; then
   print_pending_reasons "MY JOBS" "mine"
 fi
@@ -1249,7 +1307,7 @@ fi
 if [[ "${DETAILS}" == "1" ]]; then
   print_job_table "ALL JOBS" "all"
 fi
-print_job_queue_summary
+print_job_queue_summary_auto
 if [[ "${SHOW_REASONS}" == "1" ]]; then
   print_pending_reasons "ALL JOBS" "all"
 fi

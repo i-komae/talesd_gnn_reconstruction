@@ -120,6 +120,13 @@ summary_command_label() {
   fi
 }
 
+make_header() {
+  local updated_at="$1"
+  local remaining="$2"
+  printf "%sEvery %ss: %s    updated: %s    next in: %ss    Ctrl+C to exit%s" \
+    "${BOLD}${CYAN}" "${INTERVAL}" "$(summary_command_label)" "${updated_at}" "${remaining}" "${RESET}"
+}
+
 render_frame() {
   local frame="$1"
   local line
@@ -132,6 +139,28 @@ render_frame() {
   else
     printf "%s\n" "${frame}"
   fi
+}
+
+update_header_line() {
+  local updated_at="$1"
+  local remaining="$2"
+  [[ -t 1 ]] || return 0
+  printf '\033[H\033[2K%s' "$(make_header "${updated_at}" "${remaining}")"
+}
+
+sleep_with_countdown() {
+  local updated_at="$1"
+  local remaining
+
+  if [[ ! -t 1 || ! "${INTERVAL}" =~ ^[0-9]+$ || "${INTERVAL}" -le 1 ]]; then
+    sleep "${INTERVAL}"
+    return
+  fi
+
+  for ((remaining = INTERVAL; remaining > 0; remaining--)); do
+    update_header_line "${updated_at}" "${remaining}"
+    sleep 1
+  done
 }
 
 ORIG_ROWS="$(terminal_rows)"
@@ -161,13 +190,13 @@ fi
 while true; do
   output=""
   status=0
-  if output="$(FORCE_COLOR=1 "${SUMMARY_SCRIPT}" "${SUMMARY_ARGS[@]}" 2>&1)"; then
+  if output="$(SLURM_QUEUE_LAYOUT=wide FORCE_COLOR=1 "${SUMMARY_SCRIPT}" "${SUMMARY_ARGS[@]}" 2>&1)"; then
     status=0
   else
     status=$?
   fi
   updated_at="$(date '+%Y-%m-%d %H:%M:%S')"
-  header="${BOLD}${CYAN}Every ${INTERVAL}s: $(summary_command_label)    updated: ${updated_at}    next in: ${INTERVAL}s    Ctrl+C to exit${RESET}"
+  header="$(make_header "${updated_at}" "${INTERVAL}")"
   frame="${header}"$'\n'"${output}"
   if [[ "${status}" -ne 0 ]]; then
     frame="${frame}"$'\n'$'\n'"slurm_queue_summary exited with status ${status}"
@@ -190,5 +219,5 @@ while true; do
   request_resize "${target_rows}" "${target_cols}"
   render_frame "${frame}"
 
-  sleep "${INTERVAL}"
+  sleep_with_countdown "${updated_at}"
 done
