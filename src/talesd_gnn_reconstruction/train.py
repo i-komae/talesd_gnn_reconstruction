@@ -82,13 +82,14 @@ class LocalityBatchSampler:
         self.epoch = 0
 
     def __iter__(self):
-        batches = [
-            self.indices[start : start + self.batch_size]
-            for start in range(0, len(self.indices), self.batch_size)
-        ]
+        indices = list(self.indices)
         if self.shuffle_batches:
             rng = random.Random(self.seed + self.epoch)
-            rng.shuffle(batches)
+            rng.shuffle(indices)
+        batches = [
+            indices[start : start + self.batch_size]
+            for start in range(0, len(indices), self.batch_size)
+        ]
         self.epoch += 1
         yield from batches
 
@@ -1217,6 +1218,7 @@ def train_model(
     stage_started = time.perf_counter()
     epoch_iter = _progress(range(1, epochs + 1), desc="epochs", total=epochs, enabled=show_progress, position=0)
     for epoch in epoch_iter:
+        epoch_started = time.perf_counter()
         model.train()
         train_losses = []
         train_reco_losses = []
@@ -1224,6 +1226,7 @@ def train_model(
         train_quality_losses = []
         train_mass_counts = _empty_binary_counts()
         train_desc = f"epoch {epoch}/{epochs} train"
+        train_started = time.perf_counter()
         for batch_cpu in _progress(
             train_loader,
             desc=train_desc,
@@ -1301,6 +1304,7 @@ def train_model(
                 train_mass_losses.append(float(mass_loss.detach().cpu()))
             if quality_loss is not None:
                 train_quality_losses.append(float(quality_loss.detach().cpu()))
+        train_seconds = time.perf_counter() - train_started
 
         model.eval()
         val_losses = []
@@ -1308,6 +1312,7 @@ def train_model(
         val_mass_losses = []
         val_quality_losses = []
         val_mass_counts = _empty_binary_counts()
+        val_started = time.perf_counter()
         with torch.no_grad():
             val_desc = f"epoch {epoch}/{epochs} val"
             for batch_cpu in _progress(
@@ -1383,12 +1388,17 @@ def train_model(
                     val_mass_losses.append(float(mass_loss.detach().cpu()))
                 if quality_loss is not None:
                     val_quality_losses.append(float(quality_loss.detach().cpu()))
+        val_seconds = time.perf_counter() - val_started
+        epoch_seconds = time.perf_counter() - epoch_started
 
         epoch_row = {
             "epoch": epoch,
             "train_loss": float(np.mean(train_losses)),
             "val_loss": float(np.mean(val_losses)),
             "lr": float(optimizer.param_groups[0]["lr"]),
+            "train_seconds": float(train_seconds),
+            "val_seconds": float(val_seconds),
+            "epoch_seconds": float(epoch_seconds),
         }
         if train_reco_losses:
             epoch_row["train_reconstruction_loss"] = float(np.mean(train_reco_losses))
@@ -1439,9 +1449,14 @@ def train_model(
             lr_text = f" lr={epoch_row['lr']:.3g}"
             if "next_lr" in epoch_row and epoch_row["next_lr"] != epoch_row["lr"]:
                 lr_text += f" next_lr={epoch_row['next_lr']:.3g}"
+            timing_text = (
+                f" train_seconds={epoch_row['train_seconds']:.1f}"
+                f" val_seconds={epoch_row['val_seconds']:.1f}"
+                f" epoch_seconds={epoch_row['epoch_seconds']:.1f}"
+            )
             _progress_write(
                 f"epoch={epoch:04d} train_loss={epoch_row['train_loss']:.6f} "
-                f"val_loss={epoch_row['val_loss']:.6f}{mass_text}{quality_text}{lr_text}",
+                f"val_loss={epoch_row['val_loss']:.6f}{mass_text}{quality_text}{timing_text}{lr_text}",
             )
         if hasattr(epoch_iter, "set_postfix"):
             epoch_iter.set_postfix(
