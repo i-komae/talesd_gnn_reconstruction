@@ -683,6 +683,148 @@ def _reconstruction_loss(
     )
 
 
+def _gaussian_reconstruction_nll(
+    error_raw: Any,
+    pred_scaled: Any,
+    target_scaled: Any,
+    *,
+    target_mean: Any,
+    target_std: Any,
+    energy_weight: float,
+    core_weight: float,
+    direction_weight: float,
+    error_angular_scale_deg: float,
+    error_core_scale_km: float,
+    error_energy_scale: float,
+    sigma_energy_floor: float,
+    sigma_angle_floor_deg: float,
+    sigma_core_floor_km: float,
+) -> Any:
+    import torch
+    import torch.nn.functional as F
+
+    pred = _inverse_scaled_target(pred_scaled, target_mean, target_std)
+    target = _inverse_scaled_target(target_scaled, target_mean, target_std)
+    predicted_error = _physical_error_predictions(
+        error_raw,
+        angular_scale_deg=error_angular_scale_deg,
+        core_scale_km=error_core_scale_km,
+        energy_scale=error_energy_scale,
+    )
+    sigma_energy = predicted_error[:, 0].clamp_min(max(float(sigma_energy_floor), 1.0e-6))
+    sigma_angle_deg = predicted_error[:, 1].clamp_min(max(float(sigma_angle_floor_deg), 1.0e-6))
+    sigma_core_km = predicted_error[:, 2].clamp_min(max(float(sigma_core_floor_km), 1.0e-6))
+
+    loge_delta = pred[:, 0] - target[:, 0]
+    energy_residual = torch.exp(loge_delta * math.log(10.0)) - 1.0
+    energy_nll = 0.5 * (energy_residual / sigma_energy) ** 2 + torch.log(sigma_energy)
+
+    core_delta = pred[:, 1:3] - target[:, 1:3]
+    core_sq = torch.sum(core_delta * core_delta, dim=1)
+    core_nll = 0.5 * core_sq / (sigma_core_km * sigma_core_km) + 2.0 * torch.log(sigma_core_km)
+
+    pred_dir = F.normalize(pred[:, 4:7], dim=1, eps=1.0e-8)
+    target_dir = F.normalize(target[:, 4:7], dim=1, eps=1.0e-8)
+    dot = torch.sum(pred_dir * target_dir, dim=1).clamp(-1.0 + 1.0e-7, 1.0 - 1.0e-7)
+    angle_deg = torch.rad2deg(torch.acos(dot))
+    angle_nll = 0.5 * (angle_deg / sigma_angle_deg) ** 2 + torch.log(sigma_angle_deg)
+
+    weight_sum = max(float(energy_weight) + float(core_weight) + float(direction_weight), 1.0e-12)
+    return (
+        float(energy_weight) * torch.mean(energy_nll)
+        + float(core_weight) * torch.mean(core_nll)
+        + float(direction_weight) * torch.mean(angle_nll)
+    ) / weight_sum
+
+
+def _reconstruction_training_loss(
+    pred_scaled: Any,
+    target_scaled: Any,
+    error_raw: Any | None,
+    *,
+    mode: str,
+    target_mean: Any,
+    target_std: Any,
+    energy_weight: float,
+    core_weight: float,
+    direction_weight: float,
+    core_scale_km: float,
+    angular_loss_scale_deg: float,
+    nll_loss_weight: float,
+    error_angular_scale_deg: float,
+    error_core_scale_km: float,
+    error_energy_scale: float,
+    nll_sigma_energy_floor: float,
+    nll_sigma_angle_floor_deg: float,
+    nll_sigma_core_floor_km: float,
+) -> tuple[Any, dict[str, Any]]:
+    mode = str(mode).lower()
+    if mode in {"physics-nll", "nll"} and error_raw is None:
+        raise ValueError("loss_mode 'physics-nll' and 'nll' require --error-prediction")
+    if mode == "nll":
+        nll_loss = _gaussian_reconstruction_nll(
+            error_raw,
+            pred_scaled,
+            target_scaled,
+            target_mean=target_mean,
+            target_std=target_std,
+            energy_weight=energy_weight,
+            core_weight=core_weight,
+            direction_weight=direction_weight,
+            error_angular_scale_deg=error_angular_scale_deg,
+            error_core_scale_km=error_core_scale_km,
+            error_energy_scale=error_energy_scale,
+            sigma_energy_floor=nll_sigma_energy_floor,
+            sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
+            sigma_core_floor_km=nll_sigma_core_floor_km,
+        )
+        return nll_loss, {"nll": nll_loss}
+    if mode == "physics-nll":
+        physics_loss = _reconstruction_loss(
+            pred_scaled,
+            target_scaled,
+            mode="physics",
+            target_mean=target_mean,
+            target_std=target_std,
+            energy_weight=energy_weight,
+            core_weight=core_weight,
+            direction_weight=direction_weight,
+            core_scale_km=core_scale_km,
+            angular_loss_scale_deg=angular_loss_scale_deg,
+        )
+        nll_loss = _gaussian_reconstruction_nll(
+            error_raw,
+            pred_scaled,
+            target_scaled,
+            target_mean=target_mean,
+            target_std=target_std,
+            energy_weight=energy_weight,
+            core_weight=core_weight,
+            direction_weight=direction_weight,
+            error_angular_scale_deg=error_angular_scale_deg,
+            error_core_scale_km=error_core_scale_km,
+            error_energy_scale=error_energy_scale,
+            sigma_energy_floor=nll_sigma_energy_floor,
+            sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
+            sigma_core_floor_km=nll_sigma_core_floor_km,
+        )
+        loss = physics_loss + float(nll_loss_weight) * nll_loss
+        return loss, {"physics": physics_loss, "nll": nll_loss}
+    loss = _reconstruction_loss(
+        pred_scaled,
+        target_scaled,
+        mode=mode,
+        target_mean=target_mean,
+        target_std=target_std,
+        energy_weight=energy_weight,
+        core_weight=core_weight,
+        direction_weight=direction_weight,
+        core_scale_km=core_scale_km,
+        angular_loss_scale_deg=angular_loss_scale_deg,
+    )
+    return loss, {}
+
+
 def _quality_targets_from_reconstruction(
     pred_scaled: Any,
     target_scaled: Any,
@@ -1026,6 +1168,10 @@ def train_model(
     error_angular_scale_deg: float = 1.0,
     error_core_scale_km: float = 0.05,
     error_energy_scale: float = 0.10,
+    nll_loss_weight: float = 0.2,
+    nll_sigma_energy_floor: float = 0.01,
+    nll_sigma_angle_floor_deg: float = 0.05,
+    nll_sigma_core_floor_km: float = 0.005,
     show_progress: bool = True,
     save_diagnostics: bool = True,
     diagnostic_energy_bin_width: float = 0.1,
@@ -1052,6 +1198,19 @@ def train_model(
     if training_task == "mass":
         mass_classification = True
         error_prediction = False
+    loss_mode = str(loss_mode).lower()
+    valid_loss_modes = {"scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics", "physics-nll", "nll"}
+    if loss_mode not in valid_loss_modes:
+        raise ValueError(
+            "loss_mode must be 'scaled-mse', 'weighted-scaled-mse', 'hybrid-angle', "
+            "'physics', 'physics-nll', or 'nll'"
+        )
+    auto_error_prediction = False
+    if training_task != "mass" and loss_mode in {"physics-nll", "nll"} and not error_prediction:
+        error_prediction = True
+        auto_error_prediction = True
+    if auto_error_prediction:
+        error_loss_weight = 0.0
     classification_arch = str(classification_arch).lower()
     if classification_arch not in {"legacy", "enhanced"}:
         raise ValueError("classification_arch must be 'legacy' or 'enhanced'")
@@ -1305,6 +1464,14 @@ def train_model(
         + f" mass_classification={mass_classification} quality_prediction={quality_prediction}"
         + f" error_prediction={error_prediction}"
         + (
+            f" nll_loss_weight={nll_loss_weight}"
+            f" nll_sigma_energy_floor={nll_sigma_energy_floor}"
+            f" nll_sigma_angle_floor_deg={nll_sigma_angle_floor_deg}"
+            f" nll_sigma_core_floor_km={nll_sigma_core_floor_km}"
+            if loss_mode in {"physics-nll", "nll"}
+            else ""
+        )
+        + (
             f" mass_loss_mode={mass_loss_mode} mass_pos_weight_mode={mass_pos_weight_mode}"
             f" mass_pos_weight={mass_pos_weight:.6g} mass_primary_threshold=0.5"
             f" mass_ranking_weight={mass_ranking_weight:.6g} mass_ranking_margin={mass_ranking_margin:.6g}"
@@ -1332,6 +1499,8 @@ def train_model(
         model.train()
         train_losses = []
         train_reco_losses = []
+        train_physics_losses = []
+        train_nll_losses = []
         train_mass_losses = []
         train_quality_losses = []
         train_error_losses = []
@@ -1356,11 +1525,13 @@ def train_model(
                 error_prediction,
             )
             reco_loss = None
+            reco_components: dict[str, Any] = {}
             loss = None
             if training_task != "mass":
-                reco_loss = _reconstruction_loss(
+                reco_loss, reco_components = _reconstruction_training_loss(
                     pred,
                     batch["y"],
+                    error_raw,
                     mode=loss_mode,
                     target_mean=target_mean,
                     target_std=target_std,
@@ -1369,6 +1540,13 @@ def train_model(
                     direction_weight=direction_loss_weight,
                     core_scale_km=core_loss_scale_km,
                     angular_loss_scale_deg=angular_loss_scale_deg,
+                    nll_loss_weight=nll_loss_weight,
+                    error_angular_scale_deg=error_angular_scale_deg,
+                    error_core_scale_km=error_core_scale_km,
+                    error_energy_scale=error_energy_scale,
+                    nll_sigma_energy_floor=nll_sigma_energy_floor,
+                    nll_sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
+                    nll_sigma_core_floor_km=nll_sigma_core_floor_km,
                 )
                 loss = reco_loss
             quality_loss = None
@@ -1385,7 +1563,12 @@ def train_model(
                 )
                 loss = quality_loss if loss is None else loss + float(quality_loss_weight) * quality_loss
             error_loss = None
-            if error_prediction and error_raw is not None and training_task != "mass":
+            if (
+                error_prediction
+                and error_raw is not None
+                and training_task != "mass"
+                and float(error_loss_weight) > 0.0
+            ):
                 error_loss = _error_prediction_loss(
                     error_raw,
                     pred,
@@ -1425,6 +1608,10 @@ def train_model(
             train_losses.append(float(loss.detach().cpu()))
             if reco_loss is not None:
                 train_reco_losses.append(float(reco_loss.detach().cpu()))
+            if "physics" in reco_components:
+                train_physics_losses.append(float(reco_components["physics"].detach().cpu()))
+            if "nll" in reco_components:
+                train_nll_losses.append(float(reco_components["nll"].detach().cpu()))
             if mass_loss is not None:
                 train_mass_losses.append(float(mass_loss.detach().cpu()))
             if quality_loss is not None:
@@ -1436,6 +1623,8 @@ def train_model(
         model.eval()
         val_losses = []
         val_reco_losses = []
+        val_physics_losses = []
+        val_nll_losses = []
         val_mass_losses = []
         val_quality_losses = []
         val_error_losses = []
@@ -1461,11 +1650,13 @@ def train_model(
                     error_prediction,
                 )
                 reco_loss = None
+                reco_components = {}
                 loss = None
                 if training_task != "mass":
-                    reco_loss = _reconstruction_loss(
+                    reco_loss, reco_components = _reconstruction_training_loss(
                         pred,
                         batch["y"],
+                        error_raw,
                         mode=loss_mode,
                         target_mean=target_mean,
                         target_std=target_std,
@@ -1474,6 +1665,13 @@ def train_model(
                         direction_weight=direction_loss_weight,
                         core_scale_km=core_loss_scale_km,
                         angular_loss_scale_deg=angular_loss_scale_deg,
+                        nll_loss_weight=nll_loss_weight,
+                        error_angular_scale_deg=error_angular_scale_deg,
+                        error_core_scale_km=error_core_scale_km,
+                        error_energy_scale=error_energy_scale,
+                        nll_sigma_energy_floor=nll_sigma_energy_floor,
+                        nll_sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
+                        nll_sigma_core_floor_km=nll_sigma_core_floor_km,
                     )
                     loss = reco_loss
                 quality_loss = None
@@ -1490,7 +1688,12 @@ def train_model(
                     )
                     loss = quality_loss if loss is None else loss + float(quality_loss_weight) * quality_loss
                 error_loss = None
-                if error_prediction and error_raw is not None and training_task != "mass":
+                if (
+                    error_prediction
+                    and error_raw is not None
+                    and training_task != "mass"
+                    and float(error_loss_weight) > 0.0
+                ):
                     error_loss = _error_prediction_loss(
                         error_raw,
                         pred,
@@ -1526,6 +1729,10 @@ def train_model(
                 val_losses.append(float(loss.detach().cpu()))
                 if reco_loss is not None:
                     val_reco_losses.append(float(reco_loss.detach().cpu()))
+                if "physics" in reco_components:
+                    val_physics_losses.append(float(reco_components["physics"].detach().cpu()))
+                if "nll" in reco_components:
+                    val_nll_losses.append(float(reco_components["nll"].detach().cpu()))
                 if mass_loss is not None:
                     val_mass_losses.append(float(mass_loss.detach().cpu()))
                 if quality_loss is not None:
@@ -1548,6 +1755,14 @@ def train_model(
             epoch_row["train_reconstruction_loss"] = float(np.mean(train_reco_losses))
         if val_reco_losses:
             epoch_row["val_reconstruction_loss"] = float(np.mean(val_reco_losses))
+        if train_physics_losses:
+            epoch_row["train_physics_loss"] = float(np.mean(train_physics_losses))
+        if val_physics_losses:
+            epoch_row["val_physics_loss"] = float(np.mean(val_physics_losses))
+        if train_nll_losses:
+            epoch_row["train_nll_loss"] = float(np.mean(train_nll_losses))
+        if val_nll_losses:
+            epoch_row["val_nll_loss"] = float(np.mean(val_nll_losses))
         if train_mass_losses:
             epoch_row["train_mass_loss"] = float(np.mean(train_mass_losses))
             train_mass_metrics = _binary_count_metrics(train_mass_counts)
@@ -1595,6 +1810,7 @@ def train_model(
                 )
             quality_text = f" quality_loss={epoch_row['val_quality_loss']:.6f}" if "val_quality_loss" in epoch_row else ""
             error_text = f" error_loss={epoch_row['val_error_loss']:.6f}" if "val_error_loss" in epoch_row else ""
+            nll_text = f" nll_loss={epoch_row['val_nll_loss']:.6f}" if "val_nll_loss" in epoch_row else ""
             lr_text = f" lr={epoch_row['lr']:.3g}"
             if "next_lr" in epoch_row and epoch_row["next_lr"] != epoch_row["lr"]:
                 lr_text += f" next_lr={epoch_row['next_lr']:.3g}"
@@ -1605,7 +1821,7 @@ def train_model(
             )
             _progress_write(
                 f"epoch={epoch:04d} train_loss={epoch_row['train_loss']:.6f} "
-                f"val_loss={epoch_row['val_loss']:.6f}{mass_text}{quality_text}{error_text}{timing_text}{lr_text}",
+                f"val_loss={epoch_row['val_loss']:.6f}{mass_text}{quality_text}{error_text}{nll_text}{timing_text}{lr_text}",
             )
         if hasattr(epoch_iter, "set_postfix"):
             epoch_iter.set_postfix(
@@ -1812,6 +2028,10 @@ def train_model(
             "error_angular_scale_deg": error_angular_scale_deg,
             "error_core_scale_km": error_core_scale_km,
             "error_energy_scale": error_energy_scale,
+            "nll_loss_weight": nll_loss_weight,
+            "nll_sigma_energy_floor": nll_sigma_energy_floor,
+            "nll_sigma_angle_floor_deg": nll_sigma_angle_floor_deg,
+            "nll_sigma_core_floor_km": nll_sigma_core_floor_km,
             "learning_rate": learning_rate,
             "weight_decay": weight_decay,
             "lr_scheduler": lr_scheduler,

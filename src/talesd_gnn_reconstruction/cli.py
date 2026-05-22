@@ -877,6 +877,10 @@ def _cmd_train(args: argparse.Namespace) -> None:
         error_angular_scale_deg=args.error_angular_scale_deg,
         error_core_scale_km=args.error_core_scale_km,
         error_energy_scale=args.error_energy_scale,
+        nll_loss_weight=args.nll_loss_weight,
+        nll_sigma_energy_floor=args.nll_sigma_energy_floor,
+        nll_sigma_angle_floor_deg=args.nll_sigma_angle_floor_deg,
+        nll_sigma_core_floor_km=args.nll_sigma_core_floor_km,
         show_progress=not args.no_progress,
         save_diagnostics=not args.no_diagnostics,
         diagnostic_energy_bin_width=args.diagnostic_energy_bin_width,
@@ -997,7 +1001,7 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--waveform-transformer-layers", type=int, default=1)
     train.add_argument(
         "--loss-mode",
-        choices=["scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics"],
+        choices=["scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics", "physics-nll", "nll"],
         default="scaled-mse",
     )
     train.add_argument("--energy-loss-weight", type=float, default=1.0)
@@ -1049,6 +1053,10 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--error-angular-scale-deg", type=float, default=1.0, help="予想角度誤差headの教師値スケール[deg]")
     train.add_argument("--error-core-scale-km", type=float, default=0.05, help="予想core誤差headの教師値スケール[km]")
     train.add_argument("--error-energy-scale", type=float, default=0.10, help="予想相対エネルギー誤差headの教師値スケール")
+    train.add_argument("--nll-loss-weight", type=float, default=0.2, help="physics-nllでGaussian NLLをphysics lossに足す重み")
+    train.add_argument("--nll-sigma-energy-floor", type=float, default=0.01, help="Gaussian NLLで使う相対エネルギーsigmaの下限")
+    train.add_argument("--nll-sigma-angle-floor-deg", type=float, default=0.05, help="Gaussian NLLで使う角度sigma下限[deg]")
+    train.add_argument("--nll-sigma-core-floor-km", type=float, default=0.005, help="Gaussian NLLで使うcore sigma下限[km]")
     train.add_argument("--no-progress", action="store_true", help="学習中のprogress barを表示しない")
     train.add_argument("--no-diagnostics", action="store_true", help="学習後のPDF診断図を保存しない")
     train.add_argument("--diagnostic-energy-bin-width", type=float, default=0.1, help="診断図で使うtrue log10(E/eV) bin幅")

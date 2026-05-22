@@ -6,7 +6,11 @@ import unittest
 import torch
 
 from talesd_gnn_reconstruction.model import PhysicsTaleSdGNN, build_model_from_config
-from talesd_gnn_reconstruction.train import _angular_loss_from_vectors, _mass_classification_loss
+from talesd_gnn_reconstruction.train import (
+    _angular_loss_from_vectors,
+    _gaussian_reconstruction_nll,
+    _mass_classification_loss,
+)
 
 
 class QualityModelTest(unittest.TestCase):
@@ -129,6 +133,53 @@ class QualityModelTest(unittest.TestCase):
         )
 
         self.assertLess(float(separated_loss), float(flat_loss.detach()))
+
+    def test_gaussian_reconstruction_nll_uses_predicted_errors(self) -> None:
+        target_mean = torch.zeros(7, dtype=torch.float32)
+        target_std = torch.ones(7, dtype=torch.float32)
+        target = torch.tensor([[16.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]], dtype=torch.float32)
+        perfect = target.clone().requires_grad_(True)
+        shifted = torch.tensor([[16.1, 0.05, 0.0, 0.0, 0.1, 0.0, 0.995]], dtype=torch.float32)
+        error_raw = torch.zeros(1, 3, dtype=torch.float32, requires_grad=True)
+
+        perfect_loss = _gaussian_reconstruction_nll(
+            error_raw,
+            perfect,
+            target,
+            target_mean=target_mean,
+            target_std=target_std,
+            energy_weight=1.0,
+            core_weight=1.0,
+            direction_weight=1.0,
+            error_angular_scale_deg=1.0,
+            error_core_scale_km=0.05,
+            error_energy_scale=0.10,
+            sigma_energy_floor=0.01,
+            sigma_angle_floor_deg=0.05,
+            sigma_core_floor_km=0.005,
+        )
+        shifted_loss = _gaussian_reconstruction_nll(
+            error_raw,
+            shifted,
+            target,
+            target_mean=target_mean,
+            target_std=target_std,
+            energy_weight=1.0,
+            core_weight=1.0,
+            direction_weight=1.0,
+            error_angular_scale_deg=1.0,
+            error_core_scale_km=0.05,
+            error_energy_scale=0.10,
+            sigma_energy_floor=0.01,
+            sigma_angle_floor_deg=0.05,
+            sigma_core_floor_km=0.005,
+        )
+
+        self.assertTrue(torch.isfinite(perfect_loss))
+        self.assertTrue(torch.isfinite(shifted_loss))
+        self.assertGreater(float(shifted_loss.detach()), float(perfect_loss.detach()))
+        shifted_loss.backward()
+        self.assertIsNotNone(error_raw.grad)
 
 
 if __name__ == "__main__":
