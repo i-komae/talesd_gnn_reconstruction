@@ -32,7 +32,7 @@ do
 done
 ```
 
-## const DST
+## const DST と校正ファイル
 
 MC のグラフ作成では TALE-SD の検出器配置を読むため、`talesdconst_pass2.dst` が必要である。
 次のいずれかを設定する。
@@ -45,10 +45,31 @@ export TALESD_CONST_DST=/path/to/talesdconst_pass2.dst
 export TADIR=/path/to/TALE
 ```
 
+MC の `rusdraw` から `talesdcalibev` 相当の入力を作るには、Java 解析の `RUDSTBankUtil.convertRuSDRaw2TASDCalibev2` と同じ校正情報も必要である。
+次のいずれかで校正ディレクトリを指定する。
+
+```bash
+export MC_CALIB_DIR=/path/to/tale_mc_calib
+# or
+export TALE_MC_CALIB_DIR=/path/to/tale_mc_calib
+```
+
+`MC_CALIB_DIR` には、Java の `SDCalibDSTBankReader` と同じ日別 DST が必要である。
+
+```text
+talesdcalib_pass2_*.dst
+talesdcalib_pass2_*.dst.gz
+talesdcalib_pass2_typical.dst
+```
+
+`MC_CALIB_DIR/talesdconst_pass2.dst` が存在する場合、submit script は `CONST_DST` をそこから自動設定する。
+
 `CONST_DST` を使う場合は、ジョブ投入前に次を確認する。
 
 ```bash
 test -r "$CONST_DST" && ls -lh "$CONST_DST"
+test -d "$MC_CALIB_DIR"
+ls "$MC_CALIB_DIR"/talesdcalib_pass2_*.dst* "$MC_CALIB_DIR"/talesdcalib_pass2_typical.dst* 2>/dev/null | head
 ```
 
 ## Slurm リソース
@@ -128,6 +149,7 @@ module load gcc/13.1.0 cmake/3.28 hdf5/2.0.0 mkl/latest tbb/latest
 
 ```bash
 CONST_DST=/path/to/talesdconst_pass2.dst \
+MC_CALIB_DIR=/path/to/tale_mc_calib \
 AUTO_RESOURCES=0 \
 PARTITION=edr1-al9_large \
 RUN_NAME=server_graph_export_smoke_$(date +%Y%m%d_%H%M%S) \
@@ -147,6 +169,7 @@ smoke test 後に、標準の energy-flat sampling で本番 export を投入す
 
 ```bash
 CONST_DST=/path/to/talesdconst_pass2.dst \
+MC_CALIB_DIR=/path/to/tale_mc_calib \
 RUN_NAME=server_graph_export_energyflat200k_$(date +%Y%m%d_%H%M%S) \
 scripts/submit_server_graph_export.sh
 ```

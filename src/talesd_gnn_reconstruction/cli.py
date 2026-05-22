@@ -263,7 +263,7 @@ def _scan_energy_candidates_for_file(payload: tuple[str, float, int, int, bool, 
 
 
 def _build_graphs_for_file(
-    payload: tuple[str, dict[int, Any] | None, str, bool, bool, set[int] | None, int, float, int | None]
+    payload: tuple[str, dict[int, Any] | None, str, bool, bool, set[int] | None, int, float, int | None, str | None]
 ) -> dict[str, Any]:
     from .dst_reader import iter_dst_banks
     from .event_graph import build_graph_event
@@ -278,6 +278,7 @@ def _build_graphs_for_file(
         open_retries,
         open_retry_delay,
         max_events_per_file,
+        mc_calib_dir,
     ) = payload
     graphs = []
     skipped = 0
@@ -291,6 +292,7 @@ def _build_graphs_for_file(
         source_indices=source_indices,
         open_retries=open_retries,
         open_retry_delay=open_retry_delay,
+        mc_calib_dir=mc_calib_dir,
     ):
         records += 1
         graph = build_graph_event(record, detector_positions=detector_positions)
@@ -371,6 +373,7 @@ def _iter_file_results(
             int(args.open_retries),
             float(args.open_retry_delay),
             None if args.max_events_per_file is None or int(args.max_events_per_file) <= 0 else int(args.max_events_per_file),
+            str(Path(args.mc_calib_dir).expanduser()) if args.mc_calib_dir else None,
         )
         for path in inputs
         if selected_indices_by_path is None or path in selected_indices_by_path
@@ -668,6 +671,9 @@ def _cmd_export(args: argparse.Namespace) -> None:
 
     inputs = _resolve_input_args(args.input, args.input_list, args.input_dir)
     const_dst = Path(args.const_dst).expanduser() if args.const_dst else default_const_dst_path()
+    mc_calib_dir = Path(args.mc_calib_dir).expanduser() if args.mc_calib_dir else None
+    if args.kind == "mc" and mc_calib_dir is None:
+        raise ValueError("MC export requires --mc-calib-dir. Use the directory containing talesdcalib_pass2 files.")
     detector_positions = None
     if args.kind == "mc":
         detector_positions = load_tale_const_positions(const_dst)
@@ -679,6 +685,7 @@ def _cmd_export(args: argparse.Namespace) -> None:
         "input_dir": [str(Path(path).expanduser()) for path in args.input_dir],
         "kind": args.kind,
         "const_dst": str(const_dst) if const_dst is not None else None,
+        "mc_calib_dir": str(mc_calib_dir) if mc_calib_dir is not None else None,
         "max_events": args.max_events,
         "max_events_per_file": args.max_events_per_file,
         "graph_definition": "coincidence_analysis_ising_pulse_graph",
@@ -706,6 +713,7 @@ def _cmd_export(args: argparse.Namespace) -> None:
             skip_errors=args.skip_errors,
             open_retries=args.open_retries,
             open_retry_delay=args.open_retry_delay,
+            mc_calib_dir=mc_calib_dir,
         )
         graph_iter = _iter_graphs(records, args, detector_positions)
         if args.energy_sample_per_bin is not None:
@@ -955,6 +963,11 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("-o", "--output", required=True, help="出力HDF5グラフファイル")
     export.add_argument("--kind", choices=["auto", "data", "mc"], default="auto", help="入力DSTの種類")
     export.add_argument("--const-dst", default=None, help="TALE-SD detector geometry DST talesdconst_pass2.dst。MC入力で必須")
+    export.add_argument(
+        "--mc-calib-dir",
+        default=None,
+        help="MC rusdrawをJava解析相当のtalesdcalibevへ変換するための校正ディレクトリ。talesdcalib_pass2_*.dst(.gz)を読む",
+    )
     export.add_argument("--max-events", type=int, default=None, help="読み込む最大イベント数")
     export.add_argument("--max-events-per-file", type=int, default=None, help="ファイル単位export時に各DSTから読む最大イベント数。source-path splitの小規模試験用")
     export.add_argument("--energy-sample-per-bin", type=int, default=None, help="log10(E/eV) binごとに残す最大グラフ数。reservoir samplingで時刻順バイアスを避ける")

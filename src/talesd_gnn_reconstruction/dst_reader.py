@@ -8,9 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from .layout import DetectorPosition
+from .mc_calibration import TaleMcCalibrationDB
 
 
 class DstUnitExhaustionError(RuntimeError):
+    pass
+
+
+class MissingMcCalibrationError(RuntimeError):
     pass
 
 
@@ -20,6 +25,20 @@ class BankRecord:
     source_path: str
     source_index: int
     source_kind: str
+
+
+_MC_CALIBRATION_CACHE: dict[str, TaleMcCalibrationDB] = {}
+
+
+def _get_mc_calibration_db(calib_dir: str | Path | None) -> TaleMcCalibrationDB | None:
+    if calib_dir is None:
+        return None
+    key = str(Path(calib_dir).expanduser())
+    db = _MC_CALIBRATION_CACHE.get(key)
+    if db is None:
+        db = TaleMcCalibrationDB(Path(key))
+        _MC_CALIBRATION_CACHE[key] = db
+    return db
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -75,27 +94,35 @@ def _rusdraw_sub_to_talesd(
     sid: int,
     lid: int,
     detector: DetectorPosition,
+    calibration_record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     mip = rusdraw.get("mip")
     pchped = rusdraw.get("pchped")
     lhpchped = rusdraw.get("lhpchped")
     rhpchped = rusdraw.get("rhpchped")
     fadc = rusdraw.get("fadc")
+    calib = calibration_record or {}
 
     return {
         "site": int(lid),
         "lid": int(lid),
-        "dontUse": 0,
+        "dontUse": int(calib.get("dontUse", 0)),
         "clock": int(_nested(rusdraw.get("clkcnt"), sid, default=0)),
         "maxClock": int(_nested(rusdraw.get("mclkcnt"), sid, default=50_000_000)),
         "uwf": _as_list(fadc[sid][1]) if fadc is not None else [],
         "lwf": _as_list(fadc[sid][0]) if fadc is not None else [],
-        "upedAvr": _nested(pchped, sid, 1, default=0.0) / 8.0,
-        "lpedAvr": _nested(pchped, sid, 0, default=0.0) / 8.0,
-        "upedStdev": (_nested(rhpchped, sid, 1, default=0.0) - _nested(lhpchped, sid, 1, default=0.0)) / 8.0 / 2.35,
-        "lpedStdev": (_nested(rhpchped, sid, 0, default=0.0) - _nested(lhpchped, sid, 0, default=0.0)) / 8.0 / 2.35,
-        "umipMev2cnt": _positive(_nested(mip, sid, 1, default=0.0) / 2.4),
-        "lmipMev2cnt": _positive(_nested(mip, sid, 0, default=0.0) / 2.4),
+        "upedAvr": float(calib.get("upedAvr", _nested(pchped, sid, 1, default=0.0) / 8.0)),
+        "lpedAvr": float(calib.get("lpedAvr", _nested(pchped, sid, 0, default=0.0) / 8.0)),
+        "upedStdev": _positive(
+            float(calib.get("upedStdev", (_nested(rhpchped, sid, 1, default=0.0) - _nested(lhpchped, sid, 1, default=0.0)) / 8.0 / 2.35))
+        ),
+        "lpedStdev": _positive(
+            float(calib.get("lpedStdev", (_nested(rhpchped, sid, 0, default=0.0) - _nested(lhpchped, sid, 0, default=0.0)) / 8.0 / 2.35))
+        ),
+        "umipMev2cnt": _positive(float(calib.get("umipMev2cnt", _nested(mip, sid, 1, default=0.0) / 2.4))),
+        "lmipMev2cnt": _positive(float(calib.get("lmipMev2cnt", _nested(mip, sid, 0, default=0.0) / 2.4))),
+        "umipMev2pe": float(calib.get("umipMev2pe", 0.0)),
+        "lmipMev2pe": float(calib.get("lmipMev2pe", 0.0)),
         "posX": detector.x_km * 1.0e3,
         "posY": detector.y_km * 1.0e3,
         "posZ": detector.z_km * 1.0e3,
@@ -109,10 +136,18 @@ def _rusdraw_sub_to_talesd(
 def _convert_rusdraw_event(
     event: dict[str, Any],
     detector_positions: dict[int, DetectorPosition],
+    mc_calibration: TaleMcCalibrationDB | None = None,
 ) -> dict[str, Any] | None:
     rusdraw = event.get("rusdraw")
     if not rusdraw:
         return None
+    date = int(rusdraw.get("yymmdd", 0))
+    time_value = int(rusdraw.get("hhmmss", 0))
+    if mc_calibration is not None and not mc_calibration.has_calibration_source(date, time_value):
+        raise MissingMcCalibrationError(
+            f"TALE MC calibration source not found for event date/time {date:06d} {time_value:06d} "
+            f"in {mc_calibration.calib_dir}"
+        )
 
     sub: list[dict[str, Any]] = []
     for sid, lid_value in enumerate(rusdraw.get("xxyy", [])):
@@ -120,9 +155,12 @@ def _convert_rusdraw_event(
         detector = detector_positions.get(lid)
         if detector is None:
             continue
+        calibration_record = mc_calibration.get_record(date, time_value, lid) if mc_calibration is not None else None
+        if mc_calibration is not None and calibration_record is None:
+            continue
         try:
-            sub.append(_rusdraw_sub_to_talesd(rusdraw, sid, lid, detector))
-        except Exception:
+            sub.append(_rusdraw_sub_to_talesd(rusdraw, sid, lid, detector, calibration_record=calibration_record))
+        except (KeyError, IndexError, TypeError, ValueError):
             continue
 
     if not sub:
@@ -130,8 +168,8 @@ def _convert_rusdraw_event(
 
     return {
         "eventCode": 0 if event.get("rusdmc") else 1,
-        "date": int(rusdraw.get("yymmdd", 0)),
-        "time": int(rusdraw.get("hhmmss", 0)),
+        "date": date,
+        "time": time_value,
         "usec": int(rusdraw.get("usec", 0)),
         "trgMode": 0,
         "sub": sub,
@@ -171,6 +209,7 @@ def iter_dst_banks(
     source_indices: set[int] | None = None,
     open_retries: int = 1,
     open_retry_delay: float = 1.0,
+    mc_calib_dir: str | Path | None = None,
 ) -> Iterator[BankRecord]:
     """Stream TALE-SD-like calibev banks from data or MC DST files."""
 
@@ -178,8 +217,11 @@ def iter_dst_banks(
 
     if kind not in {"auto", "data", "mc"}:
         raise ValueError(f"unsupported input kind: {kind}")
+    if kind == "mc" and mc_calib_dir is None:
+        raise ValueError("MC rusdraw input requires --mc-calib-dir to load TALE-SD calibration")
 
     emitted = 0
+    mc_calibration = _get_mc_calibration_db(mc_calib_dir)
     for path_obj in paths:
         path = Path(path_obj).expanduser()
         dst_handle = None
@@ -208,7 +250,9 @@ def iter_dst_banks(
                     if bank is None and (kind in {"auto", "mc"}):
                         if detector_positions is None:
                             raise ValueError("MC rusdraw input requires TALE-SD positions from talesdconst; pass --const-dst")
-                        bank = _convert_rusdraw_event(event, detector_positions)
+                        if mc_calibration is None:
+                            raise ValueError("MC rusdraw input requires --mc-calib-dir to load TALE-SD calibration")
+                        bank = _convert_rusdraw_event(event, detector_positions, mc_calibration=mc_calibration)
                         source_kind = "mc"
                     if bank is None:
                         continue
@@ -226,6 +270,8 @@ def iter_dst_banks(
         except Exception as exc:
             if _is_dst_unit_exhaustion(exc):
                 _raise_dst_unit_exhaustion(exc)
+            if isinstance(exc, MissingMcCalibrationError):
+                raise
             if not skip_errors:
                 raise
             print(f"warning: skipping unreadable DST {path}: {exc}")

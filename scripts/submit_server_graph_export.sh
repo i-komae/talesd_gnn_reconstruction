@@ -17,7 +17,11 @@ INPUT_LISTS="${INPUT_LISTS:-}"
 INPUT_FILES="${INPUT_FILES:-}"
 
 KIND="${KIND:-mc}"
+MC_CALIB_DIR="${MC_CALIB_DIR:-${TALE_MC_CALIB_DIR:-}}"
 CONST_DST="${CONST_DST:-${TALESD_CONST_DST:-}}"
+if [[ -z "${CONST_DST}" && -n "${MC_CALIB_DIR}" && -f "${MC_CALIB_DIR%/}/talesdconst_pass2.dst" ]]; then
+  CONST_DST="${MC_CALIB_DIR%/}/talesdconst_pass2.dst"
+fi
 if [[ -z "${CONST_DST}" && -n "${TADIR:-}" ]]; then
   CONST_DST="${TADIR%/}/data/SD/talesdconst_pass2.dst"
 fi
@@ -69,9 +73,36 @@ Set one of:
 EOF
   exit 2
 fi
+if [[ "${KIND}" == "mc" && -z "${MC_CALIB_DIR}" ]]; then
+  cat >&2 <<EOF
+MC_CALIB_DIR is required for MC export.
+
+Use the calibration directory used by the Java TALE-SD analysis path.
+It must contain:
+  talesdcalib_pass2_*.dst(.gz)
+  talesdcalib_pass2_typical.dst
+
+If the same directory contains talesdconst_pass2.dst, CONST_DST is inferred automatically.
+EOF
+  exit 2
+fi
 if [[ "${KIND}" == "mc" && ! -f "${CONST_DST}" ]]; then
   echo "const DST not found: ${CONST_DST}" >&2
   exit 2
+fi
+if [[ "${KIND}" == "mc" && ! -d "${MC_CALIB_DIR}" ]]; then
+  echo "MC calibration directory not found: ${MC_CALIB_DIR}" >&2
+  exit 2
+fi
+if [[ "${KIND}" == "mc" ]]; then
+  shopt -s nullglob
+  mc_calib_sources=("${MC_CALIB_DIR%/}"/talesdcalib_pass2_*.dst "${MC_CALIB_DIR%/}"/talesdcalib_pass2_*.dst.gz "${MC_CALIB_DIR%/}"/talesdcalib_pass2_typical.dst "${MC_CALIB_DIR%/}"/talesdcalib_pass2_typical.dst.gz)
+  shopt -u nullglob
+  if (( ${#mc_calib_sources[@]} == 0 )); then
+    echo "No TALE MC calibration files found in ${MC_CALIB_DIR}" >&2
+    echo "Expected talesdcalib_pass2_*.dst(.gz) or talesdcalib_pass2_typical.dst(.gz)" >&2
+    exit 2
+  fi
 fi
 if [[ -z "${INPUT_DIRS}${INPUT_LISTS}${INPUT_FILES}" ]]; then
   echo "No DST input specified. Set INPUT_DIRS, INPUT_LISTS, or INPUT_FILES." >&2
@@ -222,6 +253,7 @@ INPUT_LISTS=${INPUT_LISTS}
 INPUT_FILES=${INPUT_FILES}
 KIND=${KIND}
 CONST_DST=${CONST_DST}
+MC_CALIB_DIR=${MC_CALIB_DIR}
 PARTITION=${PARTITION}
 CPU_EXPORT_PARTITIONS=${CPU_EXPORT_PARTITIONS}
 AUTO_RESOURCES=${AUTO_RESOURCES}
@@ -280,6 +312,7 @@ export UV_LINK_MODE=$(q "${UV_LINK_MODE}")
 export OMP_NUM_THREADS=$(q "${OMP_NUM_THREADS}")
 export PYTHONUNBUFFERED=$(q "${PYTHONUNBUFFERED}")
 export TALESD_CONST_DST=$(q "${CONST_DST}")
+export TALE_MC_CALIB_DIR=$(q "${MC_CALIB_DIR}")
 
 INPUT_DIRS_VALUE=$(q "${INPUT_DIRS}")
 INPUT_LISTS_VALUE=$(q "${INPUT_LISTS}")
@@ -304,6 +337,7 @@ echo "worker_max_files=${WORKER_MAX_FILES}"
 echo "graph_output=${GRAPH_OUTPUT}"
 echo "kind=${KIND}"
 echo "const_dst=${CONST_DST}"
+echo "mc_calib_dir=${MC_CALIB_DIR}"
 echo "max_events=${MAX_EVENTS}"
 echo "max_events_per_file=${MAX_EVENTS_PER_FILE}"
 echo "energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}"
@@ -389,6 +423,9 @@ export_cmd+=(
   --open-retry-delay "${OPEN_RETRY_DELAY}"
   --seed "${SEED}"
 )
+if [[ "${KIND}" == "mc" ]]; then
+  export_cmd+=(--mc-calib-dir $(q "${MC_CALIB_DIR}"))
+fi
 
 if [[ -n "${MAX_EVENTS}" ]]; then
   export_cmd+=(--max-events "${MAX_EVENTS}")

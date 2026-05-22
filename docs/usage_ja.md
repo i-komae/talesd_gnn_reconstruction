@@ -19,7 +19,7 @@
 | MC | `rusdraw`, `rusdmc` | 学習用。`rusdmc` から energy/core/direction のtruthを作る。 |
 | data | `talesdcalibev` | 推論用。truthなしでグラフ化する。 |
 
-SD座標はテキスト配置表からは読みません。dataの `talesdcalibev` では各hit sub bank内の `posX/posY/posZ` を使い、MCの `rusdraw` では `talesdconst_pass2.dst` の `talesdconst` bankから `lid -> posX/posY/posZ` を作って補います。
+SD座標はテキスト配置表からは読みません。dataの `talesdcalibev` では各hit sub bank内の `posX/posY/posZ` を使い、MCの `rusdraw` では `talesdconst_pass2.dst` の `talesdconst` bankから `lid -> posX/posY/posZ` を作って補います。MCのpedestalとMIP換算係数は `rusdraw` の値を主入力にせず、Java解析の `RUDSTBankUtil.convertRuSDRaw2TASDCalibev2` と同じ考え方で外部校正から取得します。
 
 ## セットアップ
 
@@ -43,6 +43,7 @@ C++/pybind11拡張を明示的に再ビルドする場合:
 uv run talesd-gnn export /path/to/DATXXXXXX_tale.dst.gz \
   --kind mc \
   --const-dst $TADIR/data/SD/talesdconst_pass2.dst \
+  --mc-calib-dir /path/to/tale_mc_calib \
   --workers 4 \
   --shard-size 100000 \
   -o outputs/mc_graphs.h5
@@ -63,6 +64,7 @@ uv run talesd-gnn export \
   --input-dir /path/to/tale_proton5.5yr_18-18.9 \
   --kind mc \
   --const-dst $TADIR/data/SD/talesdconst_pass2.dst \
+  --mc-calib-dir /path/to/tale_mc_calib \
   --energy-sample-per-bin 10000 \
   --energy-bin-width 0.1 \
   --energy-oversample-factor 2 \
@@ -89,6 +91,7 @@ uv run talesd-gnn export \
 | `--input-dir PATH` | ディレクトリ内の `*.dst.gz` を再帰的に入力する。多数MCではこれを推奨。 |
 | `--input-list PATH` | 入力DSTパスを1行1ファイルで書いたリスト。 |
 | `--const-dst PATH` | MC `rusdraw` の `lid` からSD座標を引くための `talesdconst_pass2.dst`。未指定なら `TALESD_CONST_DST` または `$TADIR/data/SD/talesdconst_pass2.dst` を探す。 |
+| `--mc-calib-dir PATH` | MC `rusdraw` を `talesdcalibev` 相当へ変換するための校正ディレクトリ。Java解析と同じ `talesdcalib_pass2_*.dst(.gz)` を読む。MCでは必須。 |
 | `--energy-sample-per-bin N` | `log10(E/eV)` binごとに最大N graphをランダム抽出する。 |
 | `--energy-bin-width W` | energy samplingのbin幅。初期値は0.1。 |
 | `--energy-oversample-factor F` | graph化前のmetadata scanで各binから余分に残す倍率。初期値は2。 |
@@ -355,7 +358,7 @@ uv run talesd-gnn visualize \
 ## 実装上の注意
 
 - waveform処理は `JAIDATALESDAnalyzer.java` と既存 `coincidence_analysis/talecoin/reconstruction.py` を参考に、`SDPreAnalysis` 相当のpulse searchと上下層coincidenceをPythonで実装しています。
-- MCの `rusdraw` は `talesdcalibev` に似た擬似bankへ変換します。検出器位置は `talesdconst_pass2.dst`、pedestal/MIP変換係数は `rusdraw` 内の値から作ります。
+- MCの `rusdraw` は `talesdcalibev` に似た擬似bankへ変換します。検出器位置は `talesdconst_pass2.dst` から補い、pedestal/MIP換算係数は `--mc-calib-dir` の外部校正から取得します。`rusdraw` 内の値は校正recordがない場合の旧式の補助経路であり、通常のMC exportでは使いません。
 - dataの `talesdcalibev` はbank内の `posX/posY/posZ`、pedestal、MIP変換係数をそのまま使います。
 - GNNは `torch-geometric` を使わず、PyTorchだけでpulse集合poolingとedge message passingを実装しています。依存関係を単純にし、TALE-SD固有のpulse/edge featureを直接扱うためです。
 - この初期版は教師あり回帰です。実データで性能評価するには、まずMCで十分に学習し、既存のTALE-SD再構成結果やハイブリッド再構成との比較が必要です。

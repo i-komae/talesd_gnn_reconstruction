@@ -18,7 +18,7 @@ export DSTDIR=/path/to/dst2k-ta
 uv sync
 ```
 
-`dstio` は親ディレクトリの `../dstio` を editable path dependency として参照します。SD座標はテキスト表ではなく、MCでは `talesdconst_pass2.dst` の `talesdconst` bank、dataでは `talesdcalibev` bank内の位置情報から読みます。
+`dstio` は親ディレクトリの `../dstio` を editable path dependency として参照します。SD座標はテキスト表ではなく、MCでは `talesdconst_pass2.dst` の `talesdconst` bank、dataでは `talesdcalibev` bank内の位置情報から読みます。MCのpedestalとMIP換算係数は、Java解析の `RUDSTBankUtil.convertRuSDRaw2TASDCalibev2` と同じく外部校正を使います。
 
 C++/pybind11拡張を明示的に再ビルドする場合:
 
@@ -34,6 +34,7 @@ MC DSTをグラフへ変換:
 uv run talesd-gnn export /path/to/mc.dst.gz \
   --kind mc \
   --const-dst $TADIR/data/SD/talesdconst_pass2.dst \
+  --mc-calib-dir /path/to/tale_mc_calib \
   --workers 4 \
   --shard-size 100000 \
   -o outputs/mc_graphs.h5
@@ -48,6 +49,7 @@ uv run talesd-gnn export \
   --input-dir /path/to/tale_proton5.5yr_18-18.9 \
   --kind mc \
   --const-dst $TADIR/data/SD/talesdconst_pass2.dst \
+  --mc-calib-dir /path/to/tale_mc_calib \
   --energy-sample-per-bin 10000 \
   --energy-bin-width 0.1 \
   --energy-oversample-factor 2 \
