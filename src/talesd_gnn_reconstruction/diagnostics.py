@@ -1306,6 +1306,7 @@ def _save_mass_pdf(
     energy_bin_width: float,
     min_bin_count: int,
     threshold: float = 0.5,
+    tuned_threshold: float | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     _prepare_matplotlib()
     import matplotlib.pyplot as plt
@@ -1323,9 +1324,17 @@ def _save_mass_pdf(
     truth = labels >= 0.5
     predictions = scores >= float(threshold)
     metrics = binary_classification_metrics(logits, labels, threshold=threshold)
+    tuned_metrics = (
+        binary_classification_metrics(logits, labels, threshold=tuned_threshold)
+        if tuned_threshold is not None
+        else None
+    )
     energy_rows = _mass_energy_bin_table(target[:, 0], scores, labels, energy_bin_width, threshold=threshold)
     summary: dict[str, Any] = {
         **metrics,
+        "primary_threshold": float(threshold),
+        "tuned_threshold": None if tuned_threshold is None else float(tuned_threshold),
+        "tuned_metrics": tuned_metrics,
         "energy_bins": energy_rows,
     }
 
@@ -1360,6 +1369,14 @@ def _save_mass_pdf(
     if iron_scores.size:
         ax.hist(iron_scores, bins=bins, histtype="step", linewidth=1.6, label="true iron", color=IRON_COLOR)
     ax.axvline(float(threshold), color="0.25", linestyle="--", linewidth=1.1, label=f"threshold={threshold:.3g}")
+    if tuned_threshold is not None and abs(float(tuned_threshold) - float(threshold)) > 1.0e-6:
+        ax.axvline(
+            float(tuned_threshold),
+            color="0.5",
+            linestyle=":",
+            linewidth=1.1,
+            label=f"tuned={tuned_threshold:.3g}",
+        )
     ax.set_title(f"{split_name}: predicted iron probability")
     ax.set_xlabel("P(iron)")
     ax.set_ylabel("events")
@@ -2018,8 +2035,9 @@ def save_training_diagnostics(
             )
             if summary is not None:
                 diagnostics[f"{split_name}_species"] = summary
-    mass_threshold = (
-        balanced_accuracy_threshold(validation_mass[0], validation_mass[1]) if validation_mass is not None else 0.5
+    mass_threshold = 0.5
+    tuned_mass_threshold = (
+        balanced_accuracy_threshold(validation_mass[0], validation_mass[1]) if validation_mass is not None else None
     )
     for split_name, mass_pair, reco_pair in [
         ("validation", validation_mass, validation),
@@ -2036,6 +2054,7 @@ def save_training_diagnostics(
             energy_bin_width=energy_bin_width,
             min_bin_count=min_bin_count,
             threshold=mass_threshold,
+            tuned_threshold=tuned_mass_threshold,
         )
         diagnostics[f"{split_name}_mass"] = summary
 

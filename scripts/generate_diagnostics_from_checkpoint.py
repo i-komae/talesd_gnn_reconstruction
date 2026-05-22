@@ -153,7 +153,6 @@ def main() -> None:
     mass_classification = int(ckpt["model_config"].get("classification_dim", 0)) > 0
     quality_prediction = int(ckpt["model_config"].get("quality_dim", 0)) > 0
     load_detector_lids = int(ckpt["model_config"].get("detector_embedding_dim", 0)) > 0
-    mass_logit_offset = float(ckpt.get("runtime", {}).get("mass_logit_offset", 0.0))
     if not args.no_prediction_cache and cache_path.exists() and not args.refresh_prediction_cache:
         print(f"using prediction cache: {cache_path}", flush=True)
         (
@@ -169,7 +168,8 @@ def main() -> None:
             quality_test,
         ) = _load_prediction_cache(cache_path)
         val_metrics = reconstruction_metrics(pred_val, target_val)
-        mass_threshold = (
+        mass_threshold = 0.5
+        tuned_mass_threshold = (
             balanced_accuracy_threshold(mass_logit_val, mass_label_val)
             if mass_logit_val is not None and mass_label_val is not None
             else 0.5
@@ -179,9 +179,19 @@ def main() -> None:
             if mass_logit_val is not None and mass_label_val is not None
             else None
         )
+        val_mass_tuned_metrics = (
+            binary_classification_metrics(mass_logit_val, mass_label_val, threshold=tuned_mass_threshold)
+            if mass_logit_val is not None and mass_label_val is not None
+            else None
+        )
         test_metrics = reconstruction_metrics(pred_test, target_test)
         test_mass_metrics = (
             binary_classification_metrics(mass_logit_test, mass_label_test, threshold=mass_threshold)
+            if mass_logit_test is not None and mass_label_test is not None
+            else None
+        )
+        test_mass_tuned_metrics = (
+            binary_classification_metrics(mass_logit_test, mass_label_test, threshold=tuned_mass_threshold)
             if mass_logit_test is not None and mass_label_test is not None
             else None
         )
@@ -209,6 +219,8 @@ def main() -> None:
             "test": test_metrics,
             "validation_mass": val_mass_metrics,
             "test_mass": test_mass_metrics,
+            "validation_mass_tuned": val_mass_tuned_metrics,
+            "test_mass_tuned": test_mass_tuned_metrics,
         }
         if output_path == checkpoint_path:
             _update_metrics_json(checkpoint_path, diagnostics, metrics, elapsed)
@@ -288,10 +300,11 @@ def main() -> None:
             mass_classification=mass_classification,
             quality_prediction=quality_prediction,
             target_dim=target_dim,
-            mass_logit_offset=mass_logit_offset,
+            mass_logit_offset=0.0,
         )
         val_metrics = reconstruction_metrics(pred_val, target_val)
-        mass_threshold = (
+        mass_threshold = 0.5
+        tuned_mass_threshold = (
             balanced_accuracy_threshold(mass_logit_val, mass_label_val)
             if mass_logit_val is not None and mass_label_val is not None
             else 0.5
@@ -301,9 +314,16 @@ def main() -> None:
             if mass_logit_val is not None and mass_label_val is not None
             else None
         )
+        val_mass_tuned_metrics = (
+            binary_classification_metrics(mass_logit_val, mass_label_val, threshold=tuned_mass_threshold)
+            if mass_logit_val is not None and mass_label_val is not None
+            else None
+        )
         print("validation metrics:", json.dumps(val_metrics, sort_keys=True), flush=True)
         if val_mass_metrics is not None:
             print("validation mass metrics:", json.dumps(val_mass_metrics, sort_keys=True), flush=True)
+        if val_mass_tuned_metrics is not None:
+            print("validation mass tuned metrics:", json.dumps(val_mass_tuned_metrics, sort_keys=True), flush=True)
 
         test_loader = _make_graph_loader(
             dataset,
@@ -331,7 +351,7 @@ def main() -> None:
             mass_classification=mass_classification,
             quality_prediction=quality_prediction,
             target_dim=target_dim,
-            mass_logit_offset=mass_logit_offset,
+            mass_logit_offset=0.0,
         )
         test_metrics = reconstruction_metrics(pred_test, target_test)
         test_mass_metrics = (
@@ -339,9 +359,16 @@ def main() -> None:
             if mass_logit_test is not None and mass_label_test is not None
             else None
         )
+        test_mass_tuned_metrics = (
+            binary_classification_metrics(mass_logit_test, mass_label_test, threshold=tuned_mass_threshold)
+            if mass_logit_test is not None and mass_label_test is not None
+            else None
+        )
         print("test metrics:", json.dumps(test_metrics, sort_keys=True), flush=True)
         if test_mass_metrics is not None:
             print("test mass metrics:", json.dumps(test_mass_metrics, sort_keys=True), flush=True)
+        if test_mass_tuned_metrics is not None:
+            print("test mass tuned metrics:", json.dumps(test_mass_tuned_metrics, sort_keys=True), flush=True)
         if not args.no_prediction_cache:
             _save_prediction_cache(
                 cache_path,
@@ -382,6 +409,8 @@ def main() -> None:
             "test": test_metrics,
             "validation_mass": val_mass_metrics,
             "test_mass": test_mass_metrics,
+            "validation_mass_tuned": val_mass_tuned_metrics,
+            "test_mass_tuned": test_mass_tuned_metrics,
         }
         if output_path == checkpoint_path:
             _update_metrics_json(checkpoint_path, diagnostics, metrics, elapsed)

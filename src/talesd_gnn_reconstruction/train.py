@@ -1114,7 +1114,6 @@ def train_model(
     target_mean, target_std = _target_scaler_tensors(scalers, device)
     bce_loss_fn = None
     mass_pos_weight = 1.0
-    mass_logit_offset = 0.0
     mass_pos_weight_tensor = None
     if mass_classification:
         stage_started_labels = time.perf_counter()
@@ -1127,7 +1126,6 @@ def train_model(
         negatives = float(np.sum(finite_labels < 0.5))
         if mass_pos_weight_mode == "auto":
             mass_pos_weight = negatives / max(positives, 1.0)
-            mass_logit_offset = math.log(max(mass_pos_weight, 1.0e-12))
             mass_pos_weight_tensor = torch.tensor(mass_pos_weight, dtype=torch.float32, device=device)
         bce_loss_fn = True
         stage_seconds["scan_particle_labels"] = time.perf_counter() - stage_started_labels
@@ -1196,7 +1194,7 @@ def train_model(
         + f" mass_classification={mass_classification} quality_prediction={quality_prediction}"
         + (
             f" mass_loss_mode={mass_loss_mode} mass_pos_weight_mode={mass_pos_weight_mode}"
-            f" mass_pos_weight={mass_pos_weight:.6g} mass_logit_offset={mass_logit_offset:.6g}"
+            f" mass_pos_weight={mass_pos_weight:.6g} mass_primary_threshold=0.5"
             f" mass_ranking_weight={mass_ranking_weight:.6g} mass_ranking_margin={mass_ranking_margin:.6g}"
             if mass_classification
             else ""
@@ -1286,7 +1284,7 @@ def train_model(
                         ranking_weight=mass_ranking_weight,
                         ranking_margin=mass_ranking_margin,
                     )
-                    _update_binary_counts(train_mass_counts, mass_logit[mask], labels[mask], logit_offset=mass_logit_offset)
+                    _update_binary_counts(train_mass_counts, mass_logit[mask], labels[mask], logit_offset=0.0)
                     if training_task == "mass":
                         loss = mass_loss
                     else:
@@ -1374,7 +1372,7 @@ def train_model(
                             ranking_weight=mass_ranking_weight,
                             ranking_margin=mass_ranking_margin,
                         )
-                        _update_binary_counts(val_mass_counts, mass_logit[mask], labels[mask], logit_offset=mass_logit_offset)
+                        _update_binary_counts(val_mass_counts, mass_logit[mask], labels[mask], logit_offset=0.0)
                         if training_task == "mass":
                             loss = mass_loss
                         else:
@@ -1510,16 +1508,22 @@ def train_model(
         mass_classification=mass_classification,
         quality_prediction=quality_prediction,
         target_dim=target_dim,
-        mass_logit_offset=mass_logit_offset,
+        mass_logit_offset=0.0,
     )
     val_metrics = None if training_task == "mass" else reconstruction_metrics(pred_val, target_val)
-    mass_threshold = (
+    mass_threshold = 0.5
+    tuned_mass_threshold = (
         balanced_accuracy_threshold(mass_logit_val, mass_label_val)
         if mass_classification and mass_logit_val is not None and mass_label_val is not None
         else 0.5
     )
     val_mass_metrics = (
         binary_classification_metrics(mass_logit_val, mass_label_val, threshold=mass_threshold)
+        if mass_classification and mass_logit_val is not None and mass_label_val is not None
+        else None
+    )
+    val_mass_tuned_metrics = (
+        binary_classification_metrics(mass_logit_val, mass_label_val, threshold=tuned_mass_threshold)
         if mass_classification and mass_logit_val is not None and mass_label_val is not None
         else None
     )
@@ -1536,11 +1540,16 @@ def train_model(
         mass_classification=mass_classification,
         quality_prediction=quality_prediction,
         target_dim=target_dim,
-        mass_logit_offset=mass_logit_offset,
+        mass_logit_offset=0.0,
     )
     test_metrics = None if training_task == "mass" else reconstruction_metrics(pred_test, target_test)
     test_mass_metrics = (
         binary_classification_metrics(mass_logit_test, mass_label_test, threshold=mass_threshold)
+        if mass_classification and mass_logit_test is not None and mass_label_test is not None
+        else None
+    )
+    test_mass_tuned_metrics = (
+        binary_classification_metrics(mass_logit_test, mass_label_test, threshold=tuned_mass_threshold)
         if mass_classification and mass_logit_test is not None and mass_label_test is not None
         else None
     )
@@ -1551,8 +1560,12 @@ def train_model(
         _progress_write("test metrics: " + json.dumps(test_metrics, sort_keys=True))
     if val_mass_metrics is not None:
         _progress_write("validation mass metrics: " + json.dumps(val_mass_metrics, sort_keys=True))
+    if val_mass_tuned_metrics is not None:
+        _progress_write("validation mass tuned metrics: " + json.dumps(val_mass_tuned_metrics, sort_keys=True))
     if test_mass_metrics is not None:
         _progress_write("test mass metrics: " + json.dumps(test_mass_metrics, sort_keys=True))
+    if test_mass_tuned_metrics is not None:
+        _progress_write("test mass tuned metrics: " + json.dumps(test_mass_tuned_metrics, sort_keys=True))
 
     output = Path(output_path).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1590,6 +1603,8 @@ def train_model(
             "test": test_metrics,
             "validation_mass": val_mass_metrics,
             "test_mass": test_mass_metrics,
+            "validation_mass_tuned": val_mass_tuned_metrics,
+            "test_mass_tuned": test_mass_tuned_metrics,
         },
         "diagnostics": diagnostics,
         "train_indices": train_indices,
@@ -1619,7 +1634,8 @@ def train_model(
             "mass_focal_gamma": mass_focal_gamma,
             "mass_pos_weight_mode": mass_pos_weight_mode,
             "mass_pos_weight": mass_pos_weight,
-            "mass_logit_offset": mass_logit_offset,
+            "mass_primary_threshold": mass_threshold,
+            "mass_tuned_threshold": tuned_mass_threshold,
             "mass_ranking_weight": mass_ranking_weight,
             "mass_ranking_margin": mass_ranking_margin,
             "mass_collapse_patience": mass_collapse_patience,
@@ -1675,6 +1691,8 @@ def train_model(
                     "test": test_metrics,
                     "validation_mass": val_mass_metrics,
                     "test_mass": test_mass_metrics,
+                    "validation_mass_tuned": val_mass_tuned_metrics,
+                    "test_mass_tuned": test_mass_tuned_metrics,
                 },
                 "split": checkpoint["split"],
                 "runtime": checkpoint["runtime"],
@@ -1700,5 +1718,7 @@ def train_model(
             "test": test_metrics,
             "validation_mass": val_mass_metrics,
             "test_mass": test_mass_metrics,
+            "validation_mass_tuned": val_mass_tuned_metrics,
+            "test_mass_tuned": test_mass_tuned_metrics,
         },
     }
