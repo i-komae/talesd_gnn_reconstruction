@@ -18,7 +18,7 @@ export DSTDIR=/path/to/dst2k-ta
 uv sync
 ```
 
-`dstio` は親ディレクトリの `../dstio` を editable path dependency として参照します。SD座標はテキスト表ではなく `talesdconst_pass2.dst` または `talesdcalibev` bank内のcalibration情報から読みます。
+`dstio` は親ディレクトリの `../dstio` を editable path dependency として参照します。SD座標はテキスト表ではなく、MCでは `talesdconst_pass2.dst` の `talesdconst` bank、dataでは `talesdcalibev` bank内の位置情報から読みます。
 
 C++/pybind11拡張を明示的に再ビルドする場合:
 

@@ -36,7 +36,7 @@ def parse_lid(value: object) -> int:
 
 
 def load_tale_const_positions(path: str | Path | None = None) -> dict[int, DetectorPosition]:
-    """Load TALE-SD detector positions from a talesdconst calibration DST."""
+    """Load TALE-SD detector positions from a talesdconst geometry DST."""
 
     if path is None:
         path = default_const_dst_path()
