@@ -10,7 +10,7 @@ SHOW_REASONS=0
 SHOW_PARTITIONS=0
 PARTITION_FILTER="regular"
 
-if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+if [[ ( -t 1 || -n "${FORCE_COLOR:-}" ) && -z "${NO_COLOR:-}" ]]; then
   BOLD=$'\033[1m'
   CYAN=$'\033[36m'
   RED=$'\033[31m'
