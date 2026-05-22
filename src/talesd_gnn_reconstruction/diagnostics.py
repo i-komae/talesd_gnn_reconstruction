@@ -107,6 +107,34 @@ def _central68_half_width(values: np.ndarray) -> float:
     return float(0.5 * (hi - lo))
 
 
+def _robust_location_scale(values: np.ndarray) -> tuple[float, float]:
+    values = np.asarray(values, dtype=np.float64)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return float("nan"), float("nan")
+    median = float(np.median(values))
+    mad = float(np.median(np.abs(values - median)))
+    scale = 1.4826 * mad
+    if not math.isfinite(scale) or scale <= 0.0:
+        scale = _central68_half_width(values)
+    if not math.isfinite(scale) or scale <= 0.0:
+        scale = float(np.std(values))
+    if not math.isfinite(scale) or scale <= 0.0:
+        scale = max(float(np.ptp(values)) / 6.0, 1.0e-12)
+    return median, scale
+
+
+def _robust_window(values: np.ndarray, center: float, scale: float, *, nsigma: float, min_half_width: float) -> tuple[np.ndarray, float, float]:
+    values = np.asarray(values, dtype=np.float64)
+    values = values[np.isfinite(values)]
+    if values.size == 0 or not math.isfinite(center) or not math.isfinite(scale) or scale <= 0.0:
+        return values, float("nan"), float("nan")
+    half_width = max(float(nsigma) * float(scale), float(min_half_width))
+    low = float(center - half_width)
+    high = float(center + half_width)
+    return values[(values >= low) & (values <= high)], low, high
+
+
 def _diagnostics_root(output_path: Path) -> Path:
     return output_path.with_suffix(output_path.suffix + ".diagnostics")
 
@@ -181,49 +209,51 @@ def _gaussian_curve(x: np.ndarray, amplitude: float, mu: float, sigma: float) ->
 def _fit_gaussian_hist(values: np.ndarray) -> dict[str, Any]:
     values = np.asarray(values, dtype=np.float64)
     values = values[np.isfinite(values)]
-    if values.size == 0:
+    robust_mu, robust_sigma = _robust_location_scale(values)
+    central68 = _central68_half_width(values)
+    abs68 = _percentile(np.abs(values), 68.0)
+    fit_values, fit_low, fit_high = _robust_window(values, robust_mu, robust_sigma, nsigma=5.0, min_half_width=0.05)
+
+    def failed(error: str) -> dict[str, Any]:
         return {
-            "n": 0,
+            "n": int(values.size),
+            "fit_n": int(fit_values.size),
             "mu": None,
             "mu_err": None,
             "sigma": None,
             "sigma_err": None,
             "amplitude": None,
             "amplitude_err": None,
-            "central68": None,
-            "abs68": None,
+            "central68": _to_float(central68),
+            "abs68": _to_float(abs68),
+            "robust_median": _to_float(robust_mu),
+            "robust_sigma": _to_float(robust_sigma),
+            "fit_window_low": _to_float(fit_low),
+            "fit_window_high": _to_float(fit_high),
             "fit_ok": False,
-            "fit_method": "scipy_curve_fit",
-            "fit_error": "empty sample",
+            "fit_method": "robust_window_scipy_curve_fit",
+            "fit_error": error,
         }
+
+    if values.size == 0:
+        return failed("empty sample")
     if values.size < 3 or float(np.ptp(values)) <= 0.0:
-        value = float(values[0])
-        return {
-            "n": int(values.size),
-            "mu": _to_float(value),
-            "mu_err": None,
-            "sigma": 0.0,
-            "sigma_err": None,
-            "amplitude": None,
-            "amplitude_err": None,
-            "central68": _to_float(_central68_half_width(values)),
-            "abs68": _to_float(_percentile(np.abs(values), 68.0)),
-            "fit_ok": False,
-            "fit_method": "scipy_curve_fit",
-            "fit_error": "too few distinct values",
-        }
+        return failed("too few distinct values")
+    if fit_values.size < 3 or float(np.ptp(fit_values)) <= 0.0:
+        return failed("too few distinct values inside robust fit window")
 
     from scipy.optimize import curve_fit
-    from scipy.stats import norm
 
-    mu0, sigma0 = norm.fit(values)
+    mu0, sigma0 = _robust_location_scale(fit_values)
     sigma0 = max(float(sigma0), 1.0e-12)
-    bins = min(max(int(math.sqrt(values.size)), 12), 80)
-    density, edges = np.histogram(values, bins=bins, density=True)
+    bins = min(max(int(math.sqrt(fit_values.size)), 12), 80)
+    density, edges = np.histogram(fit_values, bins=bins, range=(fit_low, fit_high), density=True)
     centers = 0.5 * (edges[:-1] + edges[1:])
-    mask = np.isfinite(density) & np.isfinite(centers)
+    mask = np.isfinite(density) & np.isfinite(centers) & (density > 0.0)
     density = density[mask]
     centers = centers[mask]
+    if density.size < 3:
+        return failed("too few populated histogram bins inside robust fit window")
     amplitude0 = float(np.max(density)) if density.size else 1.0 / (sigma0 * math.sqrt(2.0 * math.pi))
 
     fit_ok = True
@@ -235,17 +265,33 @@ def _fit_gaussian_hist(values: np.ndarray) -> dict[str, Any]:
     mu_err = None
     sigma_err = None
     try:
+        mu_half_width = max(4.0 * float(robust_sigma), 0.05)
+        sigma_upper = max(5.0 * float(robust_sigma), 0.05)
+        sigma_lower = max(float(robust_sigma) / 20.0, 1.0e-12)
+        mu_lower = float(robust_mu) - mu_half_width
+        mu_upper = float(robust_mu) + mu_half_width
+        mu0 = float(np.clip(mu0, mu_lower, mu_upper))
+        sigma0 = float(np.clip(sigma0, sigma_lower, sigma_upper))
         popt, pcov = curve_fit(
             _gaussian_curve,
             centers,
             density,
             p0=[amplitude0, mu0, sigma0],
-            bounds=([0.0, -np.inf, 1.0e-12], [np.inf, np.inf, np.inf]),
+            bounds=(
+                [0.0, mu_lower, sigma_lower],
+                [np.inf, mu_upper, sigma_upper],
+            ),
             maxfev=20000,
         )
         amplitude = float(popt[0])
         mu = float(popt[1])
         sigma = abs(float(popt[2]))
+        if not (math.isfinite(amplitude) and math.isfinite(mu) and math.isfinite(sigma)):
+            raise RuntimeError("fit returned non-finite parameter")
+        if abs(mu - float(robust_mu)) > mu_half_width:
+            raise RuntimeError(f"fit mu outside robust window: mu={mu:g}, median={robust_mu:g}")
+        if sigma < sigma_lower or sigma > sigma_upper:
+            raise RuntimeError(f"fit sigma outside robust window: sigma={sigma:g}, robust_sigma={robust_sigma:g}")
         if pcov is not None and np.shape(pcov) == (3, 3) and np.all(np.isfinite(pcov)):
             errors = np.sqrt(np.clip(np.diag(pcov), 0.0, None))
             amplitude_err = float(errors[0])
@@ -257,16 +303,21 @@ def _fit_gaussian_hist(values: np.ndarray) -> dict[str, Any]:
 
     return {
         "n": int(values.size),
-        "mu": _to_float(mu),
+        "fit_n": int(fit_values.size),
+        "mu": _to_float(mu) if fit_ok else None,
         "mu_err": _to_float(mu_err) if mu_err is not None else None,
-        "sigma": _to_float(sigma),
+        "sigma": _to_float(sigma) if fit_ok else None,
         "sigma_err": _to_float(sigma_err) if sigma_err is not None else None,
-        "amplitude": _to_float(amplitude),
+        "amplitude": _to_float(amplitude) if fit_ok else None,
         "amplitude_err": _to_float(amplitude_err) if amplitude_err is not None else None,
-        "central68": _to_float(_central68_half_width(values)),
-        "abs68": _to_float(_percentile(np.abs(values), 68.0)),
+        "central68": _to_float(central68),
+        "abs68": _to_float(abs68),
+        "robust_median": _to_float(robust_mu),
+        "robust_sigma": _to_float(robust_sigma),
+        "fit_window_low": _to_float(fit_low),
+        "fit_window_high": _to_float(fit_high),
         "fit_ok": fit_ok,
-        "fit_method": "scipy_curve_fit",
+        "fit_method": "robust_window_scipy_curve_fit",
         "fit_error": fit_error,
     }
 
@@ -300,11 +351,41 @@ def _draw_gaussian_hist(
         _style_axes(ax)
         return stats
 
-    ax.hist(values, bins=_hist_bins(values), density=True, histtype="stepfilled", alpha=0.35, color=color, edgecolor=color)
+    display_mu = stats.get("robust_median")
+    display_sigma = stats.get("robust_sigma")
+    display_values = values
+    display_low = None
+    display_high = None
+    if display_mu is not None and display_sigma is not None and float(display_sigma) > 0.0:
+        display_values, display_low, display_high = _robust_window(
+            values,
+            float(display_mu),
+            float(display_sigma),
+            nsigma=6.0,
+            min_half_width=0.08,
+        )
+        if display_values.size < max(5, int(0.2 * values.size)):
+            display_values = values
+            display_low = None
+            display_high = None
+
+    ax.hist(
+        display_values,
+        bins=_hist_bins(display_values),
+        density=True,
+        histtype="stepfilled",
+        alpha=0.35,
+        color=color,
+        edgecolor=color,
+    )
     mu = stats["mu"]
     sigma = stats["sigma"]
-    if mu is not None and sigma is not None and sigma > 0.0:
-        x_min, x_max = np.percentile(values, [0.5, 99.5])
+    if stats.get("fit_ok", False) and mu is not None and sigma is not None and sigma > 0.0:
+        if display_low is not None and display_high is not None:
+            x_min = float(display_low)
+            x_max = float(display_high)
+        else:
+            x_min, x_max = np.percentile(values, [0.5, 99.5])
         pad = 0.15 * max(x_max - x_min, sigma)
         x = np.linspace(x_min - pad, x_max + pad, 300)
         amplitude = stats.get("amplitude")
@@ -312,6 +393,8 @@ def _draw_gaussian_hist(
             amplitude = 1.0 / (float(sigma) * math.sqrt(2.0 * math.pi))
         ax.plot(x, _gaussian_curve(x, float(amplitude), float(mu), float(sigma)), color=PROTON_COLOR, linewidth=LINEWIDTH)
         ax.axvline(float(mu), color=PROTON_COLOR, linewidth=LINEWIDTH_THIN)
+    if display_low is not None and display_high is not None:
+        ax.set_xlim(float(display_low), float(display_high))
     c68 = stats["central68"] if show_central68 else None
     if c68 is not None:
         ax.axvline(c68, color="#2ca02c", linestyle="--", linewidth=LINEWIDTH_THIN)
@@ -320,10 +403,13 @@ def _draw_gaussian_hist(
     ax.set_xlabel(xlabel)
     ax.set_ylabel("density")
     label = f"n={stats['n']}"
-    if mu is not None and sigma is not None:
+    if display_values.size != values.size:
+        label += f"\nshown={display_values.size}"
+    if stats.get("fit_ok", False) and mu is not None and sigma is not None:
         label += f"\nmu={mu:.4g}\nsigma={sigma:.4g}"
-        if not stats.get("fit_ok", False):
-            label += "\nfit fallback"
+    elif stats.get("robust_median") is not None and stats.get("robust_sigma") is not None:
+        label += f"\nmedian={stats['robust_median']:.4g}\nrobust sigma={stats['robust_sigma']:.4g}"
+        label += "\nfit failed"
     if c68 is not None:
         label += f"\ncentral 68\\%={c68:.4g}"
     ax.text(0.98, 0.96, label, ha="right", va="top", transform=ax.transAxes)
@@ -634,6 +720,8 @@ def _valid_energy_fit_rows(rows: list[dict[str, Any]], min_bin_count: int) -> li
     out: list[dict[str, Any]] = []
     for row in rows:
         if int(row["n"] or 0) < int(min_bin_count):
+            continue
+        if not row.get("fit_ok", False):
             continue
         if row.get("mu") is None or row.get("sigma") is None:
             continue
@@ -1169,7 +1257,8 @@ def _save_reconstruction_pdf(
         pdf.savefig(fig)
         plt.close(fig)
 
-        valid_rows = [row for row in bin_rows if int(row["n"] or 0) >= int(min_bin_count)]
+        valid_rows = _valid_energy_fit_rows(bin_rows, min_bin_count)
+        display_rows = [row for row in bin_rows if int(row["n"] or 0) >= int(min_bin_count)]
         fig, ax = plt.subplots(figsize=(7.0, 4.6))
         if valid_rows:
             x = np.asarray([row["log10_energy_center"] for row in valid_rows], dtype=float)
@@ -1222,8 +1311,8 @@ def _save_reconstruction_pdf(
         plt.close(fig)
 
         rows_per_page = 6
-        for start in range(0, len(valid_rows), rows_per_page):
-            rows = valid_rows[start : start + rows_per_page]
+        for start in range(0, len(display_rows), rows_per_page):
+            rows = display_rows[start : start + rows_per_page]
             fig, axes = plt.subplots(2, 3, figsize=(11.0, 7.0))
             axes_flat = axes.ravel()
             for ax in axes_flat:

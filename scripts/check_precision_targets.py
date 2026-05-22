@@ -55,8 +55,15 @@ def _check_energy_bins(rows: list[dict[str, Any]], min_bin_count: int, targets: 
         low = _finite(row.get("log10_energy_low"))
         high = _finite(row.get("log10_energy_high"))
         label = f"{low:.2f}-{high:.2f}" if low is not None and high is not None else "unknown-bin"
+        if row.get("fit_ok") is False:
+            fit_error = row.get("fit_error") or "fit rejected"
+            lines.append(f"MISSING energy fit bin {label:>12s} n={n:<8d} {fit_error}")
+            continue
         mu = _finite(row.get("mu"))
         c68 = _finite(row.get("central68"))
+        if _status(mu, targets["energy_bias_abs"], absolute=True) == "MISSING":
+            lines.append(f"MISSING energy bias bin {label:>11s} n={n:<8d} mu=missing")
+            continue
         if _status(mu, targets["energy_bias_abs"], absolute=True) == "FAIL":
             lines.append(f"FAIL    energy bias bin {label:>11s} n={n:<8d} mu={mu:.6g}")
         if _status(c68, targets["energy_central68_half_width"]) == "FAIL":
