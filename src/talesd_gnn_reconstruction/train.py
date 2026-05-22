@@ -735,6 +735,8 @@ def _mass_classification_loss(
     mode: str,
     pos_weight: Any | None,
     focal_gamma: float,
+    ranking_weight: float = 0.0,
+    ranking_margin: float = 1.0,
 ) -> Any:
     import torch
     import torch.nn.functional as F
@@ -742,13 +744,26 @@ def _mass_classification_loss(
     mode = str(mode).lower()
     if mode not in {"bce", "focal"}:
         raise ValueError("mass_loss_mode must be 'bce' or 'focal'")
+    logits = logits.reshape(-1)
+    labels = labels.reshape(-1)
     bce = F.binary_cross_entropy_with_logits(logits, labels, pos_weight=pos_weight, reduction="none")
     if mode == "bce":
-        return torch.mean(bce)
-    probs = torch.sigmoid(logits)
-    p_t = torch.where(labels >= 0.5, probs, 1.0 - probs)
-    focal = torch.pow((1.0 - p_t).clamp_min(0.0), max(float(focal_gamma), 0.0))
-    return torch.mean(focal * bce)
+        loss = torch.mean(bce)
+    else:
+        probs = torch.sigmoid(logits)
+        p_t = torch.where(labels >= 0.5, probs, 1.0 - probs)
+        focal = torch.pow((1.0 - p_t).clamp_min(0.0), max(float(focal_gamma), 0.0))
+        loss = torch.mean(focal * bce)
+    if float(ranking_weight) <= 0.0:
+        return loss
+    finite = torch.isfinite(logits) & torch.isfinite(labels)
+    pos = logits[finite & (labels >= 0.5)]
+    neg = logits[finite & (labels < 0.5)]
+    if pos.numel() == 0 or neg.numel() == 0:
+        return loss
+    diff = pos[:, None] - neg[None, :]
+    ranking = F.softplus(float(ranking_margin) - diff).mean()
+    return loss + float(ranking_weight) * ranking
 
 
 def _empty_binary_counts() -> dict[str, int | float]:
@@ -891,6 +906,8 @@ def train_model(
     mass_loss_mode: str = "focal",
     mass_focal_gamma: float = 2.0,
     mass_pos_weight_mode: str = "none",
+    mass_ranking_weight: float = 0.0,
+    mass_ranking_margin: float = 1.0,
     mass_collapse_patience: int = 3,
     mass_collapse_score_std: float = 1.0e-3,
     mass_collapse_balanced_accuracy: float = 0.505,
@@ -933,6 +950,8 @@ def train_model(
     mass_pos_weight_mode = str(mass_pos_weight_mode).lower()
     if mass_pos_weight_mode not in {"none", "auto"}:
         raise ValueError("mass_pos_weight_mode must be 'none' or 'auto'")
+    mass_ranking_weight = max(float(mass_ranking_weight), 0.0)
+    mass_ranking_margin = float(mass_ranking_margin)
 
     overall_started = time.perf_counter()
     stage_started = time.perf_counter()
@@ -1177,6 +1196,7 @@ def train_model(
         + (
             f" mass_loss_mode={mass_loss_mode} mass_pos_weight_mode={mass_pos_weight_mode}"
             f" mass_pos_weight={mass_pos_weight:.6g} mass_logit_offset={mass_logit_offset:.6g}"
+            f" mass_ranking_weight={mass_ranking_weight:.6g} mass_ranking_margin={mass_ranking_margin:.6g}"
             if mass_classification
             else ""
         )
@@ -1260,6 +1280,8 @@ def train_model(
                         mode=mass_loss_mode,
                         pos_weight=mass_pos_weight_tensor,
                         focal_gamma=mass_focal_gamma,
+                        ranking_weight=mass_ranking_weight,
+                        ranking_margin=mass_ranking_margin,
                     )
                     _update_binary_counts(train_mass_counts, mass_logit[mask], labels[mask], logit_offset=mass_logit_offset)
                     if training_task == "mass":
@@ -1344,6 +1366,8 @@ def train_model(
                             mode=mass_loss_mode,
                             pos_weight=mass_pos_weight_tensor,
                             focal_gamma=mass_focal_gamma,
+                            ranking_weight=mass_ranking_weight,
+                            ranking_margin=mass_ranking_margin,
                         )
                         _update_binary_counts(val_mass_counts, mass_logit[mask], labels[mask], logit_offset=mass_logit_offset)
                         if training_task == "mass":
@@ -1581,6 +1605,8 @@ def train_model(
             "mass_pos_weight_mode": mass_pos_weight_mode,
             "mass_pos_weight": mass_pos_weight,
             "mass_logit_offset": mass_logit_offset,
+            "mass_ranking_weight": mass_ranking_weight,
+            "mass_ranking_margin": mass_ranking_margin,
             "mass_collapse_patience": mass_collapse_patience,
             "mass_collapse_score_std": mass_collapse_score_std,
             "mass_collapse_balanced_accuracy": mass_collapse_balanced_accuracy,

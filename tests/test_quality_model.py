@@ -6,7 +6,7 @@ import unittest
 import torch
 
 from talesd_gnn_reconstruction.model import PhysicsTaleSdGNN, build_model_from_config
-from talesd_gnn_reconstruction.train import _angular_loss_from_vectors
+from talesd_gnn_reconstruction.train import _angular_loss_from_vectors, _mass_classification_loss
 
 
 class QualityModelTest(unittest.TestCase):
@@ -72,6 +72,38 @@ class QualityModelTest(unittest.TestCase):
         old_cosine_loss = 1.0 - math.cos(angle_rad)
 
         self.assertGreater(angular_loss, 100.0 * old_cosine_loss)
+
+    def test_mass_ranking_loss_pushes_classes_apart(self) -> None:
+        labels = torch.tensor([0.0, 0.0, 1.0, 1.0], dtype=torch.float32)
+        flat_logits = torch.zeros(4, dtype=torch.float32, requires_grad=True)
+
+        flat_loss = _mass_classification_loss(
+            flat_logits,
+            labels,
+            mode="bce",
+            pos_weight=None,
+            focal_gamma=2.0,
+            ranking_weight=0.5,
+            ranking_margin=1.0,
+        )
+        flat_loss.backward()
+
+        self.assertGreater(float(flat_loss.detach()), 0.0)
+        self.assertGreater(float(flat_logits.grad[0]), 0.0)
+        self.assertLess(float(flat_logits.grad[2]), 0.0)
+
+        separated_logits = torch.tensor([-2.0, -2.0, 2.0, 2.0], dtype=torch.float32)
+        separated_loss = _mass_classification_loss(
+            separated_logits,
+            labels,
+            mode="bce",
+            pos_weight=None,
+            focal_gamma=2.0,
+            ranking_weight=0.5,
+            ranking_margin=1.0,
+        )
+
+        self.assertLess(float(separated_loss), float(flat_loss.detach()))
 
 
 if __name__ == "__main__":

@@ -862,6 +862,8 @@ def _cmd_train(args: argparse.Namespace) -> None:
         mass_loss_mode=args.mass_loss_mode,
         mass_focal_gamma=args.mass_focal_gamma,
         mass_pos_weight_mode=args.mass_pos_weight_mode,
+        mass_ranking_weight=args.mass_ranking_weight,
+        mass_ranking_margin=args.mass_ranking_margin,
         mass_collapse_patience=args.mass_collapse_patience,
         mass_collapse_score_std=args.mass_collapse_score_std,
         mass_collapse_balanced_accuracy=args.mass_collapse_balanced_accuracy,
@@ -1027,6 +1029,8 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--mass-loss-mode", choices=["bce", "focal"], default="focal", help="proton/iron分類loss")
     train.add_argument("--mass-focal-gamma", type=float, default=2.0, help="--mass-loss-mode focal のgamma")
     train.add_argument("--mass-pos-weight-mode", choices=["none", "auto"], default="none", help="autoならtrain proton/iron比からBCE pos_weightを使う")
+    train.add_argument("--mass-ranking-weight", type=float, default=0.0, help="batch内のiron logitをproton logitより大きくするranking lossの重み")
+    train.add_argument("--mass-ranking-margin", type=float, default=1.0, help="mass ranking lossで要求するlogit margin")
     train.add_argument("--mass-collapse-patience", type=int, default=3, help="mass-onlyでscoreが定数化したepochが続いたら停止。0で無効")
     train.add_argument("--mass-collapse-score-std", type=float, default=1.0e-3, help="定数化判定に使うP(iron)標準偏差")
     train.add_argument("--mass-collapse-balanced-accuracy", type=float, default=0.505, help="定数化判定に使うbalanced accuracy上限")
