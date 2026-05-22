@@ -643,9 +643,19 @@ print_partition_info() {
       if (group == "INTEL") return magenta
       return ""
     }
+    function fit_column(value, width) {
+      value = value ""
+      if (length(value) <= width) {
+        return value
+      }
+      if (width <= 3) {
+        return substr(value, 1, width)
+      }
+      return substr(value, 1, width - 3) "..."
+    }
     {
       printf "%s*%s  %-12s %-28s %-12s %6s %6s %6s %6s %6s\n",
-        group_color($2), reset, $2, $3, $4, $5, $6, $7, $8, $9
+        group_color($2), reset, $2, fit_column($3, 28), $4, $5, $6, $7, $8, $9
     }'
 }
 
@@ -775,8 +785,18 @@ print_summary() {
       }
       return ""
     }
+    function fit_column(value, width) {
+      value = value ""
+      if (length(value) <= width) {
+        return value
+      }
+      if (width <= 3) {
+        return substr(value, 1, width)
+      }
+      return substr(value, 1, width - 3) "..."
+    }
     {
-      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, $3, $5, $6, $7, $4
+      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, fit_column($3, 28), $5, $6, $7, $4
     }'
 
   echo
@@ -1130,8 +1150,18 @@ print_job_queue_summary() {
       }
       return ""
     }
+    function fit_column(value, width) {
+      value = value ""
+      if (length(value) <= width) {
+        return value
+      }
+      if (width <= 3) {
+        return substr(value, 1, width)
+      }
+      return substr(value, 1, width - 3) "..."
+    }
     {
-      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, $3, $5, $6, $7, $4
+      printf "%s*%s  %-12s %-28s %8s %8s %8s %8s\n", group_color($2), reset, $2, fit_column($3, 28), $5, $6, $7, $4
     }'
 }
 
