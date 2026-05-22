@@ -9,7 +9,7 @@ Usage:
   scripts/submit_server_mass_only_training.sh [epochs]
 
 Submit mass-only waveform training with the project-standard server settings.
-The optional epochs argument overrides TRAIN_EPOCHS.
+Default: 48 epochs. The optional epochs argument overrides TRAIN_EPOCHS.
 EOF
 }
 
@@ -24,7 +24,7 @@ fi
 if [[ $# -eq 1 ]]; then
   export TRAIN_EPOCHS="$1"
 fi
-TRAIN_EPOCHS="${TRAIN_EPOCHS:-24}"
+TRAIN_EPOCHS="${TRAIN_EPOCHS:-48}"
 if ! [[ "${TRAIN_EPOCHS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "TRAIN_EPOCHS must be a positive integer: ${TRAIN_EPOCHS}" >&2
   exit 2
