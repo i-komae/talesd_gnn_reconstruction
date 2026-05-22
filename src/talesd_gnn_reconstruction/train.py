@@ -447,22 +447,44 @@ def _assign_source_group(
     val_fraction: float,
     test_fraction: float,
     rng: random.Random,
+    source_event_counts: dict[str, int] | None = None,
 ) -> None:
     sources = list(sources)
     rng.shuffle(sources)
     if len(sources) < 3:
         split_sources["train"].extend(sources)
         return
-    n_test = int(round(len(sources) * test_fraction))
-    n_val = int(round(len(sources) * val_fraction))
-    if n_test + n_val >= len(sources):
-        overflow = n_test + n_val - (len(sources) - 1)
-        n_val = max(0, n_val - overflow)
-        overflow = n_test + n_val - (len(sources) - 1)
-        n_test = max(0, n_test - overflow)
-    split_sources["test"].extend(sources[:n_test])
-    split_sources["val"].extend(sources[n_test : n_test + n_val])
-    split_sources["train"].extend(sources[n_test + n_val :])
+    counts = source_event_counts or {source_path: 1 for source_path in sources}
+    total_events = sum(max(int(counts.get(source_path, 1)), 1) for source_path in sources)
+    remaining = list(sources)
+
+    def pick_for_target(target_events: float, min_remaining_sources: int) -> list[str]:
+        selected: list[str] = []
+        selected_events = 0
+        if target_events <= 0.0:
+            return selected
+        while len(remaining) > min_remaining_sources and selected_events < target_events:
+            best_index = min(
+                range(len(remaining)),
+                key=lambda index: abs(
+                    selected_events
+                    + max(int(counts.get(remaining[index], 1)), 1)
+                    - target_events
+                ),
+            )
+            best_count = max(int(counts.get(remaining[best_index], 1)), 1)
+            if selected and abs(selected_events - target_events) < abs(selected_events + best_count - target_events):
+                break
+            source_path = remaining.pop(best_index)
+            selected.append(source_path)
+            selected_events += best_count
+        return selected
+
+    test_sources = pick_for_target(total_events * float(test_fraction), min_remaining_sources=2)
+    val_sources = pick_for_target(total_events * float(val_fraction), min_remaining_sources=1)
+    split_sources["test"].extend(test_sources)
+    split_sources["val"].extend(val_sources)
+    split_sources["train"].extend(remaining)
 
 
 def split_indices_by_stratified_source_path(
@@ -521,6 +543,7 @@ def split_indices_by_stratified_source_path(
     rng = random.Random(seed)
     pending = list(source_to_indices)
     split_sources = {"train": [], "val": [], "test": []}
+    source_event_counts = {source_path: len(indices) for source_path, indices in source_to_indices.items()}
     for key_name in ("fine", "mid", "coarse", "broad"):
         groups: dict[tuple[str, ...], list[str]] = {}
         for source_path in pending:
@@ -528,18 +551,39 @@ def split_indices_by_stratified_source_path(
         next_pending: list[str] = []
         for sources in groups.values():
             if key_name == "broad" or len(sources) >= int(min_group_sources):
-                _assign_source_group(split_sources, sources, val_fraction, test_fraction, rng)
+                _assign_source_group(
+                    split_sources,
+                    sources,
+                    val_fraction,
+                    test_fraction,
+                    rng,
+                    source_event_counts=source_event_counts,
+                )
             else:
                 next_pending.extend(sources)
         pending = next_pending
 
     if pending:
-        _assign_source_group(split_sources, pending, val_fraction, test_fraction, rng)
+        _assign_source_group(
+            split_sources,
+            pending,
+            val_fraction,
+            test_fraction,
+            rng,
+            source_event_counts=source_event_counts,
+        )
 
     if not split_sources["val"] or not split_sources["test"]:
         all_sources = list(source_to_indices)
         split_sources = {"train": [], "val": [], "test": []}
-        _assign_source_group(split_sources, all_sources, val_fraction, test_fraction, rng)
+        _assign_source_group(
+            split_sources,
+            all_sources,
+            val_fraction,
+            test_fraction,
+            rng,
+            source_event_counts=source_event_counts,
+        )
 
     split = {
         name: sorted(index for source_path in sources for index in source_to_indices[source_path])
@@ -547,6 +591,24 @@ def split_indices_by_stratified_source_path(
     }
     if not split["train"] or not split["val"] or not split["test"]:
         raise ValueError("source-stratified split produced an empty train/validation/test split")
+    total_graphs = max(sum(len(indices) for indices in split.values()), 1)
+    total_sources = max(sum(len(sources) for sources in split_sources.values()), 1)
+    overlap = (
+        set(split_sources["train"]) & set(split_sources["val"])
+        or set(split_sources["train"]) & set(split_sources["test"])
+        or set(split_sources["val"]) & set(split_sources["test"])
+    )
+    if overlap:
+        raise ValueError(f"source-stratified split leaked source paths across splits: {sorted(overlap)[:5]}")
+    _progress_write(
+        "source-stratified split summary "
+        f"train_graphs={len(split['train'])} ({len(split['train']) / total_graphs:.3f}) "
+        f"val_graphs={len(split['val'])} ({len(split['val']) / total_graphs:.3f}) "
+        f"test_graphs={len(split['test'])} ({len(split['test']) / total_graphs:.3f}) "
+        f"train_sources={len(split_sources['train'])} ({len(split_sources['train']) / total_sources:.3f}) "
+        f"val_sources={len(split_sources['val'])} ({len(split_sources['val']) / total_sources:.3f}) "
+        f"test_sources={len(split_sources['test'])} ({len(split_sources['test']) / total_sources:.3f})"
+    )
     return split
 
 

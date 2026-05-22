@@ -3,13 +3,17 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-MAX_EVENTS_PER_FILE="${MAX_EVENTS_PER_FILE:-256}"
+MAX_EVENTS_PER_FILE="${MAX_EVENTS_PER_FILE:-0}"
+ENERGY_SAMPLE_PER_BIN="${ENERGY_SAMPLE_PER_BIN:-200000}"
+ENERGY_SAMPLE_STRATIFY_PARTICLE="${ENERGY_SAMPLE_STRATIFY_PARTICLE:-1}"
+ENERGY_BIN_WIDTH="${ENERGY_BIN_WIDTH:-0.1}"
+ENERGY_OVERSAMPLE_FACTOR="${ENERGY_OVERSAMPLE_FACTOR:-1.0}"
 EXPORT_WORKERS="${EXPORT_WORKERS:-6}"
 WORKER_MAX_FILES="${WORKER_MAX_FILES:-200}"
 SHARD_SIZE="${SHARD_SIZE:-100000}"
 OPEN_RETRIES="${OPEN_RETRIES:-3}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
-RUN_NAME="${RUN_NAME:-large${MAX_EVENTS_PER_FILE}_export_${RUN_ID}}"
+RUN_NAME="${RUN_NAME:-energyflat${ENERGY_SAMPLE_PER_BIN}_gapped_export_${RUN_ID}}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${HOME}/TALE/gnn/outputs/talesd_gnn_reconstruction}"
 RUN_DIR="${RUN_DIR:-${OUTPUT_ROOT}/runs/${RUN_NAME}}"
 GRAPH_RUN_DIR="${GRAPH_RUN_DIR:-${RUN_DIR}/graphs}"
@@ -42,6 +46,10 @@ log() {
   echo "RUN_DIR=${RUN_DIR}"
   echo "GRAPH_OUTPUT=${GRAPH_OUTPUT}"
   echo "MAX_EVENTS_PER_FILE=${MAX_EVENTS_PER_FILE}"
+  echo "ENERGY_SAMPLE_PER_BIN=${ENERGY_SAMPLE_PER_BIN}"
+  echo "ENERGY_SAMPLE_STRATIFY_PARTICLE=${ENERGY_SAMPLE_STRATIFY_PARTICLE}"
+  echo "ENERGY_BIN_WIDTH=${ENERGY_BIN_WIDTH}"
+  echo "ENERGY_OVERSAMPLE_FACTOR=${ENERGY_OVERSAMPLE_FACTOR}"
   echo "EXPORT_WORKERS=${EXPORT_WORKERS}"
   echo "WORKER_MAX_FILES=${WORKER_MAX_FILES}"
   echo "SHARD_SIZE=${SHARD_SIZE}"
@@ -60,6 +68,10 @@ graph_output:
   ${GRAPH_OUTPUT}
 
 max_events_per_file=${MAX_EVENTS_PER_FILE}
+energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}
+energy_sample_stratify_particle=${ENERGY_SAMPLE_STRATIFY_PARTICLE}
+energy_bin_width=${ENERGY_BIN_WIDTH}
+energy_oversample_factor=${ENERGY_OVERSAMPLE_FACTOR}
 export_workers=${EXPORT_WORKERS}
 shard_size=${SHARD_SIZE}
 
@@ -84,12 +96,18 @@ cmd+=(
   -o "${GRAPH_OUTPUT}"
   --kind mc
   --max-events-per-file "${MAX_EVENTS_PER_FILE}"
+  --energy-sample-per-bin "${ENERGY_SAMPLE_PER_BIN}"
+  --energy-bin-width "${ENERGY_BIN_WIDTH}"
+  --energy-oversample-factor "${ENERGY_OVERSAMPLE_FACTOR}"
   --workers "${EXPORT_WORKERS}"
   --worker-max-files "${WORKER_MAX_FILES}"
   --shard-size "${SHARD_SIZE}"
   --open-retries "${OPEN_RETRIES}"
   --skip-errors
 )
+if [[ "${ENERGY_SAMPLE_STRATIFY_PARTICLE}" == "1" ]]; then
+  cmd+=(--energy-sample-stratify-particle)
+fi
 "${cmd[@]}" 2>&1 | tee -a "${LOG_PATH}"
 
 cat <<EOF | tee "${READ_DONE_MARKER}" | tee -a "${LOG_PATH}"

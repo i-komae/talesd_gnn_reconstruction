@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="${REPO:-/dicos_ui_home/ikomae/work/src/talesd_gnn_reconstruction}"
-GRAPH_INPUT="${GRAPH_INPUT:-/dicos_ui_home/ikomae/work/gnn/graphs/waveform_gnn_stream_20260520_123802}"
+GRAPH_INPUT="${GRAPH_INPUT:-}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_reconstruction}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 RUN_NAME="${RUN_NAME:-server_waveform_full_b6000_${RUN_ID}}"
@@ -70,8 +70,8 @@ NLL_WEIGHT="${NLL_WEIGHT:-0.2}"
 NLL_SIGMA_ENERGY_FLOOR="${NLL_SIGMA_ENERGY_FLOOR:-0.01}"
 NLL_SIGMA_ANGLE_FLOOR_DEG="${NLL_SIGMA_ANGLE_FLOOR_DEG:-0.05}"
 NLL_SIGMA_CORE_FLOOR_KM="${NLL_SIGMA_CORE_FLOOR_KM:-0.005}"
-VAL_FRACTION="${VAL_FRACTION:-0.10}"
-TEST_FRACTION="${TEST_FRACTION:-0.20}"
+VAL_FRACTION="${VAL_FRACTION:-0.05}"
+TEST_FRACTION="${TEST_FRACTION:-0.10}"
 SPLIT_MODE="${SPLIT_MODE:-source-stratified}"
 PARTICLE_FILTER="${PARTICLE_FILTER:-all}"
 DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT:-1000}"
@@ -100,6 +100,17 @@ fi
 
 if [[ ! -d "${REPO}" ]]; then
   echo "repo not found: ${REPO}" >&2
+  exit 2
+fi
+if [[ -z "${GRAPH_INPUT}" ]]; then
+  cat >&2 <<EOF
+GRAPH_INPUT is required.
+
+The waveform schema changed to rise-aligned raw plus accepted-gapped traces.
+Re-export graph HDF5 shards from DST, transfer them to the server, then submit with:
+
+  GRAPH_INPUT=/path/to/new_graph_directory_or_h5 scripts/submit_server_waveform_full_training.sh
+EOF
   exit 2
 fi
 if [[ ! -e "${GRAPH_INPUT}" ]]; then
