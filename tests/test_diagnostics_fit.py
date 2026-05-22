@@ -4,7 +4,13 @@ import unittest
 
 import numpy as np
 
-from talesd_gnn_reconstruction.diagnostics import _fit_gaussian_hist, _valid_energy_fit_rows
+from talesd_gnn_reconstruction.diagnostics import (
+    QUALITY_CUT_KEEP_FRACTIONS,
+    QUALITY_ENERGY_KEEP_FRACTIONS,
+    QUALITY_THRESHOLD_KEEP_FRACTIONS,
+    _fit_gaussian_hist,
+    _valid_energy_fit_rows,
+)
 
 
 class DiagnosticsFitTest(unittest.TestCase):
@@ -31,6 +37,13 @@ class DiagnosticsFitTest(unittest.TestCase):
         valid_rows = _valid_energy_fit_rows(rows, min_bin_count=1000)
 
         self.assertEqual(valid_rows, [rows[1]])
+
+    def test_quality_cut_defaults_keep_requested_high_survival_cuts(self) -> None:
+        for fractions in (QUALITY_THRESHOLD_KEEP_FRACTIONS, QUALITY_CUT_KEEP_FRACTIONS, QUALITY_ENERGY_KEEP_FRACTIONS):
+            self.assertIn(0.95, fractions)
+            self.assertIn(0.90, fractions)
+            self.assertIn(0.80, fractions)
+            self.assertNotIn(0.20, fractions)
 
 
 if __name__ == "__main__":

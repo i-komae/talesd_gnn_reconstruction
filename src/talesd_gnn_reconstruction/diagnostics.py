@@ -28,6 +28,16 @@ LINEWIDTH = 1.4
 LINEWIDTH_THIN = 1.0
 MARKERSIZE = 4.0
 CAPSIZE = 2.5
+ENERGY_MU_TARGET = 0.05
+ENERGY_SIGMA_TARGET = 0.20
+ENERGY_SIGMA_STRETCH_TARGET = 0.15
+ANGULAR_TARGET_DEG = 1.0
+CORE_TARGET_KM = 0.05
+QUALITY_THRESHOLD_KEEP_FRACTIONS = (0.95, 0.90, 0.80, 0.70, 0.50, 0.30, 0.10, 0.05)
+QUALITY_CUT_KEEP_FRACTIONS = (1.00, 0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.10, 0.05)
+QUALITY_ENERGY_KEEP_FRACTIONS = (1.00, 0.95, 0.90, 0.80, 0.50, 0.10)
+QUALITY_MARKER_KEEP_FRACTIONS = (0.95, 0.90, 0.80, 0.50, 0.10)
+QUALITY_CUT_OUTPUT_FRACTIONS = (0.95, 0.90, 0.80, 0.50, 0.10)
 
 
 def require_matplotlib_latex() -> None:
@@ -379,6 +389,31 @@ def _style_axes(ax: Any) -> None:
     ax.tick_params(direction="in")
 
 
+def _add_energy_bias_guides(ax: Any) -> None:
+    ax.axhspan(-ENERGY_MU_TARGET, ENERGY_MU_TARGET, color="0.93", zorder=0)
+    ax.axhline(0.0, color=NEUTRAL_COLOR, linewidth=LINEWIDTH_THIN)
+    ax.axhline(ENERGY_MU_TARGET, color="0.45", linestyle="--", linewidth=LINEWIDTH_THIN)
+    ax.axhline(-ENERGY_MU_TARGET, color="0.45", linestyle="--", linewidth=LINEWIDTH_THIN)
+    ax.axhline(ENERGY_SIGMA_STRETCH_TARGET, color="0.65", linestyle=":", linewidth=LINEWIDTH_THIN)
+    ax.axhline(-ENERGY_SIGMA_STRETCH_TARGET, color="0.65", linestyle=":", linewidth=LINEWIDTH_THIN)
+    ax.axhline(ENERGY_SIGMA_TARGET, color="0.65", linestyle="-.", linewidth=LINEWIDTH_THIN)
+    ax.axhline(-ENERGY_SIGMA_TARGET, color="0.65", linestyle="-.", linewidth=LINEWIDTH_THIN)
+
+
+def _add_energy_sigma_guides(ax: Any) -> None:
+    ax.axhline(ENERGY_SIGMA_STRETCH_TARGET, color="0.45", linestyle=":", linewidth=LINEWIDTH_THIN)
+    ax.axhline(ENERGY_SIGMA_TARGET, color="0.45", linestyle="--", linewidth=LINEWIDTH_THIN)
+
+
+def _add_angular_target(ax: Any) -> None:
+    ax.axhline(ANGULAR_TARGET_DEG, color="0.45", linestyle="--", linewidth=LINEWIDTH_THIN)
+
+
+def _add_core_target(ax: Any, *, unit: str) -> None:
+    scale = 1000.0 if unit == "m" else 1.0
+    ax.axhline(CORE_TARGET_KM * scale, color="0.45", linestyle="--", linewidth=LINEWIDTH_THIN)
+
+
 def _draw_gaussian_hist(
     ax: Any,
     values: np.ndarray,
@@ -575,13 +610,38 @@ def _quality_for_finite_pair(pred: np.ndarray, target: np.ndarray, quality: np.n
     return values
 
 
+def _quality_cut_mask(quality: np.ndarray, keep_fraction: float) -> tuple[np.ndarray, float]:
+    values = np.asarray(quality, dtype=np.float64)
+    valid = np.isfinite(values)
+    if not np.any(valid):
+        return np.zeros_like(values, dtype=bool), float("nan")
+    if keep_fraction >= 1.0:
+        threshold = float(np.nanmin(values[valid]))
+        return valid, threshold
+    threshold = float(np.percentile(values[valid], 100.0 * (1.0 - float(keep_fraction))))
+    return valid & (values >= threshold), threshold
+
+
+def _quality_cut_directory_name(keep_fraction: float) -> str:
+    return f"keep_{int(round(100.0 * float(keep_fraction))):02d}pct"
+
+
+def _subset_prediction_quantities(q: dict[str, np.ndarray], mask: np.ndarray) -> dict[str, np.ndarray]:
+    mask = np.asarray(mask, dtype=bool)
+    subset: dict[str, np.ndarray] = {}
+    for key, values in q.items():
+        array = np.asarray(values)
+        subset[key] = array[mask] if array.shape[:1] == mask.shape[:1] else array
+    return subset
+
+
 def _quality_threshold_summary(quality: np.ndarray) -> list[dict[str, Any]]:
     values = np.asarray(quality, dtype=np.float64)
     values = values[np.isfinite(values)]
     rows: list[dict[str, Any]] = []
     if values.size == 0:
         return rows
-    for keep_fraction in (0.95, 0.90, 0.80, 0.70, 0.50, 0.30, 0.20, 0.10, 0.05):
+    for keep_fraction in QUALITY_THRESHOLD_KEEP_FRACTIONS:
         threshold = float(np.percentile(values, 100.0 * (1.0 - keep_fraction)))
         rows.append(
             {
@@ -601,12 +661,8 @@ def _quality_cut_rows(q: dict[str, np.ndarray], quality: np.ndarray, min_bin_cou
     if not np.any(valid):
         return rows
     total = int(np.sum(valid))
-    for keep_fraction in (1.00, 0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10, 0.05):
-        if keep_fraction >= 1.0:
-            threshold = float(np.nanmin(values[valid]))
-        else:
-            threshold = float(np.percentile(values[valid], 100.0 * (1.0 - keep_fraction)))
-        mask = valid & (values >= threshold)
+    for keep_fraction in QUALITY_CUT_KEEP_FRACTIONS:
+        mask, threshold = _quality_cut_mask(values, keep_fraction)
         n = int(np.sum(mask))
         energy_stats = _fit_gaussian_hist(q["rel_energy"][mask])
         rows.append(
@@ -637,16 +693,7 @@ def _quality_energy_rows(
     energy_bin_width: float,
 ) -> dict[str, list[dict[str, Any]] | float]:
     values = np.asarray(quality, dtype=np.float64)
-    valid = np.isfinite(values)
-    if not np.any(valid):
-        mask = np.zeros_like(values, dtype=bool)
-        threshold = float("nan")
-    elif keep_fraction >= 1.0:
-        threshold = float(np.nanmin(values[valid]))
-        mask = valid
-    else:
-        threshold = float(np.percentile(values[valid], 100.0 * (1.0 - keep_fraction)))
-        mask = valid & (values >= threshold)
+    mask, threshold = _quality_cut_mask(values, keep_fraction)
     return {
         "keep_fraction": float(keep_fraction),
         "quality_threshold": threshold,
@@ -692,21 +739,6 @@ def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Pa
         axes = [ax]
     ax.plot(epochs, train, marker="o", markersize=2.5, linewidth=1.4, label="train")
     ax.plot(epochs, val, marker="s", markersize=2.5, linewidth=1.4, label="validation")
-    if has_reconstruction:
-        ax.plot(
-            epochs,
-            [row["train_reconstruction_loss"] for row in history],
-            linestyle="--",
-            linewidth=1.0,
-            label="train reconstruction",
-        )
-        ax.plot(
-            epochs,
-            [row["val_reconstruction_loss"] for row in history],
-            linestyle=":",
-            linewidth=1.2,
-            label="validation reconstruction",
-        )
     ax.set_xlabel("epoch")
     ax.set_ylabel("BCE loss" if mass_loss_duplicates_total else "loss")
     ax.set_yscale("log")
@@ -1142,7 +1174,6 @@ def _save_species_reconstruction_outputs(
         _style_axes(ax)
     fig.tight_layout()
     pdf_files.append(_save_pdf(fig, split_dir / "03_species_error_histograms.pdf"))
-    pdf_files.append(_save_pdf(fig, split_dir / "species_error_histograms.pdf"))
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(7.0, 4.6))
@@ -1162,7 +1193,7 @@ def _save_species_reconstruction_outputs(
                 label=name,
             )
     if ax.has_data():
-        ax.axhline(0.0, color="0.25", linewidth=1.0)
+        _add_energy_bias_guides(ax)
         ax.legend(frameon=False)
     else:
         ax.text(0.5, 0.5, "no energy bin has enough entries", ha="center", va="center", transform=ax.transAxes)
@@ -1172,7 +1203,6 @@ def _save_species_reconstruction_outputs(
     _style_axes(ax)
     fig.tight_layout()
     pdf_files.append(_save_pdf(fig, split_dir / "04_species_energy_resolution_by_true_energy.pdf"))
-    pdf_files.append(_save_pdf(fig, split_dir / "species_energy_resolution_by_true_energy.pdf"))
     plt.close(fig)
 
     fig, axes = plt.subplots(2, 1, figsize=(7.0, 7.0), sharex=True)
@@ -1207,7 +1237,8 @@ def _save_species_reconstruction_outputs(
             capsize=2.5,
             label=name,
         )
-    axes[0].axhline(0.0, color="0.25", linewidth=1.0)
+    _add_energy_bias_guides(axes[0])
+    _add_energy_sigma_guides(axes[1])
     axes[0].set_title(f"{split_name}: Gaussian mu by true energy and species")
     axes[0].set_ylabel("Gaussian mu")
     axes[1].set_title(f"{split_name}: Gaussian sigma by true energy and species")
@@ -1218,7 +1249,6 @@ def _save_species_reconstruction_outputs(
         _style_axes(ax)
     fig.tight_layout()
     pdf_files.append(_save_pdf(fig, split_dir / "04b_species_energy_fit_parameters_by_true_energy.pdf"))
-    pdf_files.append(_save_pdf(fig, split_dir / "species_energy_fit_parameters_by_true_energy.pdf"))
     plt.close(fig)
 
     fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.4))
@@ -1249,12 +1279,13 @@ def _save_species_reconstruction_outputs(
     axes[1].set_title(f"{split_name}: core resolution by true energy and species")
     axes[1].set_xlabel(r"true $\log_{10}(E/\mathrm{eV})$")
     axes[1].set_ylabel("core position error [km]")
+    _add_angular_target(axes[0])
+    _add_core_target(axes[1], unit="km")
     for ax in axes:
         ax.legend(frameon=False)
         _style_axes(ax)
     fig.tight_layout()
     pdf_files.append(_save_pdf(fig, split_dir / "05_species_angular_core_resolution_by_true_energy.pdf"))
-    pdf_files.append(_save_pdf(fig, split_dir / "species_angular_core_resolution_by_true_energy.pdf"))
     plt.close(fig)
 
     return {
@@ -1364,6 +1395,221 @@ def _save_mass_pdf(
     return split_dir, summary
 
 
+def _save_reconstruction_cut_pages(
+    directory: Path,
+    split_label: str,
+    q: dict[str, np.ndarray],
+    energy_bin_width: float,
+    min_bin_count: int,
+) -> dict[str, Any]:
+    import matplotlib.pyplot as plt
+
+    pdf_files: list[str] = []
+    bin_rows = _energy_bin_table(q["true_log10_energy"], q["rel_energy"], energy_bin_width)
+    resolution_rows = _resolution_bin_table(
+        q["true_log10_energy"],
+        q["opening_deg"],
+        q["core_xy_km"],
+        energy_bin_width,
+    )
+    summary: dict[str, Any] = {
+        "directory": str(directory),
+        "n": int(q["target"].shape[0]),
+        "opening_angle_68_deg": _to_float(_percentile(q["opening_deg"], 68.0)),
+        "core_xy_68_km": _to_float(_percentile(q["core_xy_km"], 68.0)),
+        "energy_relative_error": _fit_gaussian_hist(q["rel_energy"]),
+        "energy_bins": bin_rows,
+        "resolution_bins": resolution_rows,
+        "pdfs": pdf_files,
+    }
+    page_names = [
+        "opening_angle",
+        "core_coordinate_residuals",
+        "core_position_error",
+        "energy_relative_error",
+        "energy_resolution_by_true_energy",
+        "angular_core_resolution_by_true_energy",
+    ]
+    with _SplitPdfWriter(directory, page_names, pdf_files) as pdf:
+        fig, ax = plt.subplots(figsize=FIGSIZE_SINGLE)
+        ax.hist(q["opening_deg"], bins=_hist_bins(q["opening_deg"]), histtype="stepfilled", color="#4c78a8", alpha=0.4, edgecolor="#4c78a8")
+        open68 = summary["opening_angle_68_deg"]
+        if open68 is not None:
+            ax.axvline(open68, color=PROTON_COLOR, linewidth=LINEWIDTH, label=f"68\\% = {open68:.3g} deg")
+            ax.legend(frameon=False)
+        ax.set_title(f"{split_label}: opening angle")
+        ax.set_xlabel("opening angle [deg]")
+        ax.set_ylabel("events")
+        _style_axes(ax)
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(1, 2, figsize=(9.2, 4.0), sharey=True)
+        for ax, values, label, color in [
+            (axes[0], q["core_dx_km"], "core x residual [km]", "#4c78a8"),
+            (axes[1], q["core_dy_km"], "core y residual [km]", "#f58518"),
+        ]:
+            ax.hist(values, bins=_hist_bins(values), histtype="stepfilled", color=color, alpha=0.4, edgecolor=color)
+            c68 = _central68_half_width(values)
+            if math.isfinite(c68):
+                ax.axvline(c68, color="#2ca02c", linestyle="--", linewidth=LINEWIDTH_THIN)
+                ax.axvline(-c68, color="#2ca02c", linestyle="--", linewidth=LINEWIDTH_THIN)
+                ax.text(0.98, 0.96, f"central 68\\%={c68:.3g} km", ha="right", va="top", transform=ax.transAxes, fontsize=9)
+            ax.axvline(0.0, color=NEUTRAL_COLOR, linewidth=LINEWIDTH_THIN)
+            ax.set_xlabel(label)
+            _style_axes(ax)
+        axes[0].set_ylabel("events")
+        fig.suptitle(f"{split_label}: core coordinate residuals")
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=FIGSIZE_SINGLE)
+        ax.hist(q["core_xy_km"], bins=_hist_bins(q["core_xy_km"]), histtype="stepfilled", color="#54a24b", alpha=0.4, edgecolor="#54a24b")
+        core68 = summary["core_xy_68_km"]
+        if core68 is not None:
+            ax.axvline(core68, color=PROTON_COLOR, linewidth=LINEWIDTH, label=f"68\\% = {core68:.3g} km")
+            ax.legend(frameon=False)
+        ax.set_title(f"{split_label}: core position error")
+        ax.set_xlabel(r"$\sqrt{\Delta x^2 + \Delta y^2}$ [km]")
+        ax.set_ylabel("events")
+        _style_axes(ax)
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=FIGSIZE_SINGLE)
+        summary["energy_relative_error"] = _draw_gaussian_hist(
+            ax,
+            q["rel_energy"],
+            f"{split_label}: relative energy error",
+            r"$(E_{\mathrm{rec}}-E_{\mathrm{true}})/E_{\mathrm{true}}$",
+            color="#b279a2",
+            show_central68=False,
+        )
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        valid_rows = _valid_energy_fit_rows(bin_rows, min_bin_count)
+        display_rows = [row for row in bin_rows if int(row["n"] or 0) >= int(min_bin_count)]
+        fig, ax = plt.subplots(figsize=FIGSIZE_ENERGY)
+        if valid_rows:
+            x = _rows_array(valid_rows, "log10_energy_center")
+            mu = _rows_array(valid_rows, "mu")
+            sigma = _rows_array(valid_rows, "sigma")
+            ax.errorbar(x, mu, yerr=sigma, fmt="o", color=PROTON_COLOR, capsize=CAPSIZE, label=r"Gaussian $\mu\pm\sigma$")
+            _add_energy_bias_guides(ax)
+            ax.legend(frameon=False)
+        else:
+            ax.text(0.5, 0.5, "no energy bin has enough entries", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(f"{split_label}: energy resolution by true energy")
+        ax.set_xlabel(r"true $\log_{10}(E/\mathrm{eV})$")
+        ax.set_ylabel("relative energy error")
+        _style_axes(ax)
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        valid_resolution_rows = [row for row in resolution_rows if int(row["n"] or 0) >= int(min_bin_count)]
+        fig, axes = plt.subplots(1, 2, figsize=FIGSIZE_PAIR)
+        if valid_resolution_rows:
+            x = _rows_array(valid_resolution_rows, "log10_energy_center")
+            axes[0].errorbar(
+                x,
+                _rows_array(valid_resolution_rows, "opening_angle_68_deg"),
+                yerr=_rows_array(valid_resolution_rows, "opening_angle_68_deg_err"),
+                fmt="o-",
+                color="#4c78a8",
+                linewidth=LINEWIDTH,
+                markersize=MARKERSIZE,
+                capsize=CAPSIZE,
+                label=r"68\%",
+            )
+            axes[0].errorbar(
+                x,
+                _rows_array(valid_resolution_rows, "opening_angle_median_deg"),
+                yerr=_rows_array(valid_resolution_rows, "opening_angle_median_deg_err"),
+                fmt="s--",
+                color="#72b7b2",
+                linewidth=LINEWIDTH_THIN,
+                markersize=MARKERSIZE,
+                capsize=CAPSIZE,
+                label="median",
+            )
+            axes[1].errorbar(
+                x,
+                _rows_array(valid_resolution_rows, "core_xy_68_km"),
+                yerr=_rows_array(valid_resolution_rows, "core_xy_68_km_err"),
+                fmt="o-",
+                color="#54a24b",
+                linewidth=LINEWIDTH,
+                markersize=MARKERSIZE,
+                capsize=CAPSIZE,
+                label=r"68\%",
+            )
+            axes[1].errorbar(
+                x,
+                _rows_array(valid_resolution_rows, "core_xy_median_km"),
+                yerr=_rows_array(valid_resolution_rows, "core_xy_median_km_err"),
+                fmt="s--",
+                color="#b79a20",
+                linewidth=LINEWIDTH_THIN,
+                markersize=MARKERSIZE,
+                capsize=CAPSIZE,
+                label="median",
+            )
+            _add_angular_target(axes[0])
+            _add_core_target(axes[1], unit="km")
+            for ax in axes:
+                ax.legend(frameon=False)
+        else:
+            for ax in axes:
+                ax.text(0.5, 0.5, "no energy bin has enough entries", ha="center", va="center", transform=ax.transAxes)
+        axes[0].set_title(f"{split_label}: angular resolution by true energy")
+        axes[0].set_xlabel(r"true $\log_{10}(E/\mathrm{eV})$")
+        axes[0].set_ylabel("opening angle [deg]")
+        axes[1].set_title(f"{split_label}: core resolution by true energy")
+        axes[1].set_xlabel(r"true $\log_{10}(E/\mathrm{eV})$")
+        axes[1].set_ylabel("core position error [km]")
+        for ax in axes:
+            _style_axes(ax)
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        rows_per_page = 6
+        for start in range(0, len(display_rows), rows_per_page):
+            rows = display_rows[start : start + rows_per_page]
+            fig, axes = plt.subplots(2, 3, figsize=FIGSIZE_GRID)
+            axes_flat = axes.ravel()
+            for ax in axes_flat:
+                ax.axis("off")
+            for ax, row in zip(axes_flat, rows):
+                ax.axis("on")
+                low = float(row["log10_energy_low"])
+                high = float(row["log10_energy_high"])
+                if high == bin_rows[-1]["log10_energy_high"]:
+                    mask = (q["true_log10_energy"] >= low) & (q["true_log10_energy"] <= high)
+                else:
+                    mask = (q["true_log10_energy"] >= low) & (q["true_log10_energy"] < high)
+                _draw_gaussian_hist(
+                    ax,
+                    q["rel_energy"][mask],
+                    f"{low:.1f} <= logE < {high:.1f}",
+                    r"$(E_{\mathrm{rec}}-E_{\mathrm{true}})/E_{\mathrm{true}}$",
+                    color="#b279a2",
+                    show_central68=False,
+                )
+            fig.suptitle(f"{split_label}: relative energy error by true energy")
+            fig.tight_layout()
+            pdf.savefig(fig, name=f"energy_relative_error_bins_{start // rows_per_page:02d}")
+            plt.close(fig)
+
+    return summary
+
+
 def _save_reconstruction_pdf(
     output_path: Path,
     split_name: str,
@@ -1399,7 +1645,7 @@ def _save_reconstruction_pdf(
         quality_cut_rows = _quality_cut_rows(q, quality_values, min_bin_count)
         quality_energy_dependence = [
             _quality_energy_rows(q, quality_values, keep_fraction=fraction, energy_bin_width=energy_bin_width)
-            for fraction in (1.00, 0.80, 0.50, 0.20)
+            for fraction in QUALITY_ENERGY_KEEP_FRACTIONS
         ]
         summary["quality"] = {
             "n": int(np.sum(np.isfinite(quality_values))),
@@ -1408,6 +1654,7 @@ def _save_reconstruction_pdf(
             "thresholds": _quality_threshold_summary(quality_values),
             "cut_rows": quality_cut_rows,
             "energy_dependence": quality_energy_dependence,
+            "cut_directories": [],
         }
 
     split_dir = _diagnostics_root(output_path) / split_name
@@ -1493,7 +1740,7 @@ def _save_reconstruction_pdf(
             mu = np.asarray([row["mu"] for row in valid_rows], dtype=float)
             sigma = np.asarray([row["sigma"] for row in valid_rows], dtype=float)
             ax.errorbar(x, mu, yerr=sigma, fmt="o", color="#d62728", capsize=2.5, label=r"Gaussian $\mu\pm\sigma$")
-            ax.axhline(0.0, color="0.25", linewidth=1.0)
+            _add_energy_bias_guides(ax)
             ax.legend(frameon=False)
         else:
             ax.text(0.5, 0.5, "no energy bin has enough entries", ha="center", va="center", transform=ax.transAxes)
@@ -1521,6 +1768,8 @@ def _save_reconstruction_pdf(
             axes[0].errorbar(x, opening50, yerr=opening50_err, fmt="s--", color="#72b7b2", linewidth=1.2, markersize=3.5, capsize=2.5, label="median")
             axes[1].errorbar(x, core68, yerr=core68_err, fmt="o-", color="#54a24b", linewidth=1.4, markersize=4, capsize=2.5, label=r"68\%")
             axes[1].errorbar(x, core50, yerr=core50_err, fmt="s--", color="#b79a20", linewidth=1.2, markersize=3.5, capsize=2.5, label="median")
+            _add_angular_target(axes[0])
+            _add_core_target(axes[1], unit="km")
             for ax in axes:
                 ax.legend(frameon=False)
         else:
@@ -1545,7 +1794,7 @@ def _save_reconstruction_pdf(
             ax.hist(finite_quality, bins=np.linspace(0.0, 1.0, 51), histtype="stepfilled", color="#4c78a8", alpha=0.4, edgecolor="#4c78a8")
             for row in summary["quality"]["thresholds"]:
                 keep_fraction = float(row["keep_fraction"])
-                if keep_fraction in {0.90, 0.50, 0.20, 0.10}:
+                if keep_fraction in QUALITY_MARKER_KEEP_FRACTIONS:
                     threshold = float(row["quality_threshold"])
                     ax.axvline(threshold, color=NEUTRAL_COLOR, linestyle="--", linewidth=LINEWIDTH_THIN)
                     ax.text(threshold, 0.96, f"{100.0 * keep_fraction:.0f}\\%", rotation=90, ha="right", va="top", transform=ax.get_xaxis_transform())
@@ -1560,7 +1809,7 @@ def _save_reconstruction_pdf(
             ax.plot(thresholds, survival, color="#54a24b", linewidth=LINEWIDTH)
             for row in summary["quality"]["thresholds"]:
                 keep_fraction = float(row["keep_fraction"])
-                if keep_fraction in {0.90, 0.50, 0.20, 0.10}:
+                if keep_fraction in QUALITY_MARKER_KEEP_FRACTIONS:
                     threshold = float(row["quality_threshold"])
                     ax.plot([threshold], [keep_fraction], marker="o", color=PROTON_COLOR, markersize=MARKERSIZE)
                     ax.text(threshold, keep_fraction, f" {100.0 * keep_fraction:.0f}\\%", va="center")
@@ -1587,6 +1836,9 @@ def _save_reconstruction_pdf(
                 axes[0].plot(x, opening, marker="o", color="#4c78a8", linewidth=LINEWIDTH, markersize=MARKERSIZE)
                 axes[1].plot(x, core, marker="o", color="#54a24b", linewidth=LINEWIDTH, markersize=MARKERSIZE)
                 axes[2].plot(x, energy, marker="o", color="#b279a2", linewidth=LINEWIDTH, markersize=MARKERSIZE)
+                _add_angular_target(axes[0])
+                _add_core_target(axes[1], unit="m")
+                _add_energy_sigma_guides(axes[2])
                 for ax in axes:
                     ax.set_xlim(1.02, max(0.0, float(np.nanmin(x)) - 0.02))
             else:
@@ -1631,6 +1883,9 @@ def _save_reconstruction_pdf(
             axes[2].set_title(f"{split_name}: energy resolution by true energy and quality")
             axes[2].set_ylabel("Gaussian sigma")
             axes[2].set_xlabel(r"true $\log_{10}(E/\mathrm{eV})$")
+            _add_angular_target(axes[0])
+            _add_core_target(axes[1], unit="m")
+            _add_energy_sigma_guides(axes[2])
             for index, ax in enumerate(axes):
                 if plotted[index]:
                     ax.legend(frameon=False)
@@ -1669,6 +1924,28 @@ def _save_reconstruction_pdf(
             fig.tight_layout()
             pdf.savefig(fig, name=f"energy_relative_error_bins_{start // rows_per_page:02d}")
             plt.close(fig)
+
+    if quality_values is not None:
+        cut_summaries: list[dict[str, Any]] = []
+        for keep_fraction in QUALITY_CUT_OUTPUT_FRACTIONS:
+            mask, threshold = _quality_cut_mask(quality_values, keep_fraction)
+            if not np.any(mask):
+                continue
+            cut_q = _subset_prediction_quantities(q, mask)
+            cut_dir = split_dir / "quality_cuts" / _quality_cut_directory_name(keep_fraction)
+            cut_label = f"{split_name}: quality top {100.0 * keep_fraction:.0f}\\%"
+            cut_summary = _save_reconstruction_cut_pages(
+                cut_dir,
+                cut_label,
+                cut_q,
+                energy_bin_width,
+                min_bin_count,
+            )
+            cut_summary["keep_fraction"] = _to_float(keep_fraction)
+            cut_summary["quality_threshold"] = _to_float(threshold)
+            cut_summaries.append(cut_summary)
+            pdf_files.extend(cut_summary.get("pdfs", []))
+        summary["quality"]["cut_directories"] = cut_summaries
 
     summary["directory"] = str(split_dir)
     summary["pdfs"] = pdf_files

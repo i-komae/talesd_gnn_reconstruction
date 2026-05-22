@@ -10,7 +10,8 @@ from typing import Any
 
 DEFAULT_TARGETS = {
     "energy_bias_abs": 0.05,
-    "energy_central68_half_width": 0.25,
+    "energy_sigma": 0.20,
+    "energy_sigma_stretch": 0.15,
     "angular_68_deg": 1.0,
     "core_xy_68_km": 0.05,
 }
@@ -41,6 +42,12 @@ def _line(name: str, value: float | None, limit: float, *, absolute: bool = Fals
     return f"{status:7s} {name:34s} {rendered_value:>14s}   target {op}{rendered_limit}"
 
 
+def _reference_line(name: str, value: float | None, limit: float, *, unit: str = "") -> str:
+    rendered_value = "missing" if value is None else f"{value:.6g}{unit}"
+    rendered_limit = f"{limit:.6g}{unit}"
+    return f"{'REF':7s} {name:34s} {rendered_value:>14s}   reference <= {rendered_limit}"
+
+
 def _diagnostics(payload: dict[str, Any], split_name: str) -> dict[str, Any]:
     diagnostics = payload.get("diagnostics") or {}
     return diagnostics.get(split_name) or {}
@@ -60,14 +67,14 @@ def _check_energy_bins(rows: list[dict[str, Any]], min_bin_count: int, targets: 
             lines.append(f"MISSING energy fit bin {label:>12s} n={n:<8d} {fit_error}")
             continue
         mu = _finite(row.get("mu"))
-        c68 = _finite(row.get("central68"))
+        sigma = _finite(row.get("sigma"))
         if _status(mu, targets["energy_bias_abs"], absolute=True) == "MISSING":
             lines.append(f"MISSING energy bias bin {label:>11s} n={n:<8d} mu=missing")
             continue
         if _status(mu, targets["energy_bias_abs"], absolute=True) == "FAIL":
             lines.append(f"FAIL    energy bias bin {label:>11s} n={n:<8d} mu={mu:.6g}")
-        if _status(c68, targets["energy_central68_half_width"]) == "FAIL":
-            lines.append(f"FAIL    energy spread bin {label:>9s} n={n:<8d} central68={c68:.6g}")
+        if _status(sigma, targets["energy_sigma"]) == "FAIL":
+            lines.append(f"FAIL    energy sigma bin {label:>10s} n={n:<8d} sigma={sigma:.6g}")
     return lines
 
 
@@ -97,18 +104,21 @@ def _quality_cut_report(rows: list[dict[str, Any]], min_bin_count: int, targets:
         return False, ["MISSING no quality cut has enough entries"]
     lines.append(f"Quality-cut candidates with n >= {min_bin_count}:")
     for row in candidates:
+        requested_keep = _finite(row.get("requested_keep_fraction"))
+        if requested_keep is not None and math.isclose(requested_keep, 0.20, rel_tol=0.0, abs_tol=1.0e-9):
+            continue
         threshold = _finite(row.get("quality_threshold"))
         survival = _finite(row.get("survival_fraction"))
         n = int(row.get("n") or 0)
         energy_bias = _finite(row.get("energy_mu"))
         if energy_bias is None:
             energy_bias = _finite(row.get("energy_median"))
-        energy_spread = _finite(row.get("energy_central68"))
+        energy_spread = _finite(row.get("energy_sigma"))
         angular = _finite(row.get("opening_angle_68_deg"))
         core = _finite(row.get("core_xy_68_km"))
         row_pass = (
             _status(energy_bias, targets["energy_bias_abs"], absolute=True) == "PASS"
-            and _status(energy_spread, targets["energy_central68_half_width"]) == "PASS"
+            and _status(energy_spread, targets["energy_sigma"]) == "PASS"
             and _status(angular, targets["angular_68_deg"]) == "PASS"
             and _status(core, targets["core_xy_68_km"]) == "PASS"
         )
@@ -125,7 +135,7 @@ def _quality_cut_report(rows: list[dict[str, Any]], min_bin_count: int, targets:
             f"{'PASS' if row_pass else 'FAIL':7s} q>={rendered['threshold']:>8s} "
             f"survival={rendered['survival']:>8s} n={n:<8d} "
             f"energy_bias={rendered['energy_bias']:>10s} "
-            f"energy_spread={rendered['energy_spread']:>10s} "
+            f"energy_sigma={rendered['energy_spread']:>10s} "
             f"angle={rendered['angular']:>12s} core={rendered['core']:>10s}"
         )
     return passed, lines
@@ -139,9 +149,9 @@ def build_report(payload: dict[str, Any], *, split_name: str, min_bin_count: int
     energy_bias = _finite(metrics.get("median_relative_energy"))
     if energy_bias is None:
         energy_bias = _finite(energy_diag.get("mu"))
-    energy_spread = _finite(metrics.get("relative_energy_central68_half_width"))
+    energy_spread = _finite(energy_diag.get("sigma"))
     if energy_spread is None:
-        energy_spread = _finite(energy_diag.get("central68"))
+        energy_spread = _finite(energy_diag.get("robust_sigma"))
     angular = _finite(metrics.get("angular_68_deg"))
     if angular is None:
         angular = _finite(diagnostics.get("opening_angle_68_deg"))
@@ -152,7 +162,8 @@ def build_report(payload: dict[str, Any], *, split_name: str, min_bin_count: int
     lines = [
         f"Precision target report: split={split_name}",
         _line("energy median bias", energy_bias, targets["energy_bias_abs"], absolute=True),
-        _line("energy central 68% half-width", energy_spread, targets["energy_central68_half_width"]),
+        _line("energy Gaussian sigma", energy_spread, targets["energy_sigma"]),
+        _reference_line("energy sigma stretch reference", energy_spread, targets["energy_sigma_stretch"]),
         _line("opening angle 68%", angular, targets["angular_68_deg"], unit=" deg"),
         _line("core xy 68%", 1000.0 * core if core is not None else None, 1000.0 * targets["core_xy_68_km"], unit=" m"),
     ]
@@ -195,14 +206,16 @@ def main() -> None:
     parser.add_argument("--split", choices=["validation", "test"], default="test")
     parser.add_argument("--min-bin-count", type=int, default=1000)
     parser.add_argument("--energy-bias-abs", type=float, default=DEFAULT_TARGETS["energy_bias_abs"])
-    parser.add_argument("--energy-central68-half-width", type=float, default=DEFAULT_TARGETS["energy_central68_half_width"])
+    parser.add_argument("--energy-sigma", type=float, default=DEFAULT_TARGETS["energy_sigma"])
+    parser.add_argument("--energy-sigma-stretch", type=float, default=DEFAULT_TARGETS["energy_sigma_stretch"])
     parser.add_argument("--angular-68-deg", type=float, default=DEFAULT_TARGETS["angular_68_deg"])
     parser.add_argument("--core-xy-68-km", type=float, default=DEFAULT_TARGETS["core_xy_68_km"])
     args = parser.parse_args()
 
     targets = {
         "energy_bias_abs": float(args.energy_bias_abs),
-        "energy_central68_half_width": float(args.energy_central68_half_width),
+        "energy_sigma": float(args.energy_sigma),
+        "energy_sigma_stretch": float(args.energy_sigma_stretch),
         "angular_68_deg": float(args.angular_68_deg),
         "core_xy_68_km": float(args.core_xy_68_km),
     }

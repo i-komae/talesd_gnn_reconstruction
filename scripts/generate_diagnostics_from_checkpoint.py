@@ -128,7 +128,7 @@ def _save_prediction_cache(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate validation/test diagnostic plots from a saved checkpoint.")
     parser.add_argument("--checkpoint", required=True, help="trainで保存したcheckpoint .pt")
-    parser.add_argument("--graphs", nargs="+", required=True, help="HDF5 graph shard、またはprefix")
+    parser.add_argument("--graphs", nargs="*", default=[], help="HDF5 graph shard、またはprefix。prediction cacheがある場合は不要")
     parser.add_argument("-o", "--output", default=None, help="診断図のprefix。省略時はcheckpoint名を使う")
     parser.add_argument("--prediction-cache", default=None, help="validation/test prediction cache .npz。省略時はdiagnostics/prediction_cache.npz")
     parser.add_argument("--refresh-prediction-cache", action="store_true", help="既存prediction cacheを無視して再推論する")
@@ -148,10 +148,6 @@ def main() -> None:
     checkpoint_path = Path(args.checkpoint).expanduser()
     output_path = Path(args.output).expanduser() if args.output else checkpoint_path
     cache_path = Path(args.prediction_cache).expanduser() if args.prediction_cache else _default_prediction_cache_path(output_path)
-    graph_paths = _expand_h5_graph_paths(args.graphs)
-    if not graph_paths:
-        raise SystemExit("no graph files matched --graphs")
-
     ckpt = _load_checkpoint(checkpoint_path)
     target_dim = int(ckpt["model_config"].get("target_dim", 7))
     mass_classification = int(ckpt["model_config"].get("classification_dim", 0)) > 0
@@ -227,6 +223,13 @@ def main() -> None:
         print("diagnostics summary:", diagnostics["summary_json"], flush=True)
         print(f"elapsed_seconds={elapsed:.3f}", flush=True)
         return
+
+    graph_paths = _expand_h5_graph_paths(args.graphs)
+    if not graph_paths:
+        raise SystemExit(
+            "no prediction cache was available, so --graphs is required for re-evaluation. "
+            f"Expected cache: {cache_path}"
+        )
 
     dataset = H5GraphDataset(
         graph_paths,

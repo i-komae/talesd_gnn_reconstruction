@@ -226,7 +226,7 @@ TRAIN_EPOCHS=12 TRAIN_WORKERS=4 scripts/train_large_existing_graphs.sh
   summaries/<config>_precision_targets.txt
 ```
 
-`summaries/<config>_precision_targets.txt` は、energy bias 5%、energy central 68% half-width 25%、opening angle 1度、core xy 50 mを最低ラインとしてPASS/FAILを出します。
+`summaries/<config>_precision_targets.txt` は、energy bias 5%、energy Gaussian sigma 20%（15%は参考基準）、opening angle 1度、core xy 50 mを最低ラインとしてPASS/FAILを出します。
 
 標準splitは `train:validation:test = 8:1:1` です。`validation` はbest checkpointの選択に使い、`test` は最後に一度だけ評価します。比率を変える場合は以下を指定します。
 

@@ -296,6 +296,7 @@ Important files:
   checkpoints/${CONFIG_NAME}.pt
   checkpoints/${CONFIG_NAME}.pt.metrics.json
   checkpoints/${CONFIG_NAME}.pt.diagnostics/
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/prediction_cache.npz
   summaries/metrics_summary.csv
   summaries/${CONFIG_NAME}_precision_targets.txt
   checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_confusion_matrix.pdf
@@ -318,6 +319,7 @@ echo "run_dir=${RUN_DIR}"
 echo "checkpoint=${CHECKPOINT}"
 echo "metrics=${METRICS_PATH}"
 echo "diagnostics_dir=${CHECKPOINT}.diagnostics"
+echo "prediction_cache=${CHECKPOINT}.diagnostics/prediction_cache.npz"
 echo "summary_csv=${SUMMARY_DIR}/metrics_summary.csv"
 echo "precision_report=${PRECISION_REPORT}"
 echo "precision_status=${precision_status}"
