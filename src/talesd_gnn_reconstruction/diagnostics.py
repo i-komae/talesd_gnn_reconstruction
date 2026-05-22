@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from .metrics import binary_classification_metrics
+from .metrics import balanced_accuracy_threshold, binary_classification_metrics
 from .metrics import angular_error_deg
 
 PROTON_COLOR = "#d62728"
@@ -81,6 +81,40 @@ def _to_float(value: float) -> float | None:
     if not math.isfinite(value):
         return None
     return value
+
+
+def _none_to_cache_array(values: np.ndarray | None) -> np.ndarray:
+    if values is None:
+        return np.asarray([], dtype=np.float32)
+    return np.asarray(values)
+
+
+def save_prediction_cache(
+    output_path: str | Path,
+    *,
+    validation: tuple[np.ndarray, np.ndarray],
+    test: tuple[np.ndarray, np.ndarray],
+    validation_mass: tuple[np.ndarray, np.ndarray] | None = None,
+    test_mass: tuple[np.ndarray, np.ndarray] | None = None,
+    validation_quality: np.ndarray | None = None,
+    test_quality: np.ndarray | None = None,
+) -> Path:
+    cache_path = _diagnostics_root(Path(output_path).expanduser()) / "prediction_cache.npz"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        cache_path,
+        pred_val=np.asarray(validation[0]),
+        target_val=np.asarray(validation[1]),
+        mass_logit_val=_none_to_cache_array(validation_mass[0] if validation_mass is not None else None),
+        mass_label_val=_none_to_cache_array(validation_mass[1] if validation_mass is not None else None),
+        quality_val=_none_to_cache_array(validation_quality),
+        pred_test=np.asarray(test[0]),
+        target_test=np.asarray(test[1]),
+        mass_logit_test=_none_to_cache_array(test_mass[0] if test_mass is not None else None),
+        mass_label_test=_none_to_cache_array(test_mass[1] if test_mass is not None else None),
+        quality_test=_none_to_cache_array(test_quality),
+    )
+    return cache_path
 
 
 def _finite_mask(pred: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -636,9 +670,22 @@ def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Pa
     val = [row["val_loss"] for row in history]
     has_reconstruction = "train_reconstruction_loss" in history[0] if history else False
     has_mass = "train_mass_loss" in history[0] if history else False
+    has_mass_accuracy = "train_mass_accuracy" in history[0] and "val_mass_accuracy" in history[0] if history else False
+    mass_loss_duplicates_total = bool(
+        has_mass
+        and not has_reconstruction
+        and all(
+            np.isclose(row["train_loss"], row["train_mass_loss"])
+            and np.isclose(row["val_loss"], row["val_mass_loss"])
+            for row in history
+        )
+    )
+    show_separate_mass_loss = bool(has_mass and not mass_loss_duplicates_total)
 
     if has_mass:
-        fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.2))
+        ncols = 1 + int(show_separate_mass_loss) + int(has_mass_accuracy)
+        fig, axes = plt.subplots(1, ncols, figsize=(5.0 * ncols, 4.2))
+        axes = np.atleast_1d(axes)
         ax = axes[0]
     else:
         fig, ax = plt.subplots(figsize=(6.4, 4.4))
@@ -661,17 +708,42 @@ def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Pa
             label="validation reconstruction",
         )
     ax.set_xlabel("epoch")
-    ax.set_ylabel("loss")
+    ax.set_ylabel("BCE loss" if mass_loss_duplicates_total else "loss")
     ax.set_yscale("log")
     ax.legend(frameon=False)
     _style_axes(ax)
-    if has_mass:
-        ax = axes[1]
+    panel_index = 1
+    if show_separate_mass_loss:
+        ax = axes[panel_index]
+        panel_index += 1
         ax.plot(epochs, [row["train_mass_loss"] for row in history], marker="o", markersize=2.5, linewidth=1.4, label="train")
         ax.plot(epochs, [row["val_mass_loss"] for row in history], marker="s", markersize=2.5, linewidth=1.4, label="validation")
         ax.set_xlabel("epoch")
         ax.set_ylabel("BCE loss")
         ax.set_yscale("log")
+        ax.legend(frameon=False)
+        _style_axes(ax)
+    if has_mass_accuracy:
+        ax = axes[panel_index]
+        ax.plot(epochs, [row["train_mass_accuracy"] for row in history], marker="o", markersize=2.5, linewidth=1.4, label="train accuracy")
+        ax.plot(epochs, [row["val_mass_accuracy"] for row in history], marker="s", markersize=2.5, linewidth=1.4, label="validation accuracy")
+        ax.plot(
+            epochs,
+            [row["train_mass_balanced_accuracy"] for row in history],
+            linestyle="--",
+            linewidth=1.0,
+            label="train balanced",
+        )
+        ax.plot(
+            epochs,
+            [row["val_mass_balanced_accuracy"] for row in history],
+            linestyle=":",
+            linewidth=1.2,
+            label="validation balanced",
+        )
+        ax.set_xlabel("epoch")
+        ax.set_ylabel("accuracy")
+        ax.set_ylim(0.0, 1.02)
         ax.legend(frameon=False)
         _style_axes(ax)
     fig.tight_layout()
@@ -711,12 +783,13 @@ def _mass_energy_bin_table(
     scores: np.ndarray,
     labels: np.ndarray,
     bin_width: float,
+    threshold: float = 0.5,
 ) -> list[dict[str, Any]]:
     edges = _energy_bin_edges(true_log10_energy, bin_width)
     rows: list[dict[str, Any]] = []
     if edges.size < 2:
         return rows
-    predictions = scores >= 0.5
+    predictions = scores >= float(threshold)
     truth = labels >= 0.5
     for index, (low, high) in enumerate(zip(edges[:-1], edges[1:])):
         if index == edges.size - 2:
@@ -757,6 +830,38 @@ def _mass_energy_bin_table(
             }
         )
     return rows
+
+
+def _plot_mass_accuracy_by_energy(
+    ax: Any,
+    energy_rows: list[dict[str, Any]],
+    *,
+    min_bin_count: int,
+    split_name: str,
+) -> bool:
+    valid_rows = [row for row in energy_rows if int(row["n"] or 0) >= int(min_bin_count)]
+    if not valid_rows:
+        ax.text(0.5, 0.5, "no energy bin has enough entries", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(f"{split_name}: mass accuracy by true energy")
+        ax.set_xlabel(r"true $\log_{10}(E/\mathrm{eV})$")
+        ax.set_ylabel("accuracy")
+        _style_axes(ax)
+        return False
+
+    x = np.asarray([row["log10_energy_center"] for row in valid_rows], dtype=float)
+    all_accuracy = np.asarray([row["accuracy"] for row in valid_rows], dtype=float)
+    proton = np.asarray([np.nan if row["proton_accuracy"] is None else row["proton_accuracy"] for row in valid_rows])
+    iron = np.asarray([np.nan if row["iron_accuracy"] is None else row["iron_accuracy"] for row in valid_rows])
+    ax.plot(x, all_accuracy, "o-", color=NEUTRAL_COLOR, label="all")
+    ax.plot(x, proton, "s--", color=PROTON_COLOR, label="proton")
+    ax.plot(x, iron, "^--", color=IRON_COLOR, label="iron")
+    ax.set_ylim(0.0, 1.02)
+    ax.set_title(f"{split_name}: mass accuracy by true energy")
+    ax.set_xlabel(r"true $\log_{10}(E/\mathrm{eV})$")
+    ax.set_ylabel("accuracy")
+    ax.legend(frameon=False)
+    _style_axes(ax)
+    return True
 
 
 def _species_resolution_rows(
@@ -1169,6 +1274,7 @@ def _save_mass_pdf(
     target: np.ndarray,
     energy_bin_width: float,
     min_bin_count: int,
+    threshold: float = 0.5,
 ) -> tuple[Path, dict[str, Any]]:
     _prepare_matplotlib()
     import matplotlib.pyplot as plt
@@ -1184,18 +1290,18 @@ def _save_mass_pdf(
     target = target[mask]
     scores = _sigmoid(logits)
     truth = labels >= 0.5
-    predictions = scores >= 0.5
-    metrics = binary_classification_metrics(logits, labels)
-    energy_rows = _mass_energy_bin_table(target[:, 0], scores, labels, energy_bin_width)
+    predictions = scores >= float(threshold)
+    metrics = binary_classification_metrics(logits, labels, threshold=threshold)
+    energy_rows = _mass_energy_bin_table(target[:, 0], scores, labels, energy_bin_width, threshold=threshold)
     summary: dict[str, Any] = {
         **metrics,
         "energy_bins": energy_rows,
     }
 
     split_dir = _diagnostics_root(output_path) / split_name
-    pdf_path = split_dir / "mass_classification.pdf"
-    fig, axes = plt.subplots(2, 2, figsize=(10.2, 8.2))
-    ax = axes[0, 0]
+    pdf_files: list[str] = []
+
+    fig, ax = plt.subplots(figsize=FIGSIZE_SINGLE)
     matrix = np.asarray(
         [
             [metrics["tn_proton"], metrics["fp_iron"]],
@@ -1210,23 +1316,29 @@ def _save_mass_pdf(
         ax.text(col, row, f"{int(value)}", ha="center", va="center", color="black")
     ax.set_title(f"{split_name}: mass confusion matrix")
     fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    pdf_files.append(_save_pdf(fig, split_dir / "mass_confusion_matrix.pdf"))
+    plt.close(fig)
 
-    ax = axes[0, 1]
+    fig, ax = plt.subplots(figsize=FIGSIZE_SINGLE)
     proton_scores = scores[~truth]
     iron_scores = scores[truth]
     bins = np.linspace(0.0, 1.0, 41)
     if proton_scores.size:
-        ax.hist(proton_scores, bins=bins, histtype="step", linewidth=1.6, label="true proton", color="#4c78a8")
+        ax.hist(proton_scores, bins=bins, histtype="step", linewidth=1.6, label="true proton", color=PROTON_COLOR)
     if iron_scores.size:
-        ax.hist(iron_scores, bins=bins, histtype="step", linewidth=1.6, label="true iron", color="#d62728")
-    ax.axvline(0.5, color="0.25", linestyle="--", linewidth=1.1)
+        ax.hist(iron_scores, bins=bins, histtype="step", linewidth=1.6, label="true iron", color=IRON_COLOR)
+    ax.axvline(float(threshold), color="0.25", linestyle="--", linewidth=1.1, label=f"threshold={threshold:.3g}")
     ax.set_title(f"{split_name}: predicted iron probability")
     ax.set_xlabel("P(iron)")
     ax.set_ylabel("events")
     ax.legend(frameon=False)
     _style_axes(ax)
+    fig.tight_layout()
+    pdf_files.append(_save_pdf(fig, split_dir / "mass_score_distribution.pdf"))
+    plt.close(fig)
 
-    ax = axes[1, 0]
+    fig, ax = plt.subplots(figsize=FIGSIZE_SINGLE)
     fpr, tpr = _roc_points(scores, truth.astype(np.int8))
     ax.plot(fpr, tpr, color="#54a24b", linewidth=1.8)
     ax.plot([0, 1], [0, 1], color="0.55", linestyle="--", linewidth=1.0)
@@ -1237,31 +1349,18 @@ def _save_mass_pdf(
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
     _style_axes(ax)
-
-    ax = axes[1, 1]
-    valid_rows = [row for row in energy_rows if int(row["n"] or 0) >= int(min_bin_count)]
-    if valid_rows:
-        x = np.asarray([row["log10_energy_center"] for row in valid_rows], dtype=float)
-        ax.plot(x, [row["accuracy"] for row in valid_rows], "o-", color="#4c78a8", label="all")
-        proton = np.asarray([np.nan if row["proton_accuracy"] is None else row["proton_accuracy"] for row in valid_rows])
-        iron = np.asarray([np.nan if row["iron_accuracy"] is None else row["iron_accuracy"] for row in valid_rows])
-        ax.plot(x, proton, "s--", color="#72b7b2", label="proton")
-        ax.plot(x, iron, "^--", color="#d62728", label="iron")
-        ax.set_ylim(0.0, 1.02)
-        ax.legend(frameon=False)
-    else:
-        ax.text(0.5, 0.5, "no energy bin has enough entries", ha="center", va="center", transform=ax.transAxes)
-    ax.set_title(f"{split_name}: mass accuracy by true energy")
-    ax.set_xlabel(r"true $\log_{10}(E/\mathrm{eV})$")
-    ax.set_ylabel("accuracy")
-    _style_axes(ax)
-
     fig.tight_layout()
-    _save_pdf(fig, pdf_path)
+    pdf_files.append(_save_pdf(fig, split_dir / "mass_roc.pdf"))
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=FIGSIZE_ENERGY)
+    _plot_mass_accuracy_by_energy(ax, energy_rows, min_bin_count=min_bin_count, split_name=split_name)
+    fig.tight_layout()
+    pdf_files.append(_save_pdf(fig, split_dir / "mass_accuracy_by_true_energy.pdf"))
     plt.close(fig)
 
     summary["directory"] = str(split_dir)
-    summary["pdfs"] = [str(pdf_path)]
+    summary["pdfs"] = pdf_files
     return split_dir, summary
 
 
@@ -1596,7 +1695,20 @@ def save_training_diagnostics(
     diagnostics_dir = _diagnostics_root(output)
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
     learning_curve = _save_learning_curve(output, history)
-    diagnostics: dict[str, Any] = {"directory": str(diagnostics_dir), "learning_curve_pdf": str(learning_curve)}
+    prediction_cache = save_prediction_cache(
+        output,
+        validation=validation,
+        test=test,
+        validation_mass=validation_mass,
+        test_mass=test_mass,
+        validation_quality=validation_quality,
+        test_quality=test_quality,
+    )
+    diagnostics: dict[str, Any] = {
+        "directory": str(diagnostics_dir),
+        "learning_curve_pdf": str(learning_curve),
+        "prediction_cache": str(prediction_cache),
+    }
     if save_reconstruction:
         for split_name, pair, quality in [
             ("validation", validation, validation_quality),
@@ -1629,6 +1741,9 @@ def save_training_diagnostics(
             )
             if summary is not None:
                 diagnostics[f"{split_name}_species"] = summary
+    mass_threshold = (
+        balanced_accuracy_threshold(validation_mass[0], validation_mass[1]) if validation_mass is not None else 0.5
+    )
     for split_name, mass_pair, reco_pair in [
         ("validation", validation_mass, validation),
         ("test", test_mass, test),
@@ -1643,6 +1758,7 @@ def save_training_diagnostics(
             target=reco_pair[1],
             energy_bin_width=energy_bin_width,
             min_bin_count=min_bin_count,
+            threshold=mass_threshold,
         )
         diagnostics[f"{split_name}_mass"] = summary
 

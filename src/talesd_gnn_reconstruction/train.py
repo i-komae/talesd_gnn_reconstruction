@@ -17,7 +17,7 @@ import numpy as np
 
 from .dataset import H5GraphDataset, StandardScaler, collate_graph_arrays, fit_scalers
 from .diagnostics import require_matplotlib_latex, save_training_diagnostics
-from .metrics import binary_classification_metrics, direction_to_angles, reconstruction_metrics
+from .metrics import balanced_accuracy_threshold, binary_classification_metrics, direction_to_angles, reconstruction_metrics
 from .progress import progress as _progress
 from .progress import progress_bar as _progress_bar
 from .progress import write as _progress_write
@@ -725,6 +725,74 @@ def _quality_prediction_loss(
     return F.binary_cross_entropy_with_logits(quality_logit.reshape(-1), quality_target)
 
 
+def _mass_classification_loss(
+    logits: Any,
+    labels: Any,
+    *,
+    mode: str,
+    pos_weight: Any | None,
+    focal_gamma: float,
+) -> Any:
+    import torch
+    import torch.nn.functional as F
+
+    mode = str(mode).lower()
+    if mode not in {"bce", "focal"}:
+        raise ValueError("mass_loss_mode must be 'bce' or 'focal'")
+    bce = F.binary_cross_entropy_with_logits(logits, labels, pos_weight=pos_weight, reduction="none")
+    if mode == "bce":
+        return torch.mean(bce)
+    probs = torch.sigmoid(logits)
+    p_t = torch.where(labels >= 0.5, probs, 1.0 - probs)
+    focal = torch.pow((1.0 - p_t).clamp_min(0.0), max(float(focal_gamma), 0.0))
+    return torch.mean(focal * bce)
+
+
+def _empty_binary_counts() -> dict[str, int | float]:
+    return {"tp": 0, "tn": 0, "fp": 0, "fn": 0, "score_sum": 0.0, "score_sq_sum": 0.0}
+
+
+def _update_binary_counts(counts: dict[str, int | float], logits: Any, labels: Any, *, logit_offset: float = 0.0) -> None:
+    import torch
+
+    labels = labels.reshape(-1)
+    logits = logits.reshape(-1)
+    mask = torch.isfinite(labels) & torch.isfinite(logits)
+    if not torch.any(mask):
+        return
+    calibrated = logits[mask] - float(logit_offset)
+    truth = labels[mask] >= 0.5
+    pred = calibrated >= 0.0
+    counts["tp"] += int(torch.sum(pred & truth).detach().cpu())
+    counts["tn"] += int(torch.sum(~pred & ~truth).detach().cpu())
+    counts["fp"] += int(torch.sum(pred & ~truth).detach().cpu())
+    counts["fn"] += int(torch.sum(~pred & truth).detach().cpu())
+    scores = torch.sigmoid(calibrated)
+    counts["score_sum"] += float(torch.sum(scores).detach().cpu())
+    counts["score_sq_sum"] += float(torch.sum(scores * scores).detach().cpu())
+
+
+def _binary_count_metrics(counts: dict[str, int | float]) -> dict[str, float | int]:
+    tp = int(counts["tp"])
+    tn = int(counts["tn"])
+    fp = int(counts["fp"])
+    fn = int(counts["fn"])
+    n = tp + tn + fp + fn
+    true_pos = tp + fn
+    true_neg = tn + fp
+    tpr = tp / true_pos if true_pos else float("nan")
+    tnr = tn / true_neg if true_neg else float("nan")
+    score_mean = float(counts["score_sum"]) / n if n else float("nan")
+    score_var = float(counts["score_sq_sum"]) / n - score_mean * score_mean if n else float("nan")
+    return {
+        "n": n,
+        "accuracy": float((tp + tn) / n) if n else float("nan"),
+        "balanced_accuracy": float(np.nanmean([tpr, tnr])) if n else float("nan"),
+        "score_mean": score_mean,
+        "score_std": math.sqrt(max(score_var, 0.0)) if n else float("nan"),
+    }
+
+
 def _predict_numpy(
     model: "TaleSdGNN",
     loader: Any,
@@ -736,6 +804,7 @@ def _predict_numpy(
     mass_classification: bool = False,
     quality_prediction: bool = False,
     target_dim: int = 7,
+    mass_logit_offset: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     model.eval()
     pred_rows: list[np.ndarray] = []
@@ -760,7 +829,8 @@ def _predict_numpy(
             pred_rows.append(scalers["target"].inverse_transform(pred_scaled))
             target_rows.append(scalers["target"].inverse_transform(target_scaled))
             if mass_classification and mass_logit_tensor is not None:
-                mass_logit_rows.append(mass_logit_tensor.detach().cpu().numpy())
+                calibrated = mass_logit_tensor - float(mass_logit_offset)
+                mass_logit_rows.append(calibrated.detach().cpu().numpy())
             if quality_prediction and quality_logit_tensor is not None:
                 quality_score_rows.append(torch.sigmoid(quality_logit_tensor).detach().cpu().numpy())
             if "mass_label" in batch:
@@ -787,6 +857,7 @@ def train_model(
     early_stopping_patience: int = 0,
     model_architecture: str = "baseline",
     readout_heads: int = 4,
+    classification_arch: str = "enhanced",
     detector_embedding_dim: int = 0,
     waveform_encoder: str = "none",
     waveform_embedding_dim: int = 64,
@@ -814,6 +885,12 @@ def train_model(
     training_task: str = "reconstruction",
     mass_classification: bool = False,
     mass_loss_weight: float = 0.1,
+    mass_loss_mode: str = "focal",
+    mass_focal_gamma: float = 2.0,
+    mass_pos_weight_mode: str = "none",
+    mass_collapse_patience: int = 3,
+    mass_collapse_score_std: float = 1.0e-3,
+    mass_collapse_balanced_accuracy: float = 0.505,
     quality_prediction: bool = False,
     quality_loss_weight: float = 0.2,
     quality_angular_scale_deg: float = 1.0,
@@ -825,7 +902,6 @@ def train_model(
     diagnostic_min_bin_count: int = 20,
 ) -> dict[str, Any]:
     import torch
-    from torch import nn
 
     from .model import PhysicsTaleSdGNN, TaleSdGNN
 
@@ -837,6 +913,15 @@ def train_model(
         raise ValueError("training_task must be 'reconstruction' or 'mass'")
     if training_task == "mass":
         mass_classification = True
+    classification_arch = str(classification_arch).lower()
+    if classification_arch not in {"legacy", "enhanced"}:
+        raise ValueError("classification_arch must be 'legacy' or 'enhanced'")
+    mass_loss_mode = str(mass_loss_mode).lower()
+    if mass_loss_mode not in {"bce", "focal"}:
+        raise ValueError("mass_loss_mode must be 'bce' or 'focal'")
+    mass_pos_weight_mode = str(mass_pos_weight_mode).lower()
+    if mass_pos_weight_mode not in {"none", "auto"}:
+        raise ValueError("mass_pos_weight_mode must be 'none' or 'auto'")
 
     overall_started = time.perf_counter()
     stage_seconds: dict[str, float] = {}
@@ -942,6 +1027,7 @@ def train_model(
         "hidden_dim": hidden_dim,
         "num_layers": num_layers,
         "dropout": dropout,
+        "classification_arch": classification_arch,
         "detector_lids": detector_lids,
         "detector_embedding_dim": max(int(detector_embedding_dim), 0),
     }
@@ -974,6 +1060,9 @@ def train_model(
     target_dim = int(first["target"].shape[0])
     target_mean, target_std = _target_scaler_tensors(scalers, device)
     bce_loss_fn = None
+    mass_pos_weight = 1.0
+    mass_logit_offset = 0.0
+    mass_pos_weight_tensor = None
     if mass_classification:
         stage_started_labels = time.perf_counter()
         train_mass_labels = _particle_labels_for_indices(dataset, train_indices, show_progress=show_progress)
@@ -982,8 +1071,11 @@ def train_model(
             raise ValueError("mass classification requested, but training labels are missing")
         positives = float(np.sum(finite_labels >= 0.5))
         negatives = float(np.sum(finite_labels < 0.5))
-        pos_weight = negatives / max(positives, 1.0)
-        bce_loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight, dtype=torch.float32, device=device))
+        if mass_pos_weight_mode == "auto":
+            mass_pos_weight = negatives / max(positives, 1.0)
+            mass_logit_offset = math.log(max(mass_pos_weight, 1.0e-12))
+            mass_pos_weight_tensor = torch.tensor(mass_pos_weight, dtype=torch.float32, device=device)
+        bce_loss_fn = True
         stage_seconds["scan_particle_labels"] = time.perf_counter() - stage_started_labels
 
     train_loader = _make_graph_loader(
@@ -1038,11 +1130,18 @@ def train_model(
         f"prefetch_factor={prefetch_factor} collate_backend={collate_backend} "
         f"collate_threads={collate_threads or 'auto'}"
         + f" split_mode={split_mode} model_architecture={model_architecture}"
+        + f" classification_arch={classification_arch}"
         + f" detector_embedding_dim={max(int(detector_embedding_dim), 0)} detector_count={len(detector_lids)}"
         + f" waveform_encoder={waveform_encoder} waveform_channels={model_kwargs['waveform_channels']}"
         + f" training_task={training_task} loss_mode={loss_mode}"
         + f" angular_loss_scale_deg={angular_loss_scale_deg}"
         + f" mass_classification={mass_classification} quality_prediction={quality_prediction}"
+        + (
+            f" mass_loss_mode={mass_loss_mode} mass_pos_weight_mode={mass_pos_weight_mode}"
+            f" mass_pos_weight={mass_pos_weight:.6g} mass_logit_offset={mass_logit_offset:.6g}"
+            if mass_classification
+            else ""
+        )
         + f" particle_filter={particle_filter}"
         + (
             f" requested_collate_backend={requested_collate_backend}"
@@ -1054,6 +1153,7 @@ def train_model(
     best_val = float("inf")
     best_state = None
     epochs_without_improvement = 0
+    mass_collapse_epochs = 0
     history: list[dict[str, Any]] = []
 
     stage_started = time.perf_counter()
@@ -1064,6 +1164,7 @@ def train_model(
         train_reco_losses = []
         train_mass_losses = []
         train_quality_losses = []
+        train_mass_counts = _empty_binary_counts()
         train_desc = f"epoch {epoch}/{epochs} train"
         for batch_cpu in _progress(
             train_loader,
@@ -1115,7 +1216,14 @@ def train_model(
                 labels = batch["mass_label"].to(dtype=mass_logit.dtype)
                 mask = torch.isfinite(labels)
                 if torch.any(mask):
-                    mass_loss = bce_loss_fn(mass_logit[mask], labels[mask])
+                    mass_loss = _mass_classification_loss(
+                        mass_logit[mask],
+                        labels[mask],
+                        mode=mass_loss_mode,
+                        pos_weight=mass_pos_weight_tensor,
+                        focal_gamma=mass_focal_gamma,
+                    )
+                    _update_binary_counts(train_mass_counts, mass_logit[mask], labels[mask], logit_offset=mass_logit_offset)
                     if training_task == "mass":
                         loss = mass_loss
                     else:
@@ -1139,6 +1247,7 @@ def train_model(
         val_reco_losses = []
         val_mass_losses = []
         val_quality_losses = []
+        val_mass_counts = _empty_binary_counts()
         with torch.no_grad():
             val_desc = f"epoch {epoch}/{epochs} val"
             for batch_cpu in _progress(
@@ -1191,7 +1300,14 @@ def train_model(
                     labels = batch["mass_label"].to(dtype=mass_logit.dtype)
                     mask = torch.isfinite(labels)
                     if torch.any(mask):
-                        mass_loss = bce_loss_fn(mass_logit[mask], labels[mask])
+                        mass_loss = _mass_classification_loss(
+                            mass_logit[mask],
+                            labels[mask],
+                            mode=mass_loss_mode,
+                            pos_weight=mass_pos_weight_tensor,
+                            focal_gamma=mass_focal_gamma,
+                        )
+                        _update_binary_counts(val_mass_counts, mass_logit[mask], labels[mask], logit_offset=mass_logit_offset)
                         if training_task == "mass":
                             loss = mass_loss
                         else:
@@ -1218,8 +1334,18 @@ def train_model(
             epoch_row["val_reconstruction_loss"] = float(np.mean(val_reco_losses))
         if train_mass_losses:
             epoch_row["train_mass_loss"] = float(np.mean(train_mass_losses))
+            train_mass_metrics = _binary_count_metrics(train_mass_counts)
+            epoch_row["train_mass_accuracy"] = float(train_mass_metrics["accuracy"])
+            epoch_row["train_mass_balanced_accuracy"] = float(train_mass_metrics["balanced_accuracy"])
+            epoch_row["train_mass_score_mean"] = float(train_mass_metrics["score_mean"])
+            epoch_row["train_mass_score_std"] = float(train_mass_metrics["score_std"])
         if val_mass_losses:
             epoch_row["val_mass_loss"] = float(np.mean(val_mass_losses))
+            val_mass_metrics = _binary_count_metrics(val_mass_counts)
+            epoch_row["val_mass_accuracy"] = float(val_mass_metrics["accuracy"])
+            epoch_row["val_mass_balanced_accuracy"] = float(val_mass_metrics["balanced_accuracy"])
+            epoch_row["val_mass_score_mean"] = float(val_mass_metrics["score_mean"])
+            epoch_row["val_mass_score_std"] = float(val_mass_metrics["score_std"])
         if train_quality_losses:
             epoch_row["train_quality_loss"] = float(np.mean(train_quality_losses))
         if val_quality_losses:
@@ -1241,6 +1367,12 @@ def train_model(
 
         if epoch == 1 or epoch % 5 == 0 or epoch == epochs:
             mass_text = f" mass_loss={epoch_row['val_mass_loss']:.6f}" if "val_mass_loss" in epoch_row else ""
+            if "val_mass_accuracy" in epoch_row:
+                mass_text += (
+                    f" mass_acc={epoch_row['val_mass_accuracy']:.4f}"
+                    f" mass_bal_acc={epoch_row['val_mass_balanced_accuracy']:.4f}"
+                    f" mass_score_std={epoch_row['val_mass_score_std']:.4g}"
+                )
             quality_text = f" quality_loss={epoch_row['val_quality_loss']:.6f}" if "val_quality_loss" in epoch_row else ""
             lr_text = f" lr={epoch_row['lr']:.3g}"
             if "next_lr" in epoch_row and epoch_row["next_lr"] != epoch_row["lr"]:
@@ -1254,6 +1386,30 @@ def train_model(
                 train_loss=f"{epoch_row['train_loss']:.4g}",
                 val_loss=f"{epoch_row['val_loss']:.4g}",
             )
+        if (
+            training_task == "mass"
+            and int(mass_collapse_patience) > 0
+            and "val_mass_score_std" in epoch_row
+            and "val_mass_balanced_accuracy" in epoch_row
+        ):
+            collapsed = (
+                float(epoch_row["val_mass_score_std"]) <= float(mass_collapse_score_std)
+                and float(epoch_row["val_mass_balanced_accuracy"]) <= float(mass_collapse_balanced_accuracy)
+            )
+            mass_collapse_epochs = mass_collapse_epochs + 1 if collapsed else 0
+            if collapsed:
+                _progress_write(
+                    "mass classifier collapse warning: "
+                    f"epoch={epoch:04d} consecutive={mass_collapse_epochs}/{int(mass_collapse_patience)} "
+                    f"val_mass_score_std={epoch_row['val_mass_score_std']:.6g} "
+                    f"val_mass_bal_acc={epoch_row['val_mass_balanced_accuracy']:.6g}"
+                )
+            if mass_collapse_epochs >= int(mass_collapse_patience):
+                _progress_write(
+                    "stopping mass training because the classifier is still a near-constant function; "
+                    "fix the model/input/loss before spending more GPU time."
+                )
+                break
         if early_stopping_patience > 0 and epochs_without_improvement >= int(early_stopping_patience):
             _progress_write(
                 f"early stopping at epoch={epoch:04d} "
@@ -1277,10 +1433,16 @@ def train_model(
         mass_classification=mass_classification,
         quality_prediction=quality_prediction,
         target_dim=target_dim,
+        mass_logit_offset=mass_logit_offset,
     )
     val_metrics = None if training_task == "mass" else reconstruction_metrics(pred_val, target_val)
+    mass_threshold = (
+        balanced_accuracy_threshold(mass_logit_val, mass_label_val)
+        if mass_classification and mass_logit_val is not None and mass_label_val is not None
+        else 0.5
+    )
     val_mass_metrics = (
-        binary_classification_metrics(mass_logit_val, mass_label_val)
+        binary_classification_metrics(mass_logit_val, mass_label_val, threshold=mass_threshold)
         if mass_classification and mass_logit_val is not None and mass_label_val is not None
         else None
     )
@@ -1297,10 +1459,11 @@ def train_model(
         mass_classification=mass_classification,
         quality_prediction=quality_prediction,
         target_dim=target_dim,
+        mass_logit_offset=mass_logit_offset,
     )
     test_metrics = None if training_task == "mass" else reconstruction_metrics(pred_test, target_test)
     test_mass_metrics = (
-        binary_classification_metrics(mass_logit_test, mass_label_test)
+        binary_classification_metrics(mass_logit_test, mass_label_test, threshold=mass_threshold)
         if mass_classification and mass_logit_test is not None and mass_label_test is not None
         else None
     )
@@ -1375,6 +1538,14 @@ def train_model(
             "training_task": training_task,
             "mass_classification": mass_classification,
             "mass_loss_weight": mass_loss_weight,
+            "mass_loss_mode": mass_loss_mode,
+            "mass_focal_gamma": mass_focal_gamma,
+            "mass_pos_weight_mode": mass_pos_weight_mode,
+            "mass_pos_weight": mass_pos_weight,
+            "mass_logit_offset": mass_logit_offset,
+            "mass_collapse_patience": mass_collapse_patience,
+            "mass_collapse_score_std": mass_collapse_score_std,
+            "mass_collapse_balanced_accuracy": mass_collapse_balanced_accuracy,
             "quality_prediction": quality_prediction,
             "quality_loss_weight": quality_loss_weight,
             "quality_angular_scale_deg": quality_angular_scale_deg,
@@ -1389,6 +1560,7 @@ def train_model(
             "hidden_dim": hidden_dim,
             "layers": num_layers,
             "dropout": dropout,
+            "classification_arch": classification_arch,
             "detector_embedding_dim": max(int(detector_embedding_dim), 0),
             "detector_count": len(detector_lids),
             "waveform_encoder": waveform_encoder,

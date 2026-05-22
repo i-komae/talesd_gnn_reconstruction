@@ -6,6 +6,9 @@ import torch
 from torch import nn
 
 
+WAVEFORM_SHAPE_DIM = 20
+
+
 def _make_mlp(in_dim: int, hidden_dim: int, out_dim: int, dropout: float) -> nn.Sequential:
     return nn.Sequential(
         nn.Linear(in_dim, hidden_dim),
@@ -34,6 +37,104 @@ def _scatter_max(values: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> 
         graph_values = values[batch == graph_index]
         rows.append(torch.max(graph_values, dim=0).values if graph_values.numel() else torch.zeros(values.shape[1], dtype=values.dtype, device=values.device))
     return torch.stack(rows, dim=0)
+
+
+def _graph_context(
+    batch: torch.Tensor,
+    src: torch.Tensor | None,
+    num_graphs: int,
+    *,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> torch.Tensor:
+    node_counts = torch.zeros(num_graphs, 1, dtype=dtype, device=device)
+    node_counts.index_add_(0, batch, torch.ones(batch.shape[0], 1, dtype=dtype, device=device))
+    edge_counts = torch.zeros(num_graphs, 1, dtype=dtype, device=device)
+    if src is not None and src.numel() > 0:
+        edge_graph = batch[src]
+        edge_counts.index_add_(0, edge_graph, torch.ones(edge_graph.shape[0], 1, dtype=dtype, device=device))
+    edge_density = edge_counts / node_counts.clamp_min(1.0)
+    return torch.cat([torch.log1p(node_counts), torch.log1p(edge_counts), edge_density], dim=-1)
+
+
+def _waveform_shape_summary(
+    waveform_x: torch.Tensor | None,
+    num_nodes: int,
+    *,
+    enabled: bool,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> torch.Tensor:
+    if not enabled:
+        return torch.zeros(num_nodes, 0, dtype=dtype, device=device)
+    if waveform_x is None:
+        return torch.zeros(num_nodes, WAVEFORM_SHAPE_DIM, dtype=dtype, device=device)
+    waveform = waveform_x.to(device=device, dtype=dtype)
+    if waveform.ndim != 3 or waveform.shape[0] != num_nodes or waveform.shape[1] == 0 or waveform.shape[2] == 0:
+        return torch.zeros(num_nodes, WAVEFORM_SHAPE_DIM, dtype=dtype, device=device)
+    if waveform.shape[1] < 4:
+        padded = torch.zeros(num_nodes, 4, waveform.shape[2], dtype=dtype, device=device)
+        padded[:, : waveform.shape[1], :] = waveform
+        waveform = padded
+    else:
+        waveform = waveform[:, :4, :]
+
+    positive = waveform.clamp_min(0.0)
+    sums = positive.sum(dim=-1)
+    peaks = positive.amax(dim=-1)
+    length = int(positive.shape[-1])
+    positions = torch.linspace(0.0, 1.0, length, dtype=dtype, device=device)
+    centroids = (positive * positions[None, None, :]).sum(dim=-1) / sums.clamp_min(1.0e-6)
+    tail = positive[:, :, length // 2 :].sum(dim=-1) / sums.clamp_min(1.0e-6)
+
+    raw_sum = sums[:, 0] + sums[:, 1]
+    compact_sum = sums[:, 2] + sums[:, 3]
+    raw_asym = (sums[:, 0] - sums[:, 1]) / raw_sum.clamp_min(1.0e-6)
+    compact_asym = (sums[:, 2] - sums[:, 3]) / compact_sum.clamp_min(1.0e-6)
+    upper_compact_fraction = sums[:, 2] / sums[:, 0].clamp_min(1.0e-6)
+    lower_compact_fraction = sums[:, 3] / sums[:, 1].clamp_min(1.0e-6)
+
+    summary = torch.cat(
+        [
+            torch.log1p(sums),
+            torch.log1p(peaks),
+            centroids,
+            tail,
+            raw_asym[:, None],
+            compact_asym[:, None],
+            upper_compact_fraction[:, None],
+            lower_compact_fraction[:, None],
+        ],
+        dim=-1,
+    )
+    return torch.nan_to_num(summary, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _waveform_mass_readout(
+    waveform_embedding: torch.Tensor,
+    waveform_x: torch.Tensor | None,
+    batch: torch.Tensor,
+    num_graphs: int,
+    *,
+    summary_enabled: bool,
+) -> torch.Tensor:
+    parts = []
+    if waveform_embedding.shape[1] > 0:
+        parts.append(_scatter_mean(waveform_embedding, batch, num_graphs))
+        parts.append(_scatter_max(waveform_embedding, batch, num_graphs))
+    summary = _waveform_shape_summary(
+        waveform_x,
+        int(batch.shape[0]),
+        enabled=summary_enabled,
+        dtype=waveform_embedding.dtype,
+        device=waveform_embedding.device,
+    )
+    if summary.shape[1] > 0:
+        parts.append(_scatter_mean(summary, batch, num_graphs))
+        parts.append(_scatter_max(summary, batch, num_graphs))
+    if not parts:
+        return torch.zeros(num_graphs, 0, dtype=waveform_embedding.dtype, device=waveform_embedding.device)
+    return torch.cat(parts, dim=-1)
 
 
 def _scatter_softmax(scores: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
@@ -178,6 +279,36 @@ class AttentiveReadout(nn.Module):
             pooled.index_add_(0, batch, weighted)
             outputs.append(pooled)
         return torch.cat(outputs, dim=-1)
+
+
+def _make_classification_head(
+    in_dim: int,
+    hidden_dim: int,
+    out_dim: int,
+    dropout: float,
+    *,
+    enhanced: bool,
+) -> nn.Sequential:
+    if not enhanced:
+        return nn.Sequential(
+            nn.Linear(in_dim, hidden_dim // 2),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, out_dim),
+        )
+    return nn.Sequential(
+        nn.LayerNorm(in_dim),
+        nn.Linear(in_dim, hidden_dim * 2),
+        nn.SiLU(),
+        nn.Dropout(dropout),
+        nn.Linear(hidden_dim * 2, hidden_dim),
+        nn.SiLU(),
+        nn.LayerNorm(hidden_dim),
+        nn.Linear(hidden_dim, hidden_dim),
+        nn.SiLU(),
+        nn.Dropout(dropout),
+        nn.Linear(hidden_dim, out_dim),
+    )
 
 
 class DetectorIdEmbedding(nn.Module):
@@ -358,8 +489,12 @@ class TaleSdGNN(nn.Module):
         waveform_embedding_dim: int = 64,
         waveform_transformer_heads: int = 4,
         waveform_transformer_layers: int = 1,
+        classification_arch: str = "legacy",
     ):
         super().__init__()
+        classification_arch = str(classification_arch).lower()
+        if classification_arch not in {"legacy", "enhanced"}:
+            raise ValueError("classification_arch must be 'legacy' or 'enhanced'")
         raw_detector_lids = [] if detector_lids is None else detector_lids
         detector_lids_list = sorted({int(lid) for lid in raw_detector_lids if int(lid) >= 0})
         self.config = {
@@ -382,12 +517,15 @@ class TaleSdGNN(nn.Module):
             "waveform_embedding_dim": int(waveform_embedding_dim),
             "waveform_transformer_heads": int(waveform_transformer_heads),
             "waveform_transformer_layers": int(waveform_transformer_layers),
+            "classification_arch": classification_arch,
         }
         self.pulse_dim = int(pulse_dim)
         self.hidden_dim = int(hidden_dim)
         self.target_dim = int(target_dim)
         self.classification_dim = int(classification_dim)
         self.quality_dim = int(quality_dim)
+        self.classification_arch = classification_arch
+        self.waveform_shape_summary_enabled = int(waveform_channels) > 0 and int(waveform_length) > 0
         self.detector_encoder = DetectorIdEmbedding(detector_lids_list, detector_embedding_dim)
         self.waveform_encoder = WaveformEncoder(
             waveform_channels=waveform_channels,
@@ -421,11 +559,18 @@ class TaleSdGNN(nn.Module):
         )
         self.class_head = None
         if self.classification_dim > 0:
-            self.class_head = nn.Sequential(
-                nn.Linear(hidden_dim * 2, hidden_dim // 2),
-                nn.SiLU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_dim // 2, self.classification_dim),
+            class_input_dim = hidden_dim * 2
+            if self.classification_arch == "enhanced":
+                class_input_dim += hidden_dim * 2 + 3
+                class_input_dim += self.waveform_encoder.output_dim * 2
+                if self.waveform_shape_summary_enabled:
+                    class_input_dim += WAVEFORM_SHAPE_DIM * 2
+            self.class_head = _make_classification_head(
+                class_input_dim,
+                hidden_dim,
+                self.classification_dim,
+                dropout,
+                enhanced=self.classification_arch == "enhanced",
             )
         self.quality_head = None
         if self.quality_dim > 0:
@@ -511,6 +656,7 @@ class TaleSdGNN(nn.Module):
             x = torch.cat([x, waveform_embedding], dim=-1)
 
         node = self.node_encoder(x)
+        node_initial = node
         edge_index = batch["edge_index"]
         if edge_index.numel() == 0:
             src = None
@@ -528,11 +674,24 @@ class TaleSdGNN(nn.Module):
         node = self.time_edge_encoder(node, batch["edge_attr"], dst, degree)
         for layer in self.layers:
             node = layer(node, src, dst, batch["edge_attr"], degree)
-        pooled = self._pool(node, batch["batch"], int(batch["num_graphs"]))
+        num_graphs = int(batch["num_graphs"])
+        pooled = self._pool(node, batch["batch"], num_graphs)
         reconstruction = self.head(pooled)
         outputs = [reconstruction]
         if self.class_head is not None:
-            outputs.append(self.class_head(pooled))
+            class_input = pooled
+            if self.classification_arch == "enhanced":
+                initial_pooled = self._pool(node_initial, batch["batch"], num_graphs)
+                context = _graph_context(batch["batch"], src, num_graphs, dtype=node.dtype, device=node.device)
+                waveform_direct = _waveform_mass_readout(
+                    waveform_embedding,
+                    batch.get("waveform_x"),
+                    batch["batch"],
+                    num_graphs,
+                    summary_enabled=self.waveform_shape_summary_enabled,
+                )
+                class_input = torch.cat([pooled, initial_pooled, context, waveform_direct], dim=-1)
+            outputs.append(self.class_head(class_input))
         if self.quality_head is not None:
             outputs.append(self.quality_head(pooled))
         return torch.cat(outputs, dim=-1)
@@ -560,8 +719,12 @@ class PhysicsTaleSdGNN(nn.Module):
         waveform_embedding_dim: int = 64,
         waveform_transformer_heads: int = 4,
         waveform_transformer_layers: int = 1,
+        classification_arch: str = "legacy",
     ):
         super().__init__()
+        classification_arch = str(classification_arch).lower()
+        if classification_arch not in {"legacy", "enhanced"}:
+            raise ValueError("classification_arch must be 'legacy' or 'enhanced'")
         raw_detector_lids = [] if detector_lids is None else detector_lids
         detector_lids_list = sorted({int(lid) for lid in raw_detector_lids if int(lid) >= 0})
         self.config = {
@@ -585,12 +748,15 @@ class PhysicsTaleSdGNN(nn.Module):
             "waveform_embedding_dim": int(waveform_embedding_dim),
             "waveform_transformer_heads": int(waveform_transformer_heads),
             "waveform_transformer_layers": int(waveform_transformer_layers),
+            "classification_arch": classification_arch,
         }
         self.pulse_dim = int(pulse_dim)
         self.hidden_dim = int(hidden_dim)
         self.target_dim = int(target_dim)
         self.classification_dim = int(classification_dim)
         self.quality_dim = int(quality_dim)
+        self.classification_arch = classification_arch
+        self.waveform_shape_summary_enabled = int(waveform_channels) > 0 and int(waveform_length) > 0
         self.detector_encoder = DetectorIdEmbedding(detector_lids_list, detector_embedding_dim)
         self.waveform_encoder = WaveformEncoder(
             waveform_channels=waveform_channels,
@@ -635,11 +801,18 @@ class PhysicsTaleSdGNN(nn.Module):
         self.direction_head = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, 3))
         self.class_head = None
         if self.classification_dim > 0:
-            self.class_head = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim // 2),
-                nn.SiLU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_dim // 2, self.classification_dim),
+            class_input_dim = hidden_dim
+            if self.classification_arch == "enhanced":
+                class_input_dim = pooled_dim + hidden_dim * 2 + 3
+                class_input_dim += self.waveform_encoder.output_dim * 2
+                if self.waveform_shape_summary_enabled:
+                    class_input_dim += WAVEFORM_SHAPE_DIM * 2
+            self.class_head = _make_classification_head(
+                class_input_dim,
+                hidden_dim,
+                self.classification_dim,
+                dropout,
+                enhanced=self.classification_arch == "enhanced",
             )
         self.quality_head = None
         if self.quality_dim > 0:
@@ -699,6 +872,7 @@ class PhysicsTaleSdGNN(nn.Module):
         if waveform_embedding.shape[1] > 0:
             x = torch.cat([x, waveform_embedding], dim=-1)
         node = self.node_encoder(x)
+        node_initial = node
         edge_index = batch["edge_index"]
         if edge_index.numel() == 0:
             src = None
@@ -738,7 +912,25 @@ class PhysicsTaleSdGNN(nn.Module):
             reconstruction = reconstruction[:, : self.target_dim]
         outputs = [reconstruction]
         if self.class_head is not None:
-            outputs.append(self.class_head(shared))
+            class_input = shared
+            if self.classification_arch == "enhanced":
+                initial_pooled = torch.cat(
+                    [
+                        _scatter_mean(node_initial, batch["batch"], num_graphs),
+                        _scatter_max(node_initial, batch["batch"], num_graphs),
+                    ],
+                    dim=-1,
+                )
+                context = _graph_context(batch["batch"], src, num_graphs, dtype=node.dtype, device=node.device)
+                waveform_direct = _waveform_mass_readout(
+                    waveform_embedding,
+                    batch.get("waveform_x"),
+                    batch["batch"],
+                    num_graphs,
+                    summary_enabled=self.waveform_shape_summary_enabled,
+                )
+                class_input = torch.cat([pooled, initial_pooled, context, waveform_direct], dim=-1)
+            outputs.append(self.class_head(class_input))
         if self.quality_head is not None:
             outputs.append(self.quality_head(shared))
         return torch.cat(outputs, dim=-1)

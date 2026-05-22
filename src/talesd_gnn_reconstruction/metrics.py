@@ -45,15 +45,73 @@ def reconstruction_metrics(pred: np.ndarray, target: np.ndarray) -> dict[str, fl
     }
 
 
-def binary_classification_metrics(logits: np.ndarray, labels: np.ndarray) -> dict[str, float | int]:
+def _finite_binary_inputs(logits: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     logits = np.asarray(logits, dtype=np.float64).reshape(-1)
     labels = np.asarray(labels, dtype=np.float64).reshape(-1)
     mask = np.isfinite(logits) & np.isfinite(labels)
-    logits = logits[mask]
-    labels = labels[mask]
+    return logits[mask], labels[mask]
+
+
+def _sigmoid(values: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-np.clip(values, -80.0, 80.0)))
+
+
+def _average_ranks(values: np.ndarray) -> np.ndarray:
+    order = np.argsort(values, kind="mergesort")
+    sorted_values = values[order]
+    ranks = np.empty(values.size, dtype=np.float64)
+    start = 0
+    while start < values.size:
+        end = start + 1
+        while end < values.size and sorted_values[end] == sorted_values[start]:
+            end += 1
+        average_rank = 0.5 * (start + 1 + end)
+        ranks[order[start:end]] = average_rank
+        start = end
+    return ranks
+
+
+def balanced_accuracy_threshold(logits: np.ndarray, labels: np.ndarray) -> float:
+    logits, labels = _finite_binary_inputs(logits, labels)
+    if labels.size == 0:
+        return 0.5
+    y = labels >= 0.5
+    true_pos = int(np.sum(y))
+    true_neg = int(np.sum(~y))
+    if true_pos == 0 or true_neg == 0:
+        return 0.5
+
+    probs = _sigmoid(logits)
+    order = np.argsort(-probs, kind="mergesort")
+    sorted_probs = probs[order]
+    sorted_y = y[order]
+    ends = np.flatnonzero(np.concatenate((sorted_probs[1:] != sorted_probs[:-1], [True])))
+
+    tp = np.cumsum(sorted_y, dtype=np.float64)[ends]
+    fp = np.cumsum(~sorted_y, dtype=np.float64)[ends]
+    tpr = tp / float(true_pos)
+    tnr = (float(true_neg) - fp) / float(true_neg)
+    balanced = 0.5 * (tpr + tnr)
+
+    thresholds = sorted_probs[ends]
+    candidate_thresholds = np.concatenate(([np.nextafter(sorted_probs[0], np.inf)], thresholds))
+    candidate_balanced = np.concatenate(([0.5], balanced))
+    best_value = float(np.max(candidate_balanced))
+    best_indices = np.flatnonzero(np.isclose(candidate_balanced, best_value, rtol=0.0, atol=1.0e-12))
+    best_index = int(best_indices[np.argmin(np.abs(candidate_thresholds[best_indices] - 0.5))])
+    return float(candidate_thresholds[best_index])
+
+
+def binary_classification_metrics(
+    logits: np.ndarray,
+    labels: np.ndarray,
+    threshold: float = 0.5,
+) -> dict[str, float | int]:
+    logits, labels = _finite_binary_inputs(logits, labels)
     if labels.size == 0:
         return {
             "n": 0,
+            "threshold": float(threshold),
             "accuracy": float("nan"),
             "balanced_accuracy": float("nan"),
             "auc": float("nan"),
@@ -67,8 +125,8 @@ def binary_classification_metrics(logits: np.ndarray, labels: np.ndarray) -> dic
             "fn_iron": 0,
         }
     y = labels >= 0.5
-    probs = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
-    pred = probs >= 0.5
+    probs = _sigmoid(logits)
+    pred = probs >= float(threshold)
     tp = int(np.sum(pred & y))
     tn = int(np.sum(~pred & ~y))
     fp = int(np.sum(pred & ~y))
@@ -78,17 +136,18 @@ def binary_classification_metrics(logits: np.ndarray, labels: np.ndarray) -> dic
     tpr = tp / true_pos if true_pos else float("nan")
     tnr = tn / true_neg if true_neg else float("nan")
     if true_pos and true_neg:
-        order = np.argsort(probs)
-        ranks = np.empty_like(order, dtype=np.float64)
-        ranks[order] = np.arange(1, probs.size + 1, dtype=np.float64)
+        ranks = _average_ranks(probs)
         auc = (float(np.sum(ranks[y])) - true_pos * (true_pos + 1) / 2.0) / (true_pos * true_neg)
     else:
         auc = float("nan")
     return {
         "n": int(labels.size),
+        "threshold": float(threshold),
         "accuracy": float((tp + tn) / labels.size),
         "balanced_accuracy": float(np.nanmean([tpr, tnr])),
         "auc": float(auc),
+        "score_median_proton": float(np.median(probs[~y])) if true_neg else float("nan"),
+        "score_median_iron": float(np.median(probs[y])) if true_pos else float("nan"),
         "true_proton": true_neg,
         "true_iron": true_pos,
         "pred_proton": int(np.sum(~pred)),

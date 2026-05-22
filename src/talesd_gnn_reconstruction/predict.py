@@ -40,6 +40,7 @@ def predict_graphs(
     classification_dim = int(model_config.get("classification_dim", 0))
     quality_dim = int(model_config.get("quality_dim", 0))
     load_detector_lids = int(model_config.get("detector_embedding_dim", 0)) > 0
+    mass_logit_offset = float(checkpoint.get("runtime", {}).get("mass_logit_offset", 0.0))
 
     dataset = H5GraphDataset(
         graphs_path,
@@ -102,7 +103,7 @@ def predict_graphs(
                 quality = None
                 offset = target_dim
                 if classification_dim > 0:
-                    logits = pred_all[:, offset]
+                    logits = pred_all[:, offset] - mass_logit_offset
                     offset += classification_dim
                     p_iron = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
                     pred_is_iron = p_iron >= 0.5

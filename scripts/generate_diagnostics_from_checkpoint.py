@@ -13,7 +13,11 @@ import numpy as np
 from talesd_gnn_reconstruction.cli import _expand_h5_graph_paths
 from talesd_gnn_reconstruction.dataset import H5GraphDataset, StandardScaler
 from talesd_gnn_reconstruction.diagnostics import save_training_diagnostics
-from talesd_gnn_reconstruction.metrics import binary_classification_metrics, reconstruction_metrics
+from talesd_gnn_reconstruction.metrics import (
+    balanced_accuracy_threshold,
+    binary_classification_metrics,
+    reconstruction_metrics,
+)
 from talesd_gnn_reconstruction.model import build_model_from_config
 from talesd_gnn_reconstruction.train import (
     _make_graph_loader,
@@ -153,6 +157,7 @@ def main() -> None:
     mass_classification = int(ckpt["model_config"].get("classification_dim", 0)) > 0
     quality_prediction = int(ckpt["model_config"].get("quality_dim", 0)) > 0
     load_detector_lids = int(ckpt["model_config"].get("detector_embedding_dim", 0)) > 0
+    mass_logit_offset = float(ckpt.get("runtime", {}).get("mass_logit_offset", 0.0))
     if not args.no_prediction_cache and cache_path.exists() and not args.refresh_prediction_cache:
         print(f"using prediction cache: {cache_path}", flush=True)
         (
@@ -168,14 +173,19 @@ def main() -> None:
             quality_test,
         ) = _load_prediction_cache(cache_path)
         val_metrics = reconstruction_metrics(pred_val, target_val)
+        mass_threshold = (
+            balanced_accuracy_threshold(mass_logit_val, mass_label_val)
+            if mass_logit_val is not None and mass_label_val is not None
+            else 0.5
+        )
         val_mass_metrics = (
-            binary_classification_metrics(mass_logit_val, mass_label_val)
+            binary_classification_metrics(mass_logit_val, mass_label_val, threshold=mass_threshold)
             if mass_logit_val is not None and mass_label_val is not None
             else None
         )
         test_metrics = reconstruction_metrics(pred_test, target_test)
         test_mass_metrics = (
-            binary_classification_metrics(mass_logit_test, mass_label_test)
+            binary_classification_metrics(mass_logit_test, mass_label_test, threshold=mass_threshold)
             if mass_logit_test is not None and mass_label_test is not None
             else None
         )
@@ -275,10 +285,16 @@ def main() -> None:
             mass_classification=mass_classification,
             quality_prediction=quality_prediction,
             target_dim=target_dim,
+            mass_logit_offset=mass_logit_offset,
         )
         val_metrics = reconstruction_metrics(pred_val, target_val)
+        mass_threshold = (
+            balanced_accuracy_threshold(mass_logit_val, mass_label_val)
+            if mass_logit_val is not None and mass_label_val is not None
+            else 0.5
+        )
         val_mass_metrics = (
-            binary_classification_metrics(mass_logit_val, mass_label_val)
+            binary_classification_metrics(mass_logit_val, mass_label_val, threshold=mass_threshold)
             if mass_logit_val is not None and mass_label_val is not None
             else None
         )
@@ -312,10 +328,11 @@ def main() -> None:
             mass_classification=mass_classification,
             quality_prediction=quality_prediction,
             target_dim=target_dim,
+            mass_logit_offset=mass_logit_offset,
         )
         test_metrics = reconstruction_metrics(pred_test, target_test)
         test_mass_metrics = (
-            binary_classification_metrics(mass_logit_test, mass_label_test)
+            binary_classification_metrics(mass_logit_test, mass_label_test, threshold=mass_threshold)
             if mass_logit_test is not None and mass_label_test is not None
             else None
         )

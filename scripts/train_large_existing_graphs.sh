@@ -26,6 +26,7 @@ HIDDEN_DIM="${HIDDEN_DIM:-160}"
 LAYERS="${LAYERS:-4}"
 DROPOUT="${DROPOUT:-0.05}"
 READOUT_HEADS="${READOUT_HEADS:-4}"
+CLASSIFICATION_ARCH="${CLASSIFICATION_ARCH:-enhanced}"
 DETECTOR_EMBEDDING_DIM="${DETECTOR_EMBEDDING_DIM:-0}"
 WAVEFORM_ENCODER="${WAVEFORM_ENCODER:-none}"
 WAVEFORM_EMBEDDING_DIM="${WAVEFORM_EMBEDDING_DIM:-64}"
@@ -51,6 +52,12 @@ COLLATE_THREADS="${COLLATE_THREADS:-1}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
 TRAINING_TASK="${TRAINING_TASK:-reconstruction}"
 MASS_CLASSIFICATION="${MASS_CLASSIFICATION:-0}"
+MASS_LOSS_MODE="${MASS_LOSS_MODE:-focal}"
+MASS_FOCAL_GAMMA="${MASS_FOCAL_GAMMA:-2.0}"
+MASS_POS_WEIGHT_MODE="${MASS_POS_WEIGHT_MODE:-none}"
+MASS_COLLAPSE_PATIENCE="${MASS_COLLAPSE_PATIENCE:-3}"
+MASS_COLLAPSE_SCORE_STD="${MASS_COLLAPSE_SCORE_STD:-1e-3}"
+MASS_COLLAPSE_BALANCED_ACCURACY="${MASS_COLLAPSE_BALANCED_ACCURACY:-0.505}"
 QUALITY_PREDICTION="${QUALITY_PREDICTION:-0}"
 QUALITY_WEIGHT="${QUALITY_WEIGHT:-0.2}"
 QUALITY_ANGULAR_SCALE_DEG="${QUALITY_ANGULAR_SCALE_DEG:-1.0}"
@@ -65,7 +72,13 @@ DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT:-1000}"
 PRECISION_MIN_BIN_COUNT="${PRECISION_MIN_BIN_COUNT:-1000}"
 MAX_GRAPHS="${MAX_GRAPHS:-}"
 
-CONFIG_NAME="${CONFIG_NAME:-${TRAINING_TASK}_${MODEL_ARCHITECTURE}_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${LOSS_MODE}_${PARTICLE_FILTER}_${TRAIN_EPOCHS}epoch}"
+if [[ -z "${CONFIG_NAME:-}" ]]; then
+  if [[ "${TRAINING_TASK}" == "mass" ]]; then
+    CONFIG_NAME="mass_${MODEL_ARCHITECTURE}_clf${CLASSIFICATION_ARCH}_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${MASS_LOSS_MODE}_${PARTICLE_FILTER}_${TRAIN_EPOCHS}epoch"
+  else
+    CONFIG_NAME="${TRAINING_TASK}_${MODEL_ARCHITECTURE}_clf${CLASSIFICATION_ARCH}_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${LOSS_MODE}_${PARTICLE_FILTER}_${TRAIN_EPOCHS}epoch"
+  fi
+fi
 CHECKPOINT="${CHECKPOINT_DIR}/${CONFIG_NAME}.pt"
 LOG_PATH="${LOG_DIR}/${CONFIG_NAME}.log"
 METRICS_PATH="${CHECKPOINT}.metrics.json"
@@ -85,6 +98,7 @@ HIDDEN_DIM=${HIDDEN_DIM}
 LAYERS=${LAYERS}
 DROPOUT=${DROPOUT}
 READOUT_HEADS=${READOUT_HEADS}
+CLASSIFICATION_ARCH=${CLASSIFICATION_ARCH}
 DETECTOR_EMBEDDING_DIM=${DETECTOR_EMBEDDING_DIM}
 WAVEFORM_ENCODER=${WAVEFORM_ENCODER}
 WAVEFORM_EMBEDDING_DIM=${WAVEFORM_EMBEDDING_DIM}
@@ -110,6 +124,12 @@ COLLATE_THREADS=${COLLATE_THREADS}
 PREFETCH_FACTOR=${PREFETCH_FACTOR}
 TRAINING_TASK=${TRAINING_TASK}
 MASS_CLASSIFICATION=${MASS_CLASSIFICATION}
+MASS_LOSS_MODE=${MASS_LOSS_MODE}
+MASS_FOCAL_GAMMA=${MASS_FOCAL_GAMMA}
+MASS_POS_WEIGHT_MODE=${MASS_POS_WEIGHT_MODE}
+MASS_COLLAPSE_PATIENCE=${MASS_COLLAPSE_PATIENCE}
+MASS_COLLAPSE_SCORE_STD=${MASS_COLLAPSE_SCORE_STD}
+MASS_COLLAPSE_BALANCED_ACCURACY=${MASS_COLLAPSE_BALANCED_ACCURACY}
 QUALITY_PREDICTION=${QUALITY_PREDICTION}
 QUALITY_WEIGHT=${QUALITY_WEIGHT}
 QUALITY_ANGULAR_SCALE_DEG=${QUALITY_ANGULAR_SCALE_DEG}
@@ -178,6 +198,7 @@ fi
     --early-stopping-patience "${EARLY_STOPPING_PATIENCE}" \
     --model-architecture "${MODEL_ARCHITECTURE}" \
     --readout-heads "${READOUT_HEADS}" \
+    --classification-arch "${CLASSIFICATION_ARCH}" \
     --detector-embedding-dim "${DETECTOR_EMBEDDING_DIM}" \
     --waveform-encoder "${WAVEFORM_ENCODER}" \
     --waveform-embedding-dim "${WAVEFORM_EMBEDDING_DIM}" \
@@ -197,6 +218,12 @@ fi
     --collate-backend cpp \
     --collate-threads "${COLLATE_THREADS}" \
     --training-task "${TRAINING_TASK}" \
+    --mass-loss-mode "${MASS_LOSS_MODE}" \
+    --mass-focal-gamma "${MASS_FOCAL_GAMMA}" \
+    --mass-pos-weight-mode "${MASS_POS_WEIGHT_MODE}" \
+    --mass-collapse-patience "${MASS_COLLAPSE_PATIENCE}" \
+    --mass-collapse-score-std "${MASS_COLLAPSE_SCORE_STD}" \
+    --mass-collapse-balanced-accuracy "${MASS_COLLAPSE_BALANCED_ACCURACY}" \
     --split-mode "${SPLIT_MODE}" \
     --test-fraction "${TEST_FRACTION}" \
     --val-fraction "${VAL_FRACTION}" \
@@ -233,8 +260,14 @@ Precision gate is not applied to mass-only training.
 
 Use:
   checkpoints/${CONFIG_NAME}.pt.metrics.json
-  checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_classification.pdf
-  checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_classification.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_confusion_matrix.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_score_distribution.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_roc.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_accuracy_by_true_energy.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_confusion_matrix.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_score_distribution.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_roc.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_accuracy_by_true_energy.pdf
 EOF
 else
   if .venv/bin/python scripts/check_precision_targets.py "${METRICS_PATH}" --min-bin-count "${PRECISION_MIN_BIN_COUNT}" -o "${PRECISION_REPORT}"; then
@@ -257,8 +290,14 @@ Important files:
   checkpoints/${CONFIG_NAME}.pt.diagnostics/
   summaries/metrics_summary.csv
   summaries/${CONFIG_NAME}_precision_targets.txt
-  checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_classification.pdf
-  checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_classification.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_confusion_matrix.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_score_distribution.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_roc.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_accuracy_by_true_energy.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_confusion_matrix.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_score_distribution.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_roc.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_accuracy_by_true_energy.pdf
 
 Graph input:
   ${GRAPH_INPUT}

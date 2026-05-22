@@ -831,6 +831,7 @@ def _cmd_train(args: argparse.Namespace) -> None:
         early_stopping_patience=args.early_stopping_patience,
         model_architecture=args.model_architecture,
         readout_heads=args.readout_heads,
+        classification_arch=args.classification_arch,
         detector_embedding_dim=args.detector_embedding_dim,
         waveform_encoder=args.waveform_encoder,
         waveform_embedding_dim=args.waveform_embedding_dim,
@@ -858,6 +859,12 @@ def _cmd_train(args: argparse.Namespace) -> None:
         training_task=args.training_task,
         mass_classification=args.mass_classification,
         mass_loss_weight=args.mass_loss_weight,
+        mass_loss_mode=args.mass_loss_mode,
+        mass_focal_gamma=args.mass_focal_gamma,
+        mass_pos_weight_mode=args.mass_pos_weight_mode,
+        mass_collapse_patience=args.mass_collapse_patience,
+        mass_collapse_score_std=args.mass_collapse_score_std,
+        mass_collapse_balanced_accuracy=args.mass_collapse_balanced_accuracy,
         quality_prediction=args.quality_prediction,
         quality_loss_weight=args.quality_loss_weight,
         quality_angular_scale_deg=args.quality_angular_scale_deg,
@@ -970,6 +977,12 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--early-stopping-patience", type=int, default=0, help="0なら無効。指定epoch数validation改善なしで停止")
     train.add_argument("--model-architecture", choices=["baseline", "physics"], default="baseline")
     train.add_argument("--readout-heads", type=int, default=4, help="physics architectureのattention readout head数")
+    train.add_argument(
+        "--classification-arch",
+        choices=["legacy", "enhanced"],
+        default="enhanced",
+        help="mass分類head。enhancedは初期node表現、最終GNN表現、hit/edge数を使う分類専用head",
+    )
     train.add_argument("--detector-embedding-dim", type=int, default=0, help="検出器LIDごとのlearnable embedding次元。0なら無効")
     train.add_argument("--waveform-encoder", choices=["none", "cnn", "cnn-gru", "transformer"], default="none", help="nodeごとの波形trace encoder")
     train.add_argument("--waveform-embedding-dim", type=int, default=64, help="波形encoder出力次元")
@@ -1011,6 +1024,12 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--training-task", choices=["reconstruction", "mass"], default="reconstruction", help="reconstructionは幾何/エネルギー再構成、massはproton/iron分類のみを学習する")
     train.add_argument("--mass-classification", action="store_true", help="rusdmc.parttype由来のproton/iron分類headも同時に学習する")
     train.add_argument("--mass-loss-weight", type=float, default=0.1, help="proton/iron分類lossを再構成lossに足す重み")
+    train.add_argument("--mass-loss-mode", choices=["bce", "focal"], default="focal", help="proton/iron分類loss")
+    train.add_argument("--mass-focal-gamma", type=float, default=2.0, help="--mass-loss-mode focal のgamma")
+    train.add_argument("--mass-pos-weight-mode", choices=["none", "auto"], default="none", help="autoならtrain proton/iron比からBCE pos_weightを使う")
+    train.add_argument("--mass-collapse-patience", type=int, default=3, help="mass-onlyでscoreが定数化したepochが続いたら停止。0で無効")
+    train.add_argument("--mass-collapse-score-std", type=float, default=1.0e-3, help="定数化判定に使うP(iron)標準偏差")
+    train.add_argument("--mass-collapse-balanced-accuracy", type=float, default=0.505, help="定数化判定に使うbalanced accuracy上限")
     train.add_argument("--quality-prediction", action="store_true", help="再構成の信頼度を0から1で返すquality headも同時に学習する")
     train.add_argument("--quality-loss-weight", type=float, default=0.2, help="quality lossを再構成lossに足す重み")
     train.add_argument("--quality-angular-scale-deg", type=float, default=1.0, help="quality教師値で1/eに近づく角度誤差スケール[deg]")
