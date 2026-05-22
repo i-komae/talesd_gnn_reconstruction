@@ -572,10 +572,22 @@ def _detector_lids_for_indices(
     return sorted(detector_lids)
 
 
-def _split_model_output(pred: Any, target_dim: int, mass_classification: bool) -> tuple[Any, Any | None]:
-    if not mass_classification:
-        return pred, None
-    return pred[:, :target_dim], pred[:, target_dim]
+def _split_model_output(
+    pred: Any,
+    target_dim: int,
+    mass_classification: bool,
+    quality_prediction: bool = False,
+) -> tuple[Any, Any | None, Any | None]:
+    offset = int(target_dim)
+    reconstruction = pred[:, :offset]
+    mass_logit = None
+    if mass_classification:
+        mass_logit = pred[:, offset]
+        offset += 1
+    quality_logit = None
+    if quality_prediction:
+        quality_logit = pred[:, offset]
+    return reconstruction, mass_logit, quality_logit
 
 
 def _target_scaler_tensors(
@@ -594,6 +606,18 @@ def _inverse_scaled_target(values: Any, mean: Any, std: Any) -> Any:
     return values * std + mean
 
 
+def _angular_loss_from_vectors(pred: Any, target: Any, *, angular_loss_scale_deg: float) -> Any:
+    import torch
+    import torch.nn.functional as F
+
+    scale_rad = math.radians(max(float(angular_loss_scale_deg), 1.0e-6))
+    pred_dir = F.normalize(pred[:, 4:7], dim=1, eps=1.0e-8)
+    target_dir = F.normalize(target[:, 4:7], dim=1, eps=1.0e-8)
+    dot = torch.sum(pred_dir * target_dir, dim=1).clamp(-1.0 + 1.0e-7, 1.0 - 1.0e-7)
+    scaled_angle = torch.acos(dot) / scale_rad
+    return F.smooth_l1_loss(scaled_angle, torch.zeros_like(scaled_angle), beta=1.0)
+
+
 def _reconstruction_loss(
     pred_scaled: Any,
     target_scaled: Any,
@@ -605,6 +629,7 @@ def _reconstruction_loss(
     core_weight: float,
     direction_weight: float,
     core_scale_km: float,
+    angular_loss_scale_deg: float,
 ) -> Any:
     import torch
     import torch.nn.functional as F
@@ -628,9 +653,7 @@ def _reconstruction_loss(
         delta = pred_scaled - target_scaled
         energy_loss = torch.mean(delta[:, 0] * delta[:, 0])
         core_loss = torch.mean(torch.sum(delta[:, 1:4] * delta[:, 1:4], dim=1))
-        pred_dir = F.normalize(pred[:, 4:7], dim=1, eps=1.0e-8)
-        target_dir = F.normalize(target[:, 4:7], dim=1, eps=1.0e-8)
-        direction_loss = torch.mean(1.0 - torch.sum(pred_dir * target_dir, dim=1).clamp(-1.0, 1.0))
+        direction_loss = _angular_loss_from_vectors(pred, target, angular_loss_scale_deg=angular_loss_scale_deg)
         return (
             float(energy_weight) * energy_loss
             + float(core_weight) * core_loss
@@ -643,14 +666,63 @@ def _reconstruction_loss(
     core_scale = max(float(core_scale_km), 1.0e-6)
     core_delta = (pred[:, 1:3] - target[:, 1:3]) / core_scale
     core_loss = torch.mean(torch.sum(core_delta * core_delta, dim=1))
-    pred_dir = F.normalize(pred[:, 4:7], dim=1, eps=1.0e-8)
-    target_dir = F.normalize(target[:, 4:7], dim=1, eps=1.0e-8)
-    direction_loss = torch.mean(1.0 - torch.sum(pred_dir * target_dir, dim=1).clamp(-1.0, 1.0))
+    direction_loss = _angular_loss_from_vectors(pred, target, angular_loss_scale_deg=angular_loss_scale_deg)
     return (
         float(energy_weight) * energy_loss
         + float(core_weight) * core_loss
         + float(direction_weight) * direction_loss
     )
+
+
+def _quality_targets_from_reconstruction(
+    pred_scaled: Any,
+    target_scaled: Any,
+    *,
+    target_mean: Any,
+    target_std: Any,
+    angular_scale_deg: float,
+    core_scale_km: float,
+    energy_scale: float,
+) -> Any:
+    import torch
+    import torch.nn.functional as F
+
+    pred = _inverse_scaled_target(pred_scaled, target_mean, target_std)
+    target = _inverse_scaled_target(target_scaled, target_mean, target_std)
+    loge_delta = pred[:, 0] - target[:, 0]
+    energy_score = torch.abs(torch.exp(loge_delta * math.log(10.0)) - 1.0) / max(float(energy_scale), 1.0e-6)
+    core_score = torch.linalg.vector_norm(pred[:, 1:3] - target[:, 1:3], dim=1) / max(float(core_scale_km), 1.0e-6)
+    pred_dir = F.normalize(pred[:, 4:7], dim=1, eps=1.0e-8)
+    target_dir = F.normalize(target[:, 4:7], dim=1, eps=1.0e-8)
+    dot = torch.sum(pred_dir * target_dir, dim=1).clamp(-1.0 + 1.0e-7, 1.0 - 1.0e-7)
+    angle_score = torch.acos(dot) / math.radians(max(float(angular_scale_deg), 1.0e-6))
+    score = (energy_score + core_score + angle_score) / 3.0
+    return torch.exp(-score).clamp(0.0, 1.0)
+
+
+def _quality_prediction_loss(
+    quality_logit: Any,
+    pred_scaled: Any,
+    target_scaled: Any,
+    *,
+    target_mean: Any,
+    target_std: Any,
+    angular_scale_deg: float,
+    core_scale_km: float,
+    energy_scale: float,
+) -> Any:
+    import torch.nn.functional as F
+
+    quality_target = _quality_targets_from_reconstruction(
+        pred_scaled,
+        target_scaled,
+        target_mean=target_mean,
+        target_std=target_std,
+        angular_scale_deg=angular_scale_deg,
+        core_scale_km=core_scale_km,
+        energy_scale=energy_scale,
+    ).detach()
+    return F.binary_cross_entropy_with_logits(quality_logit.reshape(-1), quality_target)
 
 
 def _predict_numpy(
@@ -662,31 +734,41 @@ def _predict_numpy(
     desc: str = "predict",
     show_progress: bool = True,
     mass_classification: bool = False,
+    quality_prediction: bool = False,
     target_dim: int = 7,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     model.eval()
     pred_rows: list[np.ndarray] = []
     target_rows: list[np.ndarray] = []
     mass_logit_rows: list[np.ndarray] = []
     mass_label_rows: list[np.ndarray] = []
+    quality_score_rows: list[np.ndarray] = []
     import torch
 
     with torch.no_grad():
         for batch_cpu in _progress(loader, desc=desc, total=len(loader), enabled=show_progress, leave=False):
             batch = _batch_to_device(batch_cpu, device, non_blocking=non_blocking)
             pred_all = model(batch)
-            pred_scaled_tensor, mass_logit_tensor = _split_model_output(pred_all, target_dim, mass_classification)
+            pred_scaled_tensor, mass_logit_tensor, quality_logit_tensor = _split_model_output(
+                pred_all,
+                target_dim,
+                mass_classification,
+                quality_prediction,
+            )
             pred_scaled = pred_scaled_tensor.detach().cpu().numpy()
             target_scaled = batch["y"].detach().cpu().numpy()
             pred_rows.append(scalers["target"].inverse_transform(pred_scaled))
             target_rows.append(scalers["target"].inverse_transform(target_scaled))
             if mass_classification and mass_logit_tensor is not None:
                 mass_logit_rows.append(mass_logit_tensor.detach().cpu().numpy())
+            if quality_prediction and quality_logit_tensor is not None:
+                quality_score_rows.append(torch.sigmoid(quality_logit_tensor).detach().cpu().numpy())
             if "mass_label" in batch:
                 mass_label_rows.append(batch["mass_label"].detach().cpu().numpy())
     mass_logits = np.concatenate(mass_logit_rows, axis=0) if mass_logit_rows else None
     mass_labels = np.concatenate(mass_label_rows, axis=0) if mass_label_rows else None
-    return np.concatenate(pred_rows, axis=0), np.concatenate(target_rows, axis=0), mass_logits, mass_labels
+    quality_scores = np.concatenate(quality_score_rows, axis=0) if quality_score_rows else None
+    return np.concatenate(pred_rows, axis=0), np.concatenate(target_rows, axis=0), mass_logits, mass_labels, quality_scores
 
 
 def train_model(
@@ -715,6 +797,7 @@ def train_model(
     core_loss_weight: float = 1.0,
     direction_loss_weight: float = 1.0,
     core_loss_scale_km: float = 0.12,
+    angular_loss_scale_deg: float = 1.0,
     val_fraction: float = 0.1,
     test_fraction: float = 0.1,
     split_mode: str = "event",
@@ -731,6 +814,11 @@ def train_model(
     training_task: str = "reconstruction",
     mass_classification: bool = False,
     mass_loss_weight: float = 0.1,
+    quality_prediction: bool = False,
+    quality_loss_weight: float = 0.2,
+    quality_angular_scale_deg: float = 1.0,
+    quality_core_scale_km: float = 0.05,
+    quality_energy_scale: float = 0.25,
     show_progress: bool = True,
     save_diagnostics: bool = True,
     diagnostic_energy_bin_width: float = 0.1,
@@ -850,6 +938,7 @@ def train_model(
         "waveform_transformer_layers": waveform_transformer_layers,
         "target_dim": first["target"].shape[0],
         "classification_dim": 1 if mass_classification else 0,
+        "quality_dim": 1 if quality_prediction else 0,
         "hidden_dim": hidden_dim,
         "num_layers": num_layers,
         "dropout": dropout,
@@ -951,7 +1040,9 @@ def train_model(
         + f" split_mode={split_mode} model_architecture={model_architecture}"
         + f" detector_embedding_dim={max(int(detector_embedding_dim), 0)} detector_count={len(detector_lids)}"
         + f" waveform_encoder={waveform_encoder} waveform_channels={model_kwargs['waveform_channels']}"
-        + f" training_task={training_task} loss_mode={loss_mode} mass_classification={mass_classification}"
+        + f" training_task={training_task} loss_mode={loss_mode}"
+        + f" angular_loss_scale_deg={angular_loss_scale_deg}"
+        + f" mass_classification={mass_classification} quality_prediction={quality_prediction}"
         + f" particle_filter={particle_filter}"
         + (
             f" requested_collate_backend={requested_collate_backend}"
@@ -972,6 +1063,7 @@ def train_model(
         train_losses = []
         train_reco_losses = []
         train_mass_losses = []
+        train_quality_losses = []
         train_desc = f"epoch {epoch}/{epochs} train"
         for batch_cpu in _progress(
             train_loader,
@@ -983,7 +1075,12 @@ def train_model(
         ):
             batch = _batch_to_device(batch_cpu, device, non_blocking=pin_memory)
             pred_all = model(batch)
-            pred, mass_logit = _split_model_output(pred_all, target_dim, mass_classification)
+            pred, mass_logit, quality_logit = _split_model_output(
+                pred_all,
+                target_dim,
+                mass_classification,
+                quality_prediction,
+            )
             reco_loss = None
             loss = None
             if training_task != "mass":
@@ -997,8 +1094,22 @@ def train_model(
                     core_weight=core_loss_weight,
                     direction_weight=direction_loss_weight,
                     core_scale_km=core_loss_scale_km,
+                    angular_loss_scale_deg=angular_loss_scale_deg,
                 )
                 loss = reco_loss
+            quality_loss = None
+            if quality_prediction and quality_logit is not None and training_task != "mass":
+                quality_loss = _quality_prediction_loss(
+                    quality_logit,
+                    pred,
+                    batch["y"],
+                    target_mean=target_mean,
+                    target_std=target_std,
+                    angular_scale_deg=quality_angular_scale_deg,
+                    core_scale_km=quality_core_scale_km,
+                    energy_scale=quality_energy_scale,
+                )
+                loss = quality_loss if loss is None else loss + float(quality_loss_weight) * quality_loss
             mass_loss = None
             if mass_classification and mass_logit is not None and bce_loss_fn is not None:
                 labels = batch["mass_label"].to(dtype=mass_logit.dtype)
@@ -1020,11 +1131,14 @@ def train_model(
                 train_reco_losses.append(float(reco_loss.detach().cpu()))
             if mass_loss is not None:
                 train_mass_losses.append(float(mass_loss.detach().cpu()))
+            if quality_loss is not None:
+                train_quality_losses.append(float(quality_loss.detach().cpu()))
 
         model.eval()
         val_losses = []
         val_reco_losses = []
         val_mass_losses = []
+        val_quality_losses = []
         with torch.no_grad():
             val_desc = f"epoch {epoch}/{epochs} val"
             for batch_cpu in _progress(
@@ -1037,7 +1151,12 @@ def train_model(
             ):
                 batch = _batch_to_device(batch_cpu, device, non_blocking=pin_memory)
                 pred_all = model(batch)
-                pred, mass_logit = _split_model_output(pred_all, target_dim, mass_classification)
+                pred, mass_logit, quality_logit = _split_model_output(
+                    pred_all,
+                    target_dim,
+                    mass_classification,
+                    quality_prediction,
+                )
                 reco_loss = None
                 loss = None
                 if training_task != "mass":
@@ -1051,8 +1170,22 @@ def train_model(
                         core_weight=core_loss_weight,
                         direction_weight=direction_loss_weight,
                         core_scale_km=core_loss_scale_km,
+                        angular_loss_scale_deg=angular_loss_scale_deg,
                     )
                     loss = reco_loss
+                quality_loss = None
+                if quality_prediction and quality_logit is not None and training_task != "mass":
+                    quality_loss = _quality_prediction_loss(
+                        quality_logit,
+                        pred,
+                        batch["y"],
+                        target_mean=target_mean,
+                        target_std=target_std,
+                        angular_scale_deg=quality_angular_scale_deg,
+                        core_scale_km=quality_core_scale_km,
+                        energy_scale=quality_energy_scale,
+                    )
+                    loss = quality_loss if loss is None else loss + float(quality_loss_weight) * quality_loss
                 mass_loss = None
                 if mass_classification and mass_logit is not None and bce_loss_fn is not None:
                     labels = batch["mass_label"].to(dtype=mass_logit.dtype)
@@ -1070,6 +1203,8 @@ def train_model(
                     val_reco_losses.append(float(reco_loss.detach().cpu()))
                 if mass_loss is not None:
                     val_mass_losses.append(float(mass_loss.detach().cpu()))
+                if quality_loss is not None:
+                    val_quality_losses.append(float(quality_loss.detach().cpu()))
 
         epoch_row = {
             "epoch": epoch,
@@ -1085,6 +1220,10 @@ def train_model(
             epoch_row["train_mass_loss"] = float(np.mean(train_mass_losses))
         if val_mass_losses:
             epoch_row["val_mass_loss"] = float(np.mean(val_mass_losses))
+        if train_quality_losses:
+            epoch_row["train_quality_loss"] = float(np.mean(train_quality_losses))
+        if val_quality_losses:
+            epoch_row["val_quality_loss"] = float(np.mean(val_quality_losses))
         history.append(epoch_row)
         if epoch_row["val_loss"] < best_val:
             best_val = epoch_row["val_loss"]
@@ -1102,12 +1241,13 @@ def train_model(
 
         if epoch == 1 or epoch % 5 == 0 or epoch == epochs:
             mass_text = f" mass_loss={epoch_row['val_mass_loss']:.6f}" if "val_mass_loss" in epoch_row else ""
+            quality_text = f" quality_loss={epoch_row['val_quality_loss']:.6f}" if "val_quality_loss" in epoch_row else ""
             lr_text = f" lr={epoch_row['lr']:.3g}"
             if "next_lr" in epoch_row and epoch_row["next_lr"] != epoch_row["lr"]:
                 lr_text += f" next_lr={epoch_row['next_lr']:.3g}"
             _progress_write(
                 f"epoch={epoch:04d} train_loss={epoch_row['train_loss']:.6f} "
-                f"val_loss={epoch_row['val_loss']:.6f}{mass_text}{lr_text}",
+                f"val_loss={epoch_row['val_loss']:.6f}{mass_text}{quality_text}{lr_text}",
             )
         if hasattr(epoch_iter, "set_postfix"):
             epoch_iter.set_postfix(
@@ -1126,7 +1266,7 @@ def train_model(
         model.load_state_dict(best_state)
 
     stage_started = time.perf_counter()
-    pred_val, target_val, mass_logit_val, mass_label_val = _predict_numpy(
+    pred_val, target_val, mass_logit_val, mass_label_val, quality_val = _predict_numpy(
         model,
         val_loader,
         scalers,
@@ -1135,6 +1275,7 @@ def train_model(
         desc="validation predict",
         show_progress=show_progress,
         mass_classification=mass_classification,
+        quality_prediction=quality_prediction,
         target_dim=target_dim,
     )
     val_metrics = None if training_task == "mass" else reconstruction_metrics(pred_val, target_val)
@@ -1145,7 +1286,7 @@ def train_model(
     )
     stage_seconds["validation_predict"] = time.perf_counter() - stage_started
     stage_started = time.perf_counter()
-    pred_test, target_test, mass_logit_test, mass_label_test = _predict_numpy(
+    pred_test, target_test, mass_logit_test, mass_label_test, quality_test = _predict_numpy(
         model,
         test_loader,
         scalers,
@@ -1154,6 +1295,7 @@ def train_model(
         desc="test predict",
         show_progress=show_progress,
         mass_classification=mass_classification,
+        quality_prediction=quality_prediction,
         target_dim=target_dim,
     )
     test_metrics = None if training_task == "mass" else reconstruction_metrics(pred_test, target_test)
@@ -1190,6 +1332,8 @@ def train_model(
             else None,
             validation_particle_labels=mass_label_val,
             test_particle_labels=mass_label_test,
+            validation_quality=quality_val,
+            test_quality=quality_test,
             energy_bin_width=diagnostic_energy_bin_width,
             min_bin_count=diagnostic_min_bin_count,
             save_reconstruction=training_task != "mass",
@@ -1231,6 +1375,11 @@ def train_model(
             "training_task": training_task,
             "mass_classification": mass_classification,
             "mass_loss_weight": mass_loss_weight,
+            "quality_prediction": quality_prediction,
+            "quality_loss_weight": quality_loss_weight,
+            "quality_angular_scale_deg": quality_angular_scale_deg,
+            "quality_core_scale_km": quality_core_scale_km,
+            "quality_energy_scale": quality_energy_scale,
             "learning_rate": learning_rate,
             "weight_decay": weight_decay,
             "lr_scheduler": lr_scheduler,
@@ -1253,6 +1402,7 @@ def train_model(
             "core_loss_weight": core_loss_weight,
             "direction_loss_weight": direction_loss_weight,
             "core_loss_scale_km": core_loss_scale_km,
+            "angular_loss_scale_deg": angular_loss_scale_deg,
             "max_graphs": max_graphs,
             "particle_filter": particle_filter,
             "stage_seconds": {name: round(value, 3) for name, value in stage_seconds.items()},

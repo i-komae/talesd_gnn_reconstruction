@@ -83,10 +83,21 @@ def _to_float(value: float) -> float | None:
     return value
 
 
+def _finite_mask(pred: np.ndarray, target: np.ndarray) -> np.ndarray:
+    pred = np.asarray(pred, dtype=np.float64)
+    target = np.asarray(target, dtype=np.float64)
+    if pred.ndim != 2 or target.ndim != 2 or pred.shape != target.shape:
+        return np.zeros(0, dtype=bool)
+    mask = np.all(np.isfinite(pred), axis=1) & np.all(np.isfinite(target), axis=1)
+    return mask
+
+
 def _finite_pair(pred: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     pred = np.asarray(pred, dtype=np.float64)
     target = np.asarray(target, dtype=np.float64)
-    mask = np.all(np.isfinite(pred), axis=1) & np.all(np.isfinite(target), axis=1)
+    mask = _finite_mask(pred, target)
+    if mask.shape[0] != pred.shape[0] or mask.shape[0] != target.shape[0]:
+        return pred[:0], target[:0]
     return pred[mask], target[mask]
 
 
@@ -513,6 +524,105 @@ def _prediction_quantities(pred: np.ndarray, target: np.ndarray) -> dict[str, np
         "core_dy_km": dy,
         "core_xy_km": core_xy,
         "rel_energy": rel_energy,
+    }
+
+
+def _quality_for_finite_pair(pred: np.ndarray, target: np.ndarray, quality: np.ndarray | None) -> np.ndarray | None:
+    if quality is None:
+        return None
+    values = np.asarray(quality, dtype=np.float64).reshape(-1)
+    mask = _finite_mask(pred, target)
+    if mask.size == 0 or values.shape[0] != mask.shape[0]:
+        return None
+    values = values[mask]
+    values = np.clip(values, 0.0, 1.0)
+    if values.size == 0 or not np.any(np.isfinite(values)):
+        return None
+    return values
+
+
+def _quality_threshold_summary(quality: np.ndarray) -> list[dict[str, Any]]:
+    values = np.asarray(quality, dtype=np.float64)
+    values = values[np.isfinite(values)]
+    rows: list[dict[str, Any]] = []
+    if values.size == 0:
+        return rows
+    for keep_fraction in (0.95, 0.90, 0.80, 0.70, 0.50, 0.30, 0.20, 0.10, 0.05):
+        threshold = float(np.percentile(values, 100.0 * (1.0 - keep_fraction)))
+        rows.append(
+            {
+                "keep_fraction": _to_float(keep_fraction),
+                "quality_threshold": _to_float(threshold),
+                "n_kept": int(np.sum(values >= threshold)),
+                "n_total": int(values.size),
+            }
+        )
+    return rows
+
+
+def _quality_cut_rows(q: dict[str, np.ndarray], quality: np.ndarray, min_bin_count: int) -> list[dict[str, Any]]:
+    values = np.asarray(quality, dtype=np.float64)
+    valid = np.isfinite(values)
+    rows: list[dict[str, Any]] = []
+    if not np.any(valid):
+        return rows
+    total = int(np.sum(valid))
+    for keep_fraction in (1.00, 0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10, 0.05):
+        if keep_fraction >= 1.0:
+            threshold = float(np.nanmin(values[valid]))
+        else:
+            threshold = float(np.percentile(values[valid], 100.0 * (1.0 - keep_fraction)))
+        mask = valid & (values >= threshold)
+        n = int(np.sum(mask))
+        energy_stats = _fit_gaussian_hist(q["rel_energy"][mask])
+        rows.append(
+            {
+                "quality_threshold": _to_float(threshold),
+                "requested_keep_fraction": _to_float(keep_fraction),
+                "survival_fraction": _to_float(n / max(total, 1)),
+                "n": n,
+                "passes_min_count": bool(n >= int(min_bin_count)),
+                "opening_angle_68_deg": _to_float(_percentile(q["opening_deg"][mask], 68.0)),
+                "opening_angle_median_deg": _to_float(_percentile(q["opening_deg"][mask], 50.0)),
+                "core_xy_68_km": _to_float(_percentile(q["core_xy_km"][mask], 68.0)),
+                "core_xy_median_km": _to_float(_percentile(q["core_xy_km"][mask], 50.0)),
+                "energy_mu": energy_stats.get("mu") if energy_stats.get("fit_ok", False) else None,
+                "energy_sigma": energy_stats.get("sigma") if energy_stats.get("fit_ok", False) else None,
+                "energy_central68": energy_stats.get("central68"),
+                "energy_abs68": energy_stats.get("abs68"),
+            }
+        )
+    return rows
+
+
+def _quality_energy_rows(
+    q: dict[str, np.ndarray],
+    quality: np.ndarray,
+    *,
+    keep_fraction: float,
+    energy_bin_width: float,
+) -> dict[str, list[dict[str, Any]] | float]:
+    values = np.asarray(quality, dtype=np.float64)
+    valid = np.isfinite(values)
+    if not np.any(valid):
+        mask = np.zeros_like(values, dtype=bool)
+        threshold = float("nan")
+    elif keep_fraction >= 1.0:
+        threshold = float(np.nanmin(values[valid]))
+        mask = valid
+    else:
+        threshold = float(np.percentile(values[valid], 100.0 * (1.0 - keep_fraction)))
+        mask = valid & (values >= threshold)
+    return {
+        "keep_fraction": float(keep_fraction),
+        "quality_threshold": threshold,
+        "energy_rows": _energy_bin_table(q["true_log10_energy"][mask], q["rel_energy"][mask], energy_bin_width),
+        "resolution_rows": _resolution_bin_table(
+            q["true_log10_energy"][mask],
+            q["opening_deg"][mask],
+            q["core_xy_km"][mask],
+            energy_bin_width,
+        ),
     }
 
 
@@ -1162,11 +1272,13 @@ def _save_reconstruction_pdf(
     target: np.ndarray,
     energy_bin_width: float,
     min_bin_count: int,
+    quality: np.ndarray | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     _prepare_matplotlib()
     import matplotlib.pyplot as plt
 
     q = _prediction_quantities(pred, target)
+    quality_values = _quality_for_finite_pair(pred, target, quality)
     bin_rows = _energy_bin_table(q["true_log10_energy"], q["rel_energy"], energy_bin_width)
     resolution_rows = _resolution_bin_table(
         q["true_log10_energy"],
@@ -1184,6 +1296,20 @@ def _save_reconstruction_pdf(
         "energy_bins": bin_rows,
         "resolution_bins": resolution_rows,
     }
+    if quality_values is not None:
+        quality_cut_rows = _quality_cut_rows(q, quality_values, min_bin_count)
+        quality_energy_dependence = [
+            _quality_energy_rows(q, quality_values, keep_fraction=fraction, energy_bin_width=energy_bin_width)
+            for fraction in (1.00, 0.80, 0.50, 0.20)
+        ]
+        summary["quality"] = {
+            "n": int(np.sum(np.isfinite(quality_values))),
+            "mean": _to_float(np.nanmean(quality_values)),
+            "median": _to_float(np.nanmedian(quality_values)),
+            "thresholds": _quality_threshold_summary(quality_values),
+            "cut_rows": quality_cut_rows,
+            "energy_dependence": quality_energy_dependence,
+        }
 
     split_dir = _diagnostics_root(output_path) / split_name
     pdf_files: list[str] = []
@@ -1194,6 +1320,9 @@ def _save_reconstruction_pdf(
         "energy_relative_error",
         "energy_resolution_by_true_energy",
         "angular_core_resolution_by_true_energy",
+        "quality_histograms",
+        "quality_cut_performance",
+        "quality_energy_dependence",
     ]
     with _SplitPdfWriter(split_dir, page_names, pdf_files) as pdf:
         fig, ax = plt.subplots(figsize=(6.4, 4.4))
@@ -1310,6 +1439,109 @@ def _save_reconstruction_pdf(
         pdf.savefig(fig)
         plt.close(fig)
 
+        if quality_values is not None:
+            finite_quality = quality_values[np.isfinite(quality_values)]
+            fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.4))
+            ax = axes[0]
+            ax.hist(finite_quality, bins=np.linspace(0.0, 1.0, 51), histtype="stepfilled", color="#4c78a8", alpha=0.4, edgecolor="#4c78a8")
+            for row in summary["quality"]["thresholds"]:
+                keep_fraction = float(row["keep_fraction"])
+                if keep_fraction in {0.90, 0.50, 0.20, 0.10}:
+                    threshold = float(row["quality_threshold"])
+                    ax.axvline(threshold, color=NEUTRAL_COLOR, linestyle="--", linewidth=LINEWIDTH_THIN)
+                    ax.text(threshold, 0.96, f"{100.0 * keep_fraction:.0f}\\%", rotation=90, ha="right", va="top", transform=ax.get_xaxis_transform())
+            ax.set_title(f"{split_name}: quality score")
+            ax.set_xlabel("quality")
+            ax.set_ylabel("events")
+            _style_axes(ax)
+
+            ax = axes[1]
+            thresholds = np.linspace(0.0, 1.0, 201)
+            survival = np.asarray([np.mean(finite_quality >= threshold) for threshold in thresholds], dtype=float)
+            ax.plot(thresholds, survival, color="#54a24b", linewidth=LINEWIDTH)
+            for row in summary["quality"]["thresholds"]:
+                keep_fraction = float(row["keep_fraction"])
+                if keep_fraction in {0.90, 0.50, 0.20, 0.10}:
+                    threshold = float(row["quality_threshold"])
+                    ax.plot([threshold], [keep_fraction], marker="o", color=PROTON_COLOR, markersize=MARKERSIZE)
+                    ax.text(threshold, keep_fraction, f" {100.0 * keep_fraction:.0f}\\%", va="center")
+            ax.set_title(f"{split_name}: cumulative survival")
+            ax.set_xlabel("quality threshold")
+            ax.set_ylabel("survival fraction")
+            ax.set_ylim(-0.02, 1.02)
+            _style_axes(ax)
+            fig.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
+
+            valid_quality_rows = [
+                row for row in summary["quality"]["cut_rows"] if int(row["n"] or 0) >= int(min_bin_count)
+            ]
+            fig, axes = plt.subplots(1, 3, figsize=(13.2, 4.0))
+            if valid_quality_rows:
+                x = _rows_array(valid_quality_rows, "survival_fraction")
+                opening = _rows_array(valid_quality_rows, "opening_angle_68_deg")
+                core = _rows_array(valid_quality_rows, "core_xy_68_km") * 1000.0
+                energy_sigma = _rows_array(valid_quality_rows, "energy_sigma")
+                energy_c68 = _rows_array(valid_quality_rows, "energy_central68")
+                energy = np.where(np.isfinite(energy_sigma), energy_sigma, energy_c68)
+                axes[0].plot(x, opening, marker="o", color="#4c78a8", linewidth=LINEWIDTH, markersize=MARKERSIZE)
+                axes[1].plot(x, core, marker="o", color="#54a24b", linewidth=LINEWIDTH, markersize=MARKERSIZE)
+                axes[2].plot(x, energy, marker="o", color="#b279a2", linewidth=LINEWIDTH, markersize=MARKERSIZE)
+                for ax in axes:
+                    ax.set_xlim(1.02, max(0.0, float(np.nanmin(x)) - 0.02))
+            else:
+                for ax in axes:
+                    ax.text(0.5, 0.5, "no quality cut has enough entries", ha="center", va="center", transform=ax.transAxes)
+            axes[0].set_title(f"{split_name}: angular vs quality cut")
+            axes[0].set_ylabel("opening angle 68\\% [deg]")
+            axes[1].set_title(f"{split_name}: core vs quality cut")
+            axes[1].set_ylabel("core 68\\% [m]")
+            axes[2].set_title(f"{split_name}: energy vs quality cut")
+            axes[2].set_ylabel("energy resolution")
+            for ax in axes:
+                ax.set_xlabel("survival fraction")
+                _style_axes(ax)
+            fig.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
+
+            fig, axes = plt.subplots(3, 1, figsize=(7.0, 9.0), sharex=True)
+            plotted = [False, False, False]
+            for item in summary["quality"]["energy_dependence"]:
+                keep_fraction = float(item["keep_fraction"])
+                label = f"top {100.0 * keep_fraction:.0f}\\%"
+                resolution_valid = [
+                    row for row in item["resolution_rows"] if int(row["n"] or 0) >= int(min_bin_count)
+                ]
+                energy_valid = _valid_energy_fit_rows(item["energy_rows"], min_bin_count)
+                if resolution_valid:
+                    x = _rows_array(resolution_valid, "log10_energy_center")
+                    axes[0].plot(x, _rows_array(resolution_valid, "opening_angle_68_deg"), marker="o", linewidth=LINEWIDTH_THIN, markersize=MARKERSIZE, label=label)
+                    axes[1].plot(x, _rows_array(resolution_valid, "core_xy_68_km") * 1000.0, marker="o", linewidth=LINEWIDTH_THIN, markersize=MARKERSIZE, label=label)
+                    plotted[0] = True
+                    plotted[1] = True
+                if energy_valid:
+                    x = _rows_array(energy_valid, "log10_energy_center")
+                    axes[2].plot(x, _rows_array(energy_valid, "sigma"), marker="o", linewidth=LINEWIDTH_THIN, markersize=MARKERSIZE, label=label)
+                    plotted[2] = True
+            axes[0].set_title(f"{split_name}: angular resolution by true energy and quality")
+            axes[0].set_ylabel("opening angle 68\\% [deg]")
+            axes[1].set_title(f"{split_name}: core resolution by true energy and quality")
+            axes[1].set_ylabel("core 68\\% [m]")
+            axes[2].set_title(f"{split_name}: energy resolution by true energy and quality")
+            axes[2].set_ylabel("Gaussian sigma")
+            axes[2].set_xlabel(r"true $\log_{10}(E/\mathrm{eV})$")
+            for index, ax in enumerate(axes):
+                if plotted[index]:
+                    ax.legend(frameon=False)
+                else:
+                    ax.text(0.5, 0.5, "no energy bin has enough entries", ha="center", va="center", transform=ax.transAxes)
+                _style_axes(ax)
+            fig.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
+
         rows_per_page = 6
         for start in range(0, len(display_rows), rows_per_page):
             rows = display_rows[start : start + rows_per_page]
@@ -1353,6 +1585,8 @@ def save_training_diagnostics(
     test_mass: tuple[np.ndarray, np.ndarray] | None = None,
     validation_particle_labels: np.ndarray | None = None,
     test_particle_labels: np.ndarray | None = None,
+    validation_quality: np.ndarray | None = None,
+    test_quality: np.ndarray | None = None,
     energy_bin_width: float = 0.1,
     min_bin_count: int = 20,
     save_reconstruction: bool = True,
@@ -1364,7 +1598,10 @@ def save_training_diagnostics(
     learning_curve = _save_learning_curve(output, history)
     diagnostics: dict[str, Any] = {"directory": str(diagnostics_dir), "learning_curve_pdf": str(learning_curve)}
     if save_reconstruction:
-        for split_name, pair in [("validation", validation), ("test", test)]:
+        for split_name, pair, quality in [
+            ("validation", validation, validation_quality),
+            ("test", test, test_quality),
+        ]:
             _pdf, summary = _save_reconstruction_pdf(
                 output,
                 split_name,
@@ -1372,6 +1609,7 @@ def save_training_diagnostics(
                 target=pair[1],
                 energy_bin_width=energy_bin_width,
                 min_bin_count=min_bin_count,
+                quality=quality,
             )
             diagnostics[split_name] = summary
         for split_name, labels, pair in [

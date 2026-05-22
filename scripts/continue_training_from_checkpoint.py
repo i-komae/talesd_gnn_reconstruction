@@ -14,7 +14,7 @@ from talesd_gnn_reconstruction.cli import _expand_h5_graph_paths
 from talesd_gnn_reconstruction.dataset import H5GraphDataset, StandardScaler
 from talesd_gnn_reconstruction.diagnostics import save_training_diagnostics
 from talesd_gnn_reconstruction.metrics import reconstruction_metrics
-from talesd_gnn_reconstruction.model import TaleSdGNN
+from talesd_gnn_reconstruction.model import build_model_from_config
 from talesd_gnn_reconstruction.progress import write as _progress_write
 from talesd_gnn_reconstruction.train import (
     _batch_to_device,
@@ -120,7 +120,7 @@ def main() -> None:
         target_weights_np = _parse_target_weights(args.target_weights, target_dim)
         target_weights = torch.as_tensor(target_weights_np, dtype=torch.float32, device=device)
 
-        model = TaleSdGNN(**model_config).to(device)
+        model = build_model_from_config(model_config).to(device)
         model.load_state_dict(ckpt["model_state"])
         if num_workers > 0:
             dataset.close()
@@ -214,7 +214,7 @@ def main() -> None:
             ):
                 batch = _batch_to_device(batch_cpu, device, non_blocking=pin_memory)
                 pred_all = model(batch)
-                pred, _mass_logit = _split_model_output(pred_all, target_dim, mass_classification=False)
+                pred, _mass_logit, _quality_logit = _split_model_output(pred_all, target_dim, mass_classification=False)
                 loss = torch.mean((pred - batch["y"]) ** 2 * target_weights)
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
@@ -236,7 +236,7 @@ def main() -> None:
                 ):
                     batch = _batch_to_device(batch_cpu, device, non_blocking=pin_memory)
                     pred_all = model(batch)
-                    pred, _mass_logit = _split_model_output(pred_all, target_dim, mass_classification=False)
+                    pred, _mass_logit, _quality_logit = _split_model_output(pred_all, target_dim, mass_classification=False)
                     loss = torch.mean((pred - batch["y"]) ** 2 * target_weights)
                     val_losses.append(float(loss.detach().cpu()))
 
@@ -262,7 +262,7 @@ def main() -> None:
         model.load_state_dict(best_state)
 
         stage_started = time.perf_counter()
-        pred_val, target_val, _mass_logit_val, mass_label_val = _predict_numpy(
+        pred_val, target_val, _mass_logit_val, mass_label_val, _quality_val = _predict_numpy(
             model,
             val_loader,
             scalers,
@@ -277,7 +277,7 @@ def main() -> None:
         stage_seconds["validation_predict"] = time.perf_counter() - stage_started
 
         stage_started = time.perf_counter()
-        pred_test, target_test, _mass_logit_test, mass_label_test = _predict_numpy(
+        pred_test, target_test, _mass_logit_test, mass_label_test, _quality_test = _predict_numpy(
             model,
             test_loader,
             scalers,

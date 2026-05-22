@@ -124,6 +124,44 @@ class GatedEdgeMessageLayer(nn.Module):
         return node + self.ffn(node)
 
 
+class EdgeTimeDeltaEncoder(nn.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        edge_dim: int,
+        dropout: float = 0.05,
+        *,
+        enabled: bool = True,
+        start_index: int = 4,
+        width: int = 3,
+    ):
+        super().__init__()
+        self.start_index = int(start_index)
+        self.width = int(width)
+        self.enabled = bool(enabled) and int(edge_dim) >= self.start_index + self.width
+        self.encoder = _make_mlp(self.width, hidden_dim, hidden_dim, dropout) if self.enabled else None
+        self.norm = nn.LayerNorm(hidden_dim) if self.enabled else None
+
+    def forward(
+        self,
+        node: torch.Tensor,
+        edge_attr: torch.Tensor,
+        dst: torch.Tensor | None,
+        degree: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if self.encoder is None or self.norm is None or dst is None or edge_attr.numel() == 0:
+            return node
+        time_attr = edge_attr[:, self.start_index : self.start_index + self.width]
+        messages = self.encoder(time_attr)
+        aggregate = torch.zeros_like(node)
+        aggregate.index_add_(0, dst, messages)
+        if degree is None:
+            degree = torch.zeros(node.shape[0], 1, dtype=node.dtype, device=node.device)
+            degree.index_add_(0, dst, torch.ones(dst.shape[0], 1, dtype=node.dtype, device=node.device))
+        aggregate = aggregate / degree.to(dtype=node.dtype).clamp_min(1.0)
+        return self.norm(node + aggregate)
+
+
 class AttentiveReadout(nn.Module):
     def __init__(self, hidden_dim: int, heads: int = 4):
         super().__init__()
@@ -307,11 +345,13 @@ class TaleSdGNN(nn.Module):
         pulse_dim: int = 0,
         target_dim: int = 7,
         classification_dim: int = 0,
+        quality_dim: int = 0,
         hidden_dim: int = 128,
         num_layers: int = 4,
         dropout: float = 0.05,
         detector_lids: Sequence[int] | None = None,
         detector_embedding_dim: int = 0,
+        time_edge_encoder: bool = True,
         waveform_channels: int = 0,
         waveform_length: int = 0,
         waveform_encoder: str = "none",
@@ -329,11 +369,13 @@ class TaleSdGNN(nn.Module):
             "pulse_dim": pulse_dim,
             "target_dim": target_dim,
             "classification_dim": classification_dim,
+            "quality_dim": quality_dim,
             "hidden_dim": hidden_dim,
             "num_layers": num_layers,
             "dropout": dropout,
             "detector_lids": detector_lids_list,
             "detector_embedding_dim": int(detector_embedding_dim),
+            "time_edge_encoder": bool(time_edge_encoder),
             "waveform_channels": int(waveform_channels),
             "waveform_length": int(waveform_length),
             "waveform_encoder": str(waveform_encoder),
@@ -345,6 +387,7 @@ class TaleSdGNN(nn.Module):
         self.hidden_dim = int(hidden_dim)
         self.target_dim = int(target_dim)
         self.classification_dim = int(classification_dim)
+        self.quality_dim = int(quality_dim)
         self.detector_encoder = DetectorIdEmbedding(detector_lids_list, detector_embedding_dim)
         self.waveform_encoder = WaveformEncoder(
             waveform_channels=waveform_channels,
@@ -364,6 +407,7 @@ class TaleSdGNN(nn.Module):
         node_input_dim += self.detector_encoder.output_dim
         node_input_dim += self.waveform_encoder.output_dim
         self.node_encoder = nn.Sequential(nn.Linear(node_input_dim, hidden_dim), nn.SiLU(), nn.LayerNorm(hidden_dim))
+        self.time_edge_encoder = EdgeTimeDeltaEncoder(hidden_dim, edge_dim, dropout, enabled=time_edge_encoder)
         self.layers = nn.ModuleList(
             [EdgeMessageLayer(hidden_dim=hidden_dim, edge_dim=edge_dim, dropout=dropout) for _ in range(num_layers)]
         )
@@ -382,6 +426,14 @@ class TaleSdGNN(nn.Module):
                 nn.SiLU(),
                 nn.Dropout(dropout),
                 nn.Linear(hidden_dim // 2, self.classification_dim),
+            )
+        self.quality_head = None
+        if self.quality_dim > 0:
+            self.quality_head = nn.Sequential(
+                nn.Linear(hidden_dim * 2, hidden_dim // 2),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim // 2, self.quality_dim),
             )
 
     def _pool(self, node: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
@@ -473,13 +525,17 @@ class TaleSdGNN(nn.Module):
                 degree.index_add_(0, dst, torch.ones(dst.shape[0], 1, dtype=node.dtype, device=node.device))
             else:
                 degree = degree.to(dtype=node.dtype)
+        node = self.time_edge_encoder(node, batch["edge_attr"], dst, degree)
         for layer in self.layers:
             node = layer(node, src, dst, batch["edge_attr"], degree)
         pooled = self._pool(node, batch["batch"], int(batch["num_graphs"]))
         reconstruction = self.head(pooled)
-        if self.class_head is None:
-            return reconstruction
-        return torch.cat([reconstruction, self.class_head(pooled)], dim=-1)
+        outputs = [reconstruction]
+        if self.class_head is not None:
+            outputs.append(self.class_head(pooled))
+        if self.quality_head is not None:
+            outputs.append(self.quality_head(pooled))
+        return torch.cat(outputs, dim=-1)
 
 
 class PhysicsTaleSdGNN(nn.Module):
@@ -490,12 +546,14 @@ class PhysicsTaleSdGNN(nn.Module):
         pulse_dim: int = 0,
         target_dim: int = 7,
         classification_dim: int = 0,
+        quality_dim: int = 0,
         hidden_dim: int = 160,
         num_layers: int = 5,
         dropout: float = 0.05,
         readout_heads: int = 4,
         detector_lids: Sequence[int] | None = None,
         detector_embedding_dim: int = 0,
+        time_edge_encoder: bool = True,
         waveform_channels: int = 0,
         waveform_length: int = 0,
         waveform_encoder: str = "none",
@@ -513,12 +571,14 @@ class PhysicsTaleSdGNN(nn.Module):
             "pulse_dim": pulse_dim,
             "target_dim": target_dim,
             "classification_dim": classification_dim,
+            "quality_dim": quality_dim,
             "hidden_dim": hidden_dim,
             "num_layers": num_layers,
             "dropout": dropout,
             "readout_heads": readout_heads,
             "detector_lids": detector_lids_list,
             "detector_embedding_dim": int(detector_embedding_dim),
+            "time_edge_encoder": bool(time_edge_encoder),
             "waveform_channels": int(waveform_channels),
             "waveform_length": int(waveform_length),
             "waveform_encoder": str(waveform_encoder),
@@ -530,6 +590,7 @@ class PhysicsTaleSdGNN(nn.Module):
         self.hidden_dim = int(hidden_dim)
         self.target_dim = int(target_dim)
         self.classification_dim = int(classification_dim)
+        self.quality_dim = int(quality_dim)
         self.detector_encoder = DetectorIdEmbedding(detector_lids_list, detector_embedding_dim)
         self.waveform_encoder = WaveformEncoder(
             waveform_channels=waveform_channels,
@@ -556,6 +617,7 @@ class PhysicsTaleSdGNN(nn.Module):
             nn.SiLU(),
             nn.LayerNorm(hidden_dim),
         )
+        self.time_edge_encoder = EdgeTimeDeltaEncoder(hidden_dim, edge_dim, dropout, enabled=time_edge_encoder)
         self.layers = nn.ModuleList(
             [GatedEdgeMessageLayer(hidden_dim=hidden_dim, edge_dim=edge_dim, dropout=dropout) for _ in range(num_layers)]
         )
@@ -578,6 +640,14 @@ class PhysicsTaleSdGNN(nn.Module):
                 nn.SiLU(),
                 nn.Dropout(dropout),
                 nn.Linear(hidden_dim // 2, self.classification_dim),
+            )
+        self.quality_head = None
+        if self.quality_dim > 0:
+            self.quality_head = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim // 2, self.quality_dim),
             )
 
     def _pulse_pool(self, pulse_x: torch.Tensor, pulse_node_index: torch.Tensor, num_nodes: int) -> torch.Tensor:
@@ -643,6 +713,7 @@ class PhysicsTaleSdGNN(nn.Module):
                 degree.index_add_(0, dst, torch.ones(dst.shape[0], 1, dtype=node.dtype, device=node.device))
             else:
                 degree = degree.to(dtype=node.dtype)
+        node = self.time_edge_encoder(node, batch["edge_attr"], dst, degree)
         for layer in self.layers:
             node = layer(node, src, dst, batch["edge_attr"], degree)
         num_graphs = int(batch["num_graphs"])
@@ -665,14 +736,19 @@ class PhysicsTaleSdGNN(nn.Module):
         )
         if self.target_dim != 7:
             reconstruction = reconstruction[:, : self.target_dim]
-        if self.class_head is None:
-            return reconstruction
-        return torch.cat([reconstruction, self.class_head(shared)], dim=-1)
+        outputs = [reconstruction]
+        if self.class_head is not None:
+            outputs.append(self.class_head(shared))
+        if self.quality_head is not None:
+            outputs.append(self.quality_head(shared))
+        return torch.cat(outputs, dim=-1)
 
 
 def build_model_from_config(config: dict) -> nn.Module:
     config = dict(config)
     architecture = str(config.pop("architecture", "baseline"))
+    if "time_edge_encoder" not in config:
+        config["time_edge_encoder"] = False
     if architecture == "baseline":
         config.pop("readout_heads", None)
         return TaleSdGNN(**config)

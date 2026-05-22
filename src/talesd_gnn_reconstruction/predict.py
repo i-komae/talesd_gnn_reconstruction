@@ -38,6 +38,7 @@ def predict_graphs(
     model.eval()
     target_dim = int(model_config.get("target_dim", 7))
     classification_dim = int(model_config.get("classification_dim", 0))
+    quality_dim = int(model_config.get("quality_dim", 0))
     load_detector_lids = int(model_config.get("detector_embedding_dim", 0)) > 0
 
     dataset = H5GraphDataset(
@@ -65,6 +66,8 @@ def predict_graphs(
     ]
     if classification_dim > 0:
         fieldnames.extend(["p_iron", "p_proton", "pred_parttype"])
+    if quality_dim > 0:
+        fieldnames.append("quality")
     truth_fields = [
         "true_log10_energy_eV",
         "true_core_x_km",
@@ -96,10 +99,16 @@ def predict_graphs(
                 pred[:, 4:7] = direction
                 p_iron = None
                 pred_is_iron = None
+                quality = None
+                offset = target_dim
                 if classification_dim > 0:
-                    logits = pred_all[:, target_dim]
+                    logits = pred_all[:, offset]
+                    offset += classification_dim
                     p_iron = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
                     pred_is_iron = p_iron >= 0.5
+                if quality_dim > 0:
+                    quality_logits = pred_all[:, offset]
+                    quality = 1.0 / (1.0 + np.exp(-np.clip(quality_logits, -80.0, 80.0)))
 
                 for row_idx, sample in enumerate(samples):
                     attrs = sample["attrs"]
@@ -125,6 +134,8 @@ def predict_graphs(
                                 "pred_parttype": 5626 if bool(pred_is_iron[row_idx]) else 14,
                             }
                         )
+                    if quality_dim > 0 and quality is not None:
+                        row["quality"] = float(quality[row_idx])
                     target = sample["target"]
                     if include_truth and target is not None:
                         target_dir = normalize_directions(target[None, :])

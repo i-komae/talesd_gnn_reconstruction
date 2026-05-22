@@ -181,8 +181,8 @@ print_resource_info() {
           seen_class[class] = 1
         }
       }
-      width = 26
-      printf "%s%-2s %-10s %-4s %-26s %8s %8s %8s%s\n", bold, "", "GPU CLASS", "RSC", "USE", "USED%", "USED", "TOTAL", reset
+      width = 32
+      printf "%s%-2s %-12s %-4s %-32s %8s %8s %8s%s\n", bold, "", "GPU CLASS", "RSC", "USE", "USED%", "USED", "TOTAL", reset
     }
 
     function class_from_part(part) {
@@ -362,9 +362,9 @@ print_resource_info() {
           print ""
         }
         printed++
-        printf "%s*%s  %-10s %-4s %s%s%s %7.1f%% %8d %8d\n", class_color(class), reset, class, "GPU", bar_color, bar, reset, pct, used[class], total[class]
-        printf "   %-10s %-4s %s%s%s %7.1f%% %8d %8d\n", "", "CPU", cpu_bar_color, cpu_bar, reset, cpu_pct, used_cpu[class], total_cpu[class]
-        printf "   %-10s %-4s %s%s%s %7.1f%% %8s %8s\n", "", "MEM", mem_bar_color, mem_bar, reset, mem_pct, mem_string(used_mem[class]), mem_string(total_mem[class])
+        printf "%s*%s  %-12s %-4s %s%s%s %7.1f%% %8d %8d\n", class_color(class), reset, class, "GPU", bar_color, bar, reset, pct, used[class], total[class]
+        printf "   %-12s %-4s %s%s%s %7.1f%% %8d %8d\n", "", "CPU", cpu_bar_color, cpu_bar, reset, cpu_pct, used_cpu[class], total_cpu[class]
+        printf "   %-12s %-4s %s%s%s %7.1f%% %8s %8s\n", "", "MEM", mem_bar_color, mem_bar, reset, mem_pct, mem_string(used_mem[class]), mem_string(total_mem[class])
       }
     }'
 }
@@ -389,8 +389,8 @@ print_cpu_resource_info() {
     -v reset="${RESET}" '
     BEGIN {
       nclasses = 0
-      width = 26
-      printf "%s%-2s %-12s %-4s %-26s %8s %8s %8s%s\n", bold, "", "GROUP", "RSC", "USE", "USED%", "USED", "TOTAL", reset
+      width = 32
+      printf "%s%-2s %-12s %-4s %-32s %8s %8s %8s%s\n", bold, "", "GROUP", "RSC", "USE", "USED%", "USED", "TOTAL", reset
     }
 
     function group_rank(group) {

@@ -62,17 +62,32 @@ def _cache_array_to_none(values: np.ndarray) -> np.ndarray | None:
     return None if values.size == 0 else values
 
 
-def _load_prediction_cache(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+def _load_prediction_cache(
+    path: Path,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+]:
     with np.load(path, allow_pickle=False) as data:
         return (
             np.asarray(data["pred_val"]),
             np.asarray(data["target_val"]),
             _cache_array_to_none(np.asarray(data["mass_logit_val"])),
             _cache_array_to_none(np.asarray(data["mass_label_val"])),
+            _cache_array_to_none(np.asarray(data["quality_val"])) if "quality_val" in data else None,
             np.asarray(data["pred_test"]),
             np.asarray(data["target_test"]),
             _cache_array_to_none(np.asarray(data["mass_logit_test"])),
             _cache_array_to_none(np.asarray(data["mass_label_test"])),
+            _cache_array_to_none(np.asarray(data["quality_test"])) if "quality_test" in data else None,
         )
 
 
@@ -83,10 +98,12 @@ def _save_prediction_cache(
     target_val: np.ndarray,
     mass_logit_val: np.ndarray | None,
     mass_label_val: np.ndarray | None,
+    quality_val: np.ndarray | None,
     pred_test: np.ndarray,
     target_test: np.ndarray,
     mass_logit_test: np.ndarray | None,
     mass_label_test: np.ndarray | None,
+    quality_test: np.ndarray | None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -95,10 +112,12 @@ def _save_prediction_cache(
         target_val=np.asarray(target_val),
         mass_logit_val=_none_to_cache_array(mass_logit_val),
         mass_label_val=_none_to_cache_array(mass_label_val),
+        quality_val=_none_to_cache_array(quality_val),
         pred_test=np.asarray(pred_test),
         target_test=np.asarray(target_test),
         mass_logit_test=_none_to_cache_array(mass_logit_test),
         mass_label_test=_none_to_cache_array(mass_label_test),
+        quality_test=_none_to_cache_array(quality_test),
     )
 
 
@@ -132,6 +151,7 @@ def main() -> None:
     ckpt = _load_checkpoint(checkpoint_path)
     target_dim = int(ckpt["model_config"].get("target_dim", 7))
     mass_classification = int(ckpt["model_config"].get("classification_dim", 0)) > 0
+    quality_prediction = int(ckpt["model_config"].get("quality_dim", 0)) > 0
     load_detector_lids = int(ckpt["model_config"].get("detector_embedding_dim", 0)) > 0
     if not args.no_prediction_cache and cache_path.exists() and not args.refresh_prediction_cache:
         print(f"using prediction cache: {cache_path}", flush=True)
@@ -140,10 +160,12 @@ def main() -> None:
             target_val,
             mass_logit_val,
             mass_label_val,
+            quality_val,
             pred_test,
             target_test,
             mass_logit_test,
             mass_label_test,
+            quality_test,
         ) = _load_prediction_cache(cache_path)
         val_metrics = reconstruction_metrics(pred_val, target_val)
         val_mass_metrics = (
@@ -170,6 +192,8 @@ def main() -> None:
             else None,
             validation_particle_labels=mass_label_val,
             test_particle_labels=mass_label_test,
+            validation_quality=quality_val,
+            test_quality=quality_test,
             energy_bin_width=args.diagnostic_energy_bin_width,
             min_bin_count=args.diagnostic_min_bin_count,
         )
@@ -240,7 +264,7 @@ def main() -> None:
             collate_backend=collate_backend,
             collate_threads=collate_threads,
         )
-        pred_val, target_val, mass_logit_val, mass_label_val = _predict_numpy(
+        pred_val, target_val, mass_logit_val, mass_label_val, quality_val = _predict_numpy(
             model,
             val_loader,
             scalers,
@@ -249,6 +273,7 @@ def main() -> None:
             desc="validation predict",
             show_progress=not args.no_progress,
             mass_classification=mass_classification,
+            quality_prediction=quality_prediction,
             target_dim=target_dim,
         )
         val_metrics = reconstruction_metrics(pred_val, target_val)
@@ -276,7 +301,7 @@ def main() -> None:
             collate_backend=collate_backend,
             collate_threads=collate_threads,
         )
-        pred_test, target_test, mass_logit_test, mass_label_test = _predict_numpy(
+        pred_test, target_test, mass_logit_test, mass_label_test, quality_test = _predict_numpy(
             model,
             test_loader,
             scalers,
@@ -285,6 +310,7 @@ def main() -> None:
             desc="test predict",
             show_progress=not args.no_progress,
             mass_classification=mass_classification,
+            quality_prediction=quality_prediction,
             target_dim=target_dim,
         )
         test_metrics = reconstruction_metrics(pred_test, target_test)
@@ -303,10 +329,12 @@ def main() -> None:
                 target_val=target_val,
                 mass_logit_val=mass_logit_val,
                 mass_label_val=mass_label_val,
+                quality_val=quality_val,
                 pred_test=pred_test,
                 target_test=target_test,
                 mass_logit_test=mass_logit_test,
                 mass_label_test=mass_label_test,
+                quality_test=quality_test,
             )
             print(f"prediction cache: {cache_path}", flush=True)
 
@@ -323,6 +351,8 @@ def main() -> None:
             else None,
             validation_particle_labels=mass_label_val,
             test_particle_labels=mass_label_test,
+            validation_quality=quality_val,
+            test_quality=quality_test,
             energy_bin_width=args.diagnostic_energy_bin_width,
             min_bin_count=args.diagnostic_min_bin_count,
         )

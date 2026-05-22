@@ -841,6 +841,7 @@ def _cmd_train(args: argparse.Namespace) -> None:
         core_loss_weight=args.core_loss_weight,
         direction_loss_weight=args.direction_loss_weight,
         core_loss_scale_km=args.core_loss_scale_km,
+        angular_loss_scale_deg=args.angular_loss_scale_deg,
         val_fraction=args.val_fraction,
         test_fraction=args.test_fraction,
         split_mode=args.split_mode,
@@ -857,6 +858,11 @@ def _cmd_train(args: argparse.Namespace) -> None:
         training_task=args.training_task,
         mass_classification=args.mass_classification,
         mass_loss_weight=args.mass_loss_weight,
+        quality_prediction=args.quality_prediction,
+        quality_loss_weight=args.quality_loss_weight,
+        quality_angular_scale_deg=args.quality_angular_scale_deg,
+        quality_core_scale_km=args.quality_core_scale_km,
+        quality_energy_scale=args.quality_energy_scale,
         show_progress=not args.no_progress,
         save_diagnostics=not args.no_diagnostics,
         diagnostic_energy_bin_width=args.diagnostic_energy_bin_width,
@@ -978,6 +984,7 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--core-loss-weight", type=float, default=1.0)
     train.add_argument("--direction-loss-weight", type=float, default=1.0)
     train.add_argument("--core-loss-scale-km", type=float, default=0.12)
+    train.add_argument("--angular-loss-scale-deg", type=float, default=1.0, help="角度lossをこの角度[deg]で正規化する")
     train.add_argument("--val-fraction", type=float, default=0.1)
     train.add_argument("--test-fraction", type=float, default=0.1)
     train.add_argument(
@@ -1004,6 +1011,11 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--training-task", choices=["reconstruction", "mass"], default="reconstruction", help="reconstructionは幾何/エネルギー再構成、massはproton/iron分類のみを学習する")
     train.add_argument("--mass-classification", action="store_true", help="rusdmc.parttype由来のproton/iron分類headも同時に学習する")
     train.add_argument("--mass-loss-weight", type=float, default=0.1, help="proton/iron分類lossを再構成lossに足す重み")
+    train.add_argument("--quality-prediction", action="store_true", help="再構成の信頼度を0から1で返すquality headも同時に学習する")
+    train.add_argument("--quality-loss-weight", type=float, default=0.2, help="quality lossを再構成lossに足す重み")
+    train.add_argument("--quality-angular-scale-deg", type=float, default=1.0, help="quality教師値で1/eに近づく角度誤差スケール[deg]")
+    train.add_argument("--quality-core-scale-km", type=float, default=0.05, help="quality教師値で1/eに近づくcore誤差スケール[km]")
+    train.add_argument("--quality-energy-scale", type=float, default=0.25, help="quality教師値で1/eに近づく相対エネルギー誤差")
     train.add_argument("--no-progress", action="store_true", help="学習中のprogress barを表示しない")
     train.add_argument("--no-diagnostics", action="store_true", help="学習後のPDF診断図を保存しない")
     train.add_argument("--diagnostic-energy-bin-width", type=float, default=0.1, help="診断図で使うtrue log10(E/eV) bin幅")
