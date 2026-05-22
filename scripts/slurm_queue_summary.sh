@@ -181,8 +181,8 @@ print_resource_info() {
           seen_class[class] = 1
         }
       }
-      width = 25
-      printf "%s%-2s %-10s %-4s %-25s %8s %8s %8s%s\n", bold, "", "GPU CLASS", "RSC", "USE", "USED%", "USED", "TOTAL", reset
+      width = 26
+      printf "%s%-2s %-10s %-4s %-26s %8s %8s %8s%s\n", bold, "", "GPU CLASS", "RSC", "USE", "USED%", "USED", "TOTAL", reset
     }
 
     function class_from_part(part) {
@@ -389,8 +389,8 @@ print_cpu_resource_info() {
     -v reset="${RESET}" '
     BEGIN {
       nclasses = 0
-      width = 25
-      printf "%s%-2s %-12s %-4s %-25s %8s %8s %8s%s\n", bold, "", "GROUP", "RSC", "USE", "USED%", "USED", "TOTAL", reset
+      width = 26
+      printf "%s%-2s %-12s %-4s %-26s %8s %8s %8s%s\n", bold, "", "GROUP", "RSC", "USE", "USED%", "USED", "TOTAL", reset
     }
 
     function group_rank(group) {
