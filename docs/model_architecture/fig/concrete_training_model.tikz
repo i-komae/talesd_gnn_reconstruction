@@ -44,20 +44,20 @@
 };
 \node[enc, text width=34mm, below=10mm of p] (penc) {
   \textbf{パルス MLP}\\
-  $6\to224\to224$\\
+  $6\to192\to192$\\
   平均 $\oplus$ 最大\\
-  $N_v\times448$
+  $N_v\times384$
 };
 
 \node[enc, text width=52mm, below=18mm of wenc] (concat) {
   \textbf{ノードごとの連結}\\
-  $29\oplus64\oplus448$\\
-  $N_v\times541$
+  $29\oplus64\oplus384$\\
+  $N_v\times477$
 };
 \node[enc, text width=52mm, below=10mm of concat] (nenc) {
   \textbf{ノードエンコーダ}\\
-  MLP $541\to224\to224$\\
-  $\mathbf{h}_v:N_v\times224$
+  MLP $477\to192\to192$\\
+  $\mathbf{h}_v:N_v\times192$
 };
 
 \node[input, text width=32mm, right=8mm of nenc] (edge) {
@@ -69,15 +69,15 @@
 
 \node[gnn, text width=58mm, below=10mm of nenc] (mp) {
   \textbf{ゲート付き GNN 層}\\
-  $6$ 層のメッセージ伝播\\
-  エッジ入力 $2H+13=461$\\
-  隠れ次元 $H=224$
+  $5$ 層のメッセージ伝播\\
+  エッジ入力 $2H+13=397$\\
+  隠れ次元 $H=192$
 };
 
 \node[readout, text width=58mm, below=10mm of mp] (readout) {
   \textbf{グラフ読み出し}\\
   平均 $\oplus$ 最大 $\oplus$ $4$ 注意ヘッド\\
-  $1344\to448\to224$
+  $1152\to384\to192$
 };
 
 \node[output, text width=42mm, below left=11mm and 22mm of readout] (reco) {
@@ -87,14 +87,14 @@
   方向 $\hat{n}$: $3$
 };
 \node[output, text width=38mm, below=11mm of readout] (quality) {
-  \textbf{品質/予想誤差}\\
+  \textbf{品質}\\
   品質ロジット: $1$\\
-  誤差 raw: $3$\\
-  再構成で使用
+  再構成で使用\\
+  予想誤差は標準では無効
 };
 \node[output, text width=42mm, below right=11mm and 22mm of readout] (mass) {
   \textbf{質量分類ヘッド}\\
-  enhanced 入力: $1963$\\
+  enhanced 入力: $1707$\\
   陽子/鉄ロジット\\
   質量分類で使用
 };

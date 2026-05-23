@@ -86,8 +86,8 @@
   $(\hat n_x,\hat n_y,\hat n_z)$
 };
 \node[output, text width=30mm, below=8mm of dir] (quality) {
-  品質/誤差出力層\\
-  品質、$\sigma_E,\sigma_\theta,\sigma_c$
+  品質出力層\\
+  事象選択用の品質スコア
 };
 \node[output, text width=30mm, below=8mm of quality] (mass) {
   質量分類出力層\\

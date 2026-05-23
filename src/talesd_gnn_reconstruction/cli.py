@@ -436,10 +436,20 @@ def _write_selected_graph_shard(
     written = 0
     skipped = 0
     records = 0
+    processed_files = 0
     graph_seen_by_bin: dict[int | tuple[str, int], int] = {}
+    total_files = len(paths)
+    selected_total = sum(len(selected_indices_by_path.get(path, ())) for path in paths)
+    interval = max(float(os.environ.get("TALESD_GNN_PROGRESS_INTERVAL", "30")), 1.0)
+    last_report = time.perf_counter()
+
+    _progress_write(
+        f"export/write shard {shard_index:04d}: start files={total_files} "
+        f"selected={selected_total} output={output_path.name}"
+    )
 
     try:
-        for path in paths:
+        for file_number, path in enumerate(paths, start=1):
             selected = selected_indices_by_path.get(path)
             if not selected:
                 continue
@@ -479,9 +489,28 @@ def _write_selected_graph_shard(
                 written += 1
                 if max_events_per_file is not None and file_records >= max_events_per_file:
                     break
+            processed_files += 1
+            now = time.perf_counter()
+            if now - last_report >= interval:
+                _progress_write(
+                    f"export/write shard {shard_index:04d}: files={file_number}/{total_files} "
+                    f"records={records} written={written} skipped={skipped}"
+                )
+                last_report = now
+    except BaseException as exc:
+        _progress_write(
+            f"export/write shard {shard_index:04d}: failed files={processed_files}/{total_files} "
+            f"records={records} written={written} skipped={skipped} error={exc}"
+        )
+        raise
     finally:
         if handle is not None:
             handle.close()
+
+    _progress_write(
+        f"export/write shard {shard_index:04d}: done files={processed_files}/{total_files} "
+        f"records={records} written={written} skipped={skipped} output={output_path.name if written > 0 else '(empty)'}"
+    )
 
     return {
         "shard_index": shard_index,
@@ -501,6 +530,8 @@ def _iter_selected_shard_write_results(
     config: dict[str, Any],
 ) -> Iterator[dict[str, Any]]:
     chunks = _selected_path_chunks(inputs, selected_indices_by_path, int(args.shard_size))
+    selected_files = len(selected_indices_by_path)
+    selected_events = sum(len(indices) for indices in selected_indices_by_path.values())
     payloads = [
         (
             shard_index,
@@ -524,6 +555,10 @@ def _iter_selected_shard_write_results(
         for shard_index, paths in enumerate(chunks)
     ]
     workers = min(max(int(args.workers), 1), len(payloads)) if payloads else 1
+    _progress_write(
+        f"export/write shards: start shards={len(payloads)} workers={workers} "
+        f"selected_files={selected_files} selected_events={selected_events}"
+    )
     yield from _iter_process_pool(
         payloads,
         _write_selected_graph_shard,
@@ -1051,6 +1086,13 @@ def _cmd_export(args: argparse.Namespace) -> None:
             config["scan_selected_event_dates"] = {
                 f"{date:06d}": count for date, count in sorted(selected_event_dates.items())
             }
+            selected_event_count = sum(len(indices) for indices in selected_by_path.values())
+            _progress_write(
+                "energy-flat preselection: "
+                f"selected_events={selected_event_count} selected_files={len(selected_by_path)} "
+                f"bins={len(selected_by_bin)} raw_events={raw_events} hit_events={hit_events} "
+                f"missing_calibration_events={missing_calibration_events}"
+            )
 
             file_results = _iter_file_results(inputs, args, detector_positions, selected_indices_by_path=selected_by_path)
             graph_seen_by_bin: dict[int | tuple[str, int], int] = {}
