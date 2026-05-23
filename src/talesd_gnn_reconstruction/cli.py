@@ -190,14 +190,34 @@ def _energy_sample_bin_label(bin_key: int | tuple[str, int], bin_width: float) -
     return f"{bin_key * bin_width:.3f}_{(bin_key + 1) * bin_width:.3f}"
 
 
-def _scan_energy_candidates_for_file(payload: tuple[str, float, int, int, bool, int, float, bool]) -> dict[str, Any]:
+def _scan_energy_candidates_for_file(
+    payload: tuple[str, float, int, int, bool, int, float, bool, int | None, str | None, bool]
+) -> dict[str, Any]:
     import dstio
 
-    path, bin_width, seed, per_bin_limit, skip_errors, open_retries, open_retry_delay, stratify_particle = payload
-    reservoirs: dict[int | tuple[str, int], list[tuple[float, str, int, float]]] = {}
+    (
+        path,
+        bin_width,
+        seed,
+        per_bin_limit,
+        skip_errors,
+        open_retries,
+        open_retry_delay,
+        stratify_particle,
+        min_event_date,
+        mc_calib_dir,
+        skip_missing_mc_calibration,
+    ) = payload
+    mc_calibration = None
+    if mc_calib_dir and skip_missing_mc_calibration:
+        from .mc_calibration import TaleMcCalibrationDB
+
+        mc_calibration = TaleMcCalibrationDB(Path(mc_calib_dir))
+    reservoirs: dict[int | tuple[str, int], list[tuple[float, str, int, float, int, int]]] = {}
     seen_by_bin: dict[int | tuple[str, int], int] = {}
     raw_events = 0
     hit_events = 0
+    missing_calibration_events = 0
     try:
         dst_handle = None
         last_exc: Exception | None = None
@@ -219,6 +239,12 @@ def _scan_energy_candidates_for_file(payload: tuple[str, float, int, int, bool, 
             for source_index, event in enumerate(dst):
                 raw_events += 1
                 rusdraw = event.get("rusdraw") or {}
+                date = int(rusdraw.get("yymmdd", 0) or 0)
+                if min_event_date is not None and (date <= 0 or date < int(min_event_date)):
+                    continue
+                if mc_calibration is not None and not mc_calibration.has_calibration_source(date, 0):
+                    missing_calibration_events += 1
+                    continue
                 xxyy = rusdraw.get("xxyy", [])
                 if len(xxyy) <= 0:
                     continue
@@ -227,13 +253,14 @@ def _scan_energy_candidates_for_file(payload: tuple[str, float, int, int, bool, 
                 if energy_eev <= 0.0 or not math.isfinite(energy_eev):
                     continue
                 hit_events += 1
+                time_value = int(rusdraw.get("hhmmss", 0) or 0)
                 log10_energy = math.log10(energy_eev * 1.0e18)
                 particle = _particle_stratum_from_parttype(rusdmc.get("parttype", -1)) if stratify_particle else None
                 bin_key = _energy_sample_bin_key(log10_energy, bin_width, particle=particle)
                 seen_by_bin[bin_key] = seen_by_bin.get(bin_key, 0) + 1
                 event_id = _candidate_event_id(path, source_index, event)
                 key = _sample_key_from_parts(seed, event_id, path, source_index)
-                entry = (-key, f"{path}:{source_index}", int(source_index), float(log10_energy))
+                entry = (-key, f"{path}:{source_index}", int(source_index), float(log10_energy), date, time_value)
                 bucket = reservoirs.setdefault(bin_key, [])
                 if len(bucket) < per_bin_limit:
                     heapq.heappush(bucket, entry)
@@ -250,6 +277,7 @@ def _scan_energy_candidates_for_file(payload: tuple[str, float, int, int, bool, 
             "seen_by_bin": {},
             "raw_events": raw_events,
             "hit_events": hit_events,
+            "missing_calibration_events": missing_calibration_events,
             "error": str(exc),
         }
     return {
@@ -258,12 +286,26 @@ def _scan_energy_candidates_for_file(payload: tuple[str, float, int, int, bool, 
         "seen_by_bin": seen_by_bin,
         "raw_events": raw_events,
         "hit_events": hit_events,
+        "missing_calibration_events": missing_calibration_events,
         "error": None,
     }
 
 
 def _build_graphs_for_file(
-    payload: tuple[str, dict[int, Any] | None, str, bool, bool, set[int] | None, int, float, int | None, str | None]
+    payload: tuple[
+        str,
+        dict[int, Any] | None,
+        str,
+        bool,
+        bool,
+        set[int] | None,
+        int,
+        float,
+        int | None,
+        str | None,
+        int | None,
+        bool,
+    ]
 ) -> dict[str, Any]:
     from .dst_reader import iter_dst_banks
     from .event_graph import build_graph_event
@@ -279,6 +321,8 @@ def _build_graphs_for_file(
         open_retry_delay,
         max_events_per_file,
         mc_calib_dir,
+        min_event_date,
+        skip_missing_mc_calibration,
     ) = payload
     graphs = []
     skipped = 0
@@ -293,6 +337,8 @@ def _build_graphs_for_file(
         open_retries=open_retries,
         open_retry_delay=open_retry_delay,
         mc_calib_dir=mc_calib_dir,
+        min_event_date=min_event_date,
+        skip_missing_mc_calibration=skip_missing_mc_calibration,
     ):
         records += 1
         graph = build_graph_event(record, detector_positions=detector_positions)
@@ -374,6 +420,8 @@ def _iter_file_results(
             float(args.open_retry_delay),
             None if args.max_events_per_file is None or int(args.max_events_per_file) <= 0 else int(args.max_events_per_file),
             str(Path(args.mc_calib_dir).expanduser()) if args.mc_calib_dir else None,
+            None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date),
+            bool(args.skip_errors and args.kind == "mc"),
         )
         for path in inputs
         if selected_indices_by_path is None or path in selected_indices_by_path
@@ -413,6 +461,9 @@ def _iter_scan_results(
             int(args.open_retries),
             float(args.open_retry_delay),
             bool(args.energy_sample_stratify_particle),
+            None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date),
+            str(Path(args.mc_calib_dir).expanduser()) if args.mc_calib_dir else None,
+            bool(args.skip_errors and args.kind == "mc"),
         )
         for path in inputs
     ]
@@ -635,23 +686,41 @@ def _sample_energy_flat_from_graphs(
 def _merge_candidate_reservoirs(
     scan_results: Iterable[dict[str, Any]],
     per_bin_limit: int,
-) -> tuple[dict[str, set[int]], dict[int | tuple[str, int], int], dict[int | tuple[str, int], int], int, int]:
-    merged: dict[int | tuple[str, int], list[tuple[float, str, str, int, float]]] = {}
+) -> tuple[
+    dict[str, set[int]],
+    dict[int | tuple[str, int], int],
+    dict[int | tuple[str, int], int],
+    dict[int, int],
+    int,
+    int,
+    int,
+]:
+    merged: dict[int | tuple[str, int], list[tuple[float, str, str, int, float, int, int]]] = {}
     seen_by_bin: dict[int | tuple[str, int], int] = {}
     raw_events = 0
     hit_events = 0
+    missing_calibration_events = 0
 
     for result in scan_results:
         if result.get("error"):
             _progress_write(f"warning: skipping unreadable DST {result['path']}: {result['error']}")
         raw_events += int(result.get("raw_events", 0))
         hit_events += int(result.get("hit_events", 0))
+        missing_calibration_events += int(result.get("missing_calibration_events", 0))
         for bin_key, count in result.get("seen_by_bin", {}).items():
             seen_by_bin[bin_key] = seen_by_bin.get(bin_key, 0) + int(count)
         for bin_key, entries in result.get("reservoirs", {}).items():
             bucket = merged.setdefault(bin_key, [])
-            for neg_key, unique_id, source_index, log10_energy in entries:
-                entry = (float(neg_key), str(unique_id), str(result["path"]), int(source_index), float(log10_energy))
+            for neg_key, unique_id, source_index, log10_energy, date, time_value in entries:
+                entry = (
+                    float(neg_key),
+                    str(unique_id),
+                    str(result["path"]),
+                    int(source_index),
+                    float(log10_energy),
+                    int(date),
+                    int(time_value),
+                )
                 if len(bucket) < per_bin_limit:
                     heapq.heappush(bucket, entry)
                 elif entry[0] > bucket[0][0]:
@@ -659,11 +728,41 @@ def _merge_candidate_reservoirs(
 
     selected_by_path: dict[str, set[int]] = {}
     selected_by_bin: dict[int | tuple[str, int], int] = {}
+    selected_event_dates: dict[int, int] = {}
     for bin_key, entries in merged.items():
         selected_by_bin[bin_key] = len(entries)
-        for _neg_key, _unique_id, path, source_index, _log10_energy in entries:
+        for _neg_key, _unique_id, path, source_index, _log10_energy, date, _time_value in entries:
             selected_by_path.setdefault(path, set()).add(int(source_index))
-    return selected_by_path, seen_by_bin, selected_by_bin, raw_events, hit_events
+            selected_event_dates[int(date)] = selected_event_dates.get(int(date), 0) + 1
+    return (
+        selected_by_path,
+        seen_by_bin,
+        selected_by_bin,
+        selected_event_dates,
+        missing_calibration_events,
+        raw_events,
+        hit_events,
+    )
+
+
+def _validate_mc_calibration_dates(calib_dir: Path, event_dates: dict[int, int], *, context: str) -> None:
+    if not event_dates:
+        return
+    from .mc_calibration import TaleMcCalibrationDB
+
+    calibration = TaleMcCalibrationDB(calib_dir)
+    missing = sorted(date for date in event_dates if not calibration.has_calibration_source(date, 0))
+    if not missing:
+        return
+    examples = ", ".join(f"{date:06d}({event_dates[date]})" for date in missing[:20])
+    extra = "" if len(missing) <= 20 else f", ... +{len(missing) - 20} more"
+    raise SystemExit(
+        f"TALE MC calibration source is missing for {len(missing)} selected event date(s) "
+        f"during {context}: {examples}{extra}\n"
+        f"calib_dir: {calib_dir}\n"
+        "Add the corresponding talesdcalib_pass2_YYMMDD.dst(.gz) files, "
+        "or explicitly provide a physically justified talesdcalib_pass2_typical.dst(.gz)."
+    )
 
 
 def _cmd_export(args: argparse.Namespace) -> None:
@@ -700,6 +799,7 @@ def _cmd_export(args: argparse.Namespace) -> None:
         "shard_size": args.shard_size,
         "open_retries": args.open_retries,
         "open_retry_delay": args.open_retry_delay,
+        "min_event_date": args.min_event_date,
     }
     skipped = 0
 
@@ -714,6 +814,8 @@ def _cmd_export(args: argparse.Namespace) -> None:
             open_retries=args.open_retries,
             open_retry_delay=args.open_retry_delay,
             mc_calib_dir=mc_calib_dir,
+            min_event_date=None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date),
+            skip_missing_mc_calibration=bool(args.skip_errors and args.kind == "mc"),
         )
         graph_iter = _iter_graphs(records, args, detector_positions)
         if args.energy_sample_per_bin is not None:
@@ -745,10 +847,20 @@ def _cmd_export(args: argparse.Namespace) -> None:
                 int(math.ceil(max(int(args.energy_sample_per_bin), 1) * max(float(args.energy_oversample_factor), 1.0))),
                 1,
             )
-            selected_by_path, seen_by_bin, selected_by_bin, raw_events, hit_events = _merge_candidate_reservoirs(
+            (
+                selected_by_path,
+                seen_by_bin,
+                selected_by_bin,
+                selected_event_dates,
+                missing_calibration_events,
+                raw_events,
+                hit_events,
+            ) = _merge_candidate_reservoirs(
                 _iter_scan_results(inputs, args, preselect_per_bin=preselect_per_bin),
                 per_bin_limit=preselect_per_bin,
             )
+            if args.kind == "mc" and mc_calib_dir is not None:
+                _validate_mc_calibration_dates(mc_calib_dir, selected_event_dates, context="energy-flat preselection")
             config["energy_seen_by_bin"] = {
                 _energy_sample_bin_label(bin_key, float(args.energy_bin_width)): count
                 for bin_key, count in sorted(seen_by_bin.items(), key=lambda item: str(item[0]))
@@ -759,7 +871,11 @@ def _cmd_export(args: argparse.Namespace) -> None:
             }
             config["scan_raw_events"] = raw_events
             config["scan_hit_events"] = hit_events
+            config["scan_missing_calibration_events"] = missing_calibration_events
             config["scan_selected_files"] = len(selected_by_path)
+            config["scan_selected_event_dates"] = {
+                f"{date:06d}": count for date, count in sorted(selected_event_dates.items())
+            }
 
             file_results = _iter_file_results(inputs, args, detector_positions, selected_indices_by_path=selected_by_path)
             graph_seen_by_bin: dict[int | tuple[str, int], int] = {}
@@ -971,6 +1087,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export.add_argument("--max-events", type=int, default=None, help="読み込む最大イベント数")
     export.add_argument("--max-events-per-file", type=int, default=None, help="ファイル単位export時に各DSTから読む最大イベント数。source-path splitの小規模試験用")
+    export.add_argument("--min-event-date", type=int, default=None, help="YYMMDD形式。この日付より前のeventをDST読み込み時に除外する")
     export.add_argument("--energy-sample-per-bin", type=int, default=None, help="log10(E/eV) binごとに残す最大グラフ数。reservoir samplingで時刻順バイアスを避ける")
     export.add_argument("--energy-sample-stratify-particle", action="store_true", help="energy-flat samplingをproton/iron別のlog10(E/eV) binで行う")
     export.add_argument("--energy-bin-width", type=float, default=0.1, help="energy-flat samplingのlog10(E/eV) bin幅")

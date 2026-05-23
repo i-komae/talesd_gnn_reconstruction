@@ -177,6 +177,20 @@ def _convert_rusdraw_event(
     }
 
 
+def _event_date(event: dict[str, Any]) -> int | None:
+    for bank_name in ("rusdraw", "talesdcalibev", "talesdcalib"):
+        bank = event.get(bank_name)
+        if not bank:
+            continue
+        try:
+            date = int(bank.get("yymmdd", bank.get("date", 0)) or 0)
+        except (TypeError, ValueError):
+            continue
+        if date > 0:
+            return date
+    return None
+
+
 def _bank_filter(kind: str) -> list[str]:
     if kind == "mc":
         return ["rusdraw", "rusdmc"]
@@ -210,6 +224,8 @@ def iter_dst_banks(
     open_retries: int = 1,
     open_retry_delay: float = 1.0,
     mc_calib_dir: str | Path | None = None,
+    min_event_date: int | None = None,
+    skip_missing_mc_calibration: bool = False,
 ) -> Iterator[BankRecord]:
     """Stream TALE-SD-like calibev banks from data or MC DST files."""
 
@@ -245,6 +261,14 @@ def iter_dst_banks(
                 for source_index, event in enumerate(dst):
                     if source_indices is not None and source_index not in source_indices:
                         continue
+                    if min_event_date is not None:
+                        event_date = _event_date(event)
+                        if event_date is None or event_date < int(min_event_date):
+                            continue
+                    if skip_missing_mc_calibration and mc_calibration is not None and kind in {"auto", "mc"}:
+                        event_date = _event_date(event)
+                        if event_date is None or not mc_calibration.has_calibration_source(event_date, 0):
+                            continue
                     bank = event.get("talesdcalibev") or event.get("talesdcalib")
                     source_kind = "data"
                     if bank is None and (kind in {"auto", "mc"}):

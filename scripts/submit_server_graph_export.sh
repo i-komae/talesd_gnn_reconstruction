@@ -54,6 +54,7 @@ SUMMARY_WORKERS="${SUMMARY_WORKERS:-auto}"
 WORKER_MAX_FILES="${WORKER_MAX_FILES:-200}"
 MAX_EVENTS="${MAX_EVENTS:-}"
 MAX_EVENTS_PER_FILE="${MAX_EVENTS_PER_FILE:-0}"
+MIN_EVENT_DATE="${MIN_EVENT_DATE:-191002}"
 SHARD_SIZE="${SHARD_SIZE:-100000}"
 OPEN_RETRIES="${OPEN_RETRIES:-3}"
 OPEN_RETRY_DELAY="${OPEN_RETRY_DELAY:-1.0}"
@@ -434,6 +435,7 @@ SUMMARY_WORKERS=${SUMMARY_WORKERS}
 WORKER_MAX_FILES=${WORKER_MAX_FILES}
 MAX_EVENTS=${MAX_EVENTS}
 MAX_EVENTS_PER_FILE=${MAX_EVENTS_PER_FILE}
+MIN_EVENT_DATE=${MIN_EVENT_DATE}
 SHARD_SIZE=${SHARD_SIZE}
 OPEN_RETRIES=${OPEN_RETRIES}
 OPEN_RETRY_DELAY=${OPEN_RETRY_DELAY}
@@ -510,6 +512,7 @@ echo "const_dst=${CONST_DST}"
 echo "mc_calib_dir=${MC_CALIB_DIR}"
 echo "max_events=${MAX_EVENTS}"
 echo "max_events_per_file=${MAX_EVENTS_PER_FILE}"
+echo "min_event_date=${MIN_EVENT_DATE}"
 echo "energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}"
 echo "energy_sample_stratify_particle=${ENERGY_SAMPLE_STRATIFY_PARTICLE}"
 echo "energy_bin_width=${ENERGY_BIN_WIDTH}"
@@ -593,6 +596,9 @@ export_cmd+=(
   --open-retry-delay "${OPEN_RETRY_DELAY}"
   --seed "${SEED}"
 )
+if [[ -n "${MIN_EVENT_DATE}" && "${MIN_EVENT_DATE}" != "0" ]]; then
+  export_cmd+=(--min-event-date "${MIN_EVENT_DATE}")
+fi
 if [[ "${KIND}" == "mc" ]]; then
   export_cmd+=(--mc-calib-dir $(q "${MC_CALIB_DIR}"))
 fi
@@ -698,6 +704,7 @@ export_workers=${EXPORT_WORKERS}
 summary_workers=${SUMMARY_WORKERS}
 energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}
 energy_sample_stratify_particle=${ENERGY_SAMPLE_STRATIFY_PARTICLE}
+min_event_date=${MIN_EVENT_DATE}
 
 Default DST inputs:
   ${INPUT_DIRS}

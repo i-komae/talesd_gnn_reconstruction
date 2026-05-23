@@ -41,6 +41,7 @@ class TaleMcCalibrationDB:
     def __post_init__(self) -> None:
         self.calib_dir = Path(self.calib_dir).expanduser()
         self._daily_cache: dict[int, list[tuple[int, dict[int, dict[str, Any]]]] | None] = {}
+        self._source_cache: dict[int, bool] = {}
 
     def get_record(self, date: int, time: int, lid: int) -> dict[str, Any] | None:
         records = self._load_daily_records(date, time)
@@ -49,7 +50,10 @@ class TaleMcCalibrationDB:
         return records.get(int(lid))
 
     def has_calibration_source(self, date: int, time: int) -> bool:
-        return self._daily_candidate(date) is not None
+        date = int(date)
+        if date not in self._source_cache:
+            self._source_cache[date] = self._daily_candidate(date) is not None
+        return self._source_cache[date]
 
     def _daily_candidate(self, date: int) -> Path | None:
         stem = f"talesdcalib_pass2_{int(date):06d}.dst"
