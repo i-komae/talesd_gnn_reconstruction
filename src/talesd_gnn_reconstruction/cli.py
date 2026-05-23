@@ -19,7 +19,7 @@ from .progress import progress_bar as _progress_bar
 from .progress import write as _progress_write
 
 MAX_CONFIG_PATHS = 200
-DEFAULT_WORKER_MAX_FILES = 20
+DEFAULT_WORKER_MAX_FILES = 1
 DEFAULT_TRAIN_WORKERS = -1
 
 
