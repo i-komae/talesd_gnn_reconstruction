@@ -62,6 +62,9 @@ class TaleMcCalibrationTest(unittest.TestCase):
                 (Path(tmpdir) / f"talesdcalib_pass2_{date:06d}.dst").touch()
                 db = TaleMcCalibrationDB(Path(tmpdir))
                 record = db.get_record(date, 120000, 5401)
+                missing_time_record = db.get_record(date, 130000, 5401)
+                has_matching_time = db.has_calibration_time(date, 120000)
+                has_missing_time = db.has_calibration_time(date, 130000)
         finally:
             if old_dstio is None:
                 sys.modules.pop("dstio", None)
@@ -75,6 +78,9 @@ class TaleMcCalibrationTest(unittest.TestCase):
         self.assertEqual(record["lmipMev2cnt"], 22.0)
         self.assertEqual(record["upedAvr"], 31.0)
         self.assertEqual(record["lpedAvr"], 32.0)
+        self.assertIsNone(missing_time_record)
+        self.assertTrue(has_matching_time)
+        self.assertFalse(has_missing_time)
 
 
 if __name__ == "__main__":

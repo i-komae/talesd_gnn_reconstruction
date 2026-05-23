@@ -37,14 +37,16 @@ class TaleMcCalibrationDB:
     """TALE MC calibration lookup compatible with the Java SDCalibrator path."""
 
     calib_dir: Path
+    max_time_difference_seconds: int = 300
 
     def __post_init__(self) -> None:
         self.calib_dir = Path(self.calib_dir).expanduser()
         self._daily_cache: dict[int, list[tuple[int, dict[int, dict[str, Any]]]] | None] = {}
         self._source_cache: dict[int, bool] = {}
+        self._time_cache: dict[tuple[int, int], bool] = {}
 
     def get_record(self, date: int, time: int, lid: int) -> dict[str, Any] | None:
-        records = self._load_daily_records(date, time)
+        records = self._select_daily_records(date, time)
         if records is None:
             return None
         return records.get(int(lid))
@@ -55,6 +57,12 @@ class TaleMcCalibrationDB:
             self._source_cache[date] = self._daily_candidate(date) is not None
         return self._source_cache[date]
 
+    def has_calibration_time(self, date: int, time: int) -> bool:
+        key = (int(date), int(time))
+        if key not in self._time_cache:
+            self._time_cache[key] = self._select_daily_records(*key) is not None
+        return self._time_cache[key]
+
     def _daily_candidate(self, date: int) -> Path | None:
         stem = f"talesdcalib_pass2_{int(date):06d}.dst"
         for name in (stem, f"{stem}.gz", "talesdcalib_pass2_typical.dst", "talesdcalib_pass2_typical.dst.gz"):
@@ -63,7 +71,7 @@ class TaleMcCalibrationDB:
                 return path
         return None
 
-    def _load_daily_records(self, date: int, time: int) -> dict[int, dict[str, Any]] | None:
+    def _load_daily_records(self, date: int) -> list[tuple[int, dict[int, dict[str, Any]]]] | None:
         date = int(date)
         if date not in self._daily_cache:
             path = self._daily_candidate(date)
@@ -79,7 +87,10 @@ class TaleMcCalibrationDB:
                     bank = event.get("talesdcalib") or event.get("talesdcalibev")
                     if not bank:
                         continue
-                    bank_time = int(bank.get("time", time))
+                    bank_time_raw = bank.get("time")
+                    if bank_time_raw is None:
+                        continue
+                    bank_time = int(bank_time_raw)
                     records: dict[int, dict[str, Any]] = {}
                     for sub in bank.get("sub", []):
                         record = _record_from_calib_sub(sub)
@@ -87,13 +98,14 @@ class TaleMcCalibrationDB:
                             records[int(record["lid"])] = record
                     daily_records.append((_seconds_from_hhmmss(bank_time), records))
             self._daily_cache[date] = daily_records
-        daily_records = self._daily_cache[date]
+        return self._daily_cache[date]
+
+    def _select_daily_records(self, date: int, time: int) -> dict[int, dict[str, Any]] | None:
+        daily_records = self._load_daily_records(date)
         if not daily_records:
             return None
         target_sec = _seconds_from_hhmmss(time)
-        selected = daily_records[-1][1]
         for bank_sec, records in daily_records:
-            if abs(bank_sec - target_sec) < 300:
-                selected = records
-                break
-        return selected
+            if abs(bank_sec - target_sec) < int(self.max_time_difference_seconds):
+                return records
+        return None

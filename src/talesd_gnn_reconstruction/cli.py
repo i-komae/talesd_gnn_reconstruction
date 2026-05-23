@@ -242,7 +242,8 @@ def _scan_energy_candidates_for_file(
                 date = int(rusdraw.get("yymmdd", 0) or 0)
                 if min_event_date is not None and (date <= 0 or date < int(min_event_date)):
                     continue
-                if mc_calibration is not None and not mc_calibration.has_calibration_source(date, 0):
+                time_value = int(rusdraw.get("hhmmss", 0) or 0)
+                if mc_calibration is not None and not mc_calibration.has_calibration_time(date, time_value):
                     missing_calibration_events += 1
                     continue
                 xxyy = rusdraw.get("xxyy", [])
@@ -253,7 +254,6 @@ def _scan_energy_candidates_for_file(
                 if energy_eev <= 0.0 or not math.isfinite(energy_eev):
                     continue
                 hit_events += 1
-                time_value = int(rusdraw.get("hhmmss", 0) or 0)
                 log10_energy = math.log10(energy_eev * 1.0e18)
                 particle = _particle_stratum_from_parttype(rusdmc.get("parttype", -1)) if stratify_particle else None
                 bin_key = _energy_sample_bin_key(log10_energy, bin_width, particle=particle)

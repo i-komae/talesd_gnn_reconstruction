@@ -143,9 +143,9 @@ def _convert_rusdraw_event(
         return None
     date = int(rusdraw.get("yymmdd", 0))
     time_value = int(rusdraw.get("hhmmss", 0))
-    if mc_calibration is not None and not mc_calibration.has_calibration_source(date, time_value):
+    if mc_calibration is not None and not mc_calibration.has_calibration_time(date, time_value):
         raise MissingMcCalibrationError(
-            f"TALE MC calibration source not found for event date/time {date:06d} {time_value:06d} "
+            f"TALE MC calibration source/time not found for event date/time {date:06d} {time_value:06d} "
             f"in {mc_calibration.calib_dir}"
         )
 
@@ -188,6 +188,20 @@ def _event_date(event: dict[str, Any]) -> int | None:
             continue
         if date > 0:
             return date
+    return None
+
+
+def _event_time(event: dict[str, Any]) -> int | None:
+    for bank_name in ("rusdraw", "talesdcalibev", "talesdcalib"):
+        bank = event.get(bank_name)
+        if not bank:
+            continue
+        try:
+            time_value = int(bank.get("hhmmss", bank.get("time", 0)) or 0)
+        except (TypeError, ValueError):
+            continue
+        if time_value > 0:
+            return time_value
     return None
 
 
@@ -267,7 +281,12 @@ def iter_dst_banks(
                             continue
                     if skip_missing_mc_calibration and mc_calibration is not None and kind in {"auto", "mc"}:
                         event_date = _event_date(event)
-                        if event_date is None or not mc_calibration.has_calibration_source(event_date, 0):
+                        event_time = _event_time(event)
+                        if (
+                            event_date is None
+                            or event_time is None
+                            or not mc_calibration.has_calibration_time(event_date, event_time)
+                        ):
                             continue
                     bank = event.get("talesdcalibev") or event.get("talesdcalib")
                     source_kind = "data"
