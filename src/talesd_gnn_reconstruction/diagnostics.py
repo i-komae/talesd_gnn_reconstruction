@@ -1726,34 +1726,23 @@ def _save_mass_pdf(
         ],
         dtype=float,
     )
-    total_entries = float(np.sum(matrix))
-    matrix_percent = np.zeros_like(matrix)
-    if total_entries > 0:
-        matrix_percent = 100.0 * matrix / total_entries
     summary["confusion_counts"] = {
         "tn_proton": int(matrix[0, 0]),
         "fp_iron": int(matrix[0, 1]),
         "fn_iron": int(matrix[1, 0]),
         "tp_iron": int(matrix[1, 1]),
     }
-    summary["confusion_percent_of_all"] = {
-        "tn_proton": _to_float(matrix_percent[0, 0]),
-        "fp_iron": _to_float(matrix_percent[0, 1]),
-        "fn_iron": _to_float(matrix_percent[1, 0]),
-        "tp_iron": _to_float(matrix_percent[1, 1]),
-    }
-    image = ax.imshow(matrix_percent, cmap="Blues", vmin=0.0)
+    image = ax.imshow(matrix, cmap="Blues", vmin=0.0)
     ax.set_xticks([0, 1], labels=["pred proton", "pred iron"])
     ax.set_yticks([0, 1], labels=["true proton", "true iron"])
     cell_names = np.asarray([["TN", "FP"], ["FN", "TP"]])
-    threshold_percent = 0.45 * float(np.nanmax(matrix_percent)) if np.any(np.isfinite(matrix_percent)) else 0.0
+    threshold_count = 0.45 * float(np.nanmax(matrix)) if np.any(np.isfinite(matrix)) else 0.0
     for (row, col), value in np.ndenumerate(matrix):
-        percent = matrix_percent[row, col]
-        text_color = "white" if percent >= threshold_percent and threshold_percent > 0.0 else "black"
+        text_color = "white" if value >= threshold_count and threshold_count > 0.0 else "black"
         ax.text(
             col,
             row,
-            f"{cell_names[row, col]}\n{int(value):,}\n{percent:.1f}\\%",
+            f"{cell_names[row, col]}\n{int(value):,}",
             ha="center",
             va="center",
             color=text_color,
@@ -1762,9 +1751,8 @@ def _save_mass_pdf(
             bbox={"boxstyle": "round,pad=0.28", "facecolor": (0, 0, 0, 0.18) if text_color == "white" else (1, 1, 1, 0.72), "edgecolor": "none"},
         )
     ax.set_title(f"{split_name}: mass confusion matrix")
-    ax.text(0.5, -0.18, "percentages are fractions of all events", ha="center", va="top", transform=ax.transAxes, fontsize=9)
     colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
-    colorbar.set_label("events [\\%]")
+    colorbar.set_label("events")
     fig.tight_layout()
     pdf_files.append(_save_pdf(fig, split_dir / "mass_confusion_matrix.pdf"))
     plt.close(fig)

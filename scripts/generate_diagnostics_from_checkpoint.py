@@ -56,6 +56,33 @@ def _default_prediction_cache_path(output_path: Path) -> Path:
     return output_path.with_suffix(output_path.suffix + ".diagnostics") / "prediction_cache.npz"
 
 
+def _checkpoint_training_task(ckpt: dict[str, Any]) -> str:
+    task = str(dict(ckpt.get("runtime", {})).get("training_task", "reconstruction")).lower()
+    return task if task in {"reconstruction", "mass"} else "reconstruction"
+
+
+def _reconstruction_metrics_for_task(training_task: str, pred: np.ndarray, target: np.ndarray) -> dict[str, Any] | None:
+    if training_task == "mass":
+        return None
+    return reconstruction_metrics(pred, target)
+
+
+def _print_diagnostics_paths(diagnostics: dict[str, Any]) -> None:
+    print("diagnostics directory:", diagnostics["directory"], flush=True)
+    print("learning curve:", diagnostics["learning_curve_pdf"], flush=True)
+    for key, label in [
+        ("validation", "validation diagnostics"),
+        ("test", "test diagnostics"),
+        ("validation_species", "validation species diagnostics"),
+        ("test_species", "test species diagnostics"),
+        ("validation_mass", "validation mass diagnostics"),
+        ("test_mass", "test mass diagnostics"),
+    ]:
+        if key in diagnostics:
+            print(f"{label}: {diagnostics[key]['directory']}", flush=True)
+    print("diagnostics summary:", diagnostics["summary_json"], flush=True)
+
+
 def _none_to_cache_array(values: np.ndarray | None) -> np.ndarray:
     if values is None:
         return np.asarray([], dtype=np.float32)
@@ -162,6 +189,8 @@ def main() -> None:
     quality_prediction = int(ckpt["model_config"].get("quality_dim", 0)) > 0
     error_prediction = int(ckpt["model_config"].get("error_dim", 0)) > 0
     runtime = dict(ckpt.get("runtime", {}))
+    training_task = _checkpoint_training_task(ckpt)
+    save_reconstruction = training_task != "mass"
     error_angular_scale_deg = float(runtime.get("error_angular_scale_deg", runtime.get("quality_angular_scale_deg", 1.0)))
     error_core_scale_km = float(runtime.get("error_core_scale_km", runtime.get("quality_core_scale_km", 0.05)))
     error_energy_scale = float(runtime.get("error_energy_scale", runtime.get("quality_energy_scale", 0.10)))
@@ -182,7 +211,7 @@ def main() -> None:
             quality_test,
             predicted_error_test,
         ) = _load_prediction_cache(cache_path)
-        val_metrics = reconstruction_metrics(pred_val, target_val)
+        val_metrics = _reconstruction_metrics_for_task(training_task, pred_val, target_val)
         mass_threshold = 0.5
         tuned_mass_threshold = (
             balanced_accuracy_threshold(mass_logit_val, mass_label_val)
@@ -199,7 +228,7 @@ def main() -> None:
             if mass_logit_val is not None and mass_label_val is not None
             else None
         )
-        test_metrics = reconstruction_metrics(pred_test, target_test)
+        test_metrics = _reconstruction_metrics_for_task(training_task, pred_test, target_test)
         test_mass_metrics = (
             binary_classification_metrics(mass_logit_test, mass_label_test, threshold=mass_threshold)
             if mass_logit_test is not None and mass_label_test is not None
@@ -229,6 +258,7 @@ def main() -> None:
             test_predicted_errors=predicted_error_test,
             energy_bin_width=args.diagnostic_energy_bin_width,
             min_bin_count=args.diagnostic_min_bin_count,
+            save_reconstruction=save_reconstruction,
         )
         elapsed = time.perf_counter() - started
         metrics = {
@@ -241,15 +271,7 @@ def main() -> None:
         }
         if output_path == checkpoint_path:
             _update_metrics_json(checkpoint_path, diagnostics, metrics, elapsed)
-        print("diagnostics directory:", diagnostics["directory"], flush=True)
-        print("learning curve:", diagnostics["learning_curve_pdf"], flush=True)
-        print("validation diagnostics:", diagnostics["validation"]["directory"], flush=True)
-        print("test diagnostics:", diagnostics["test"]["directory"], flush=True)
-        if "validation_species" in diagnostics:
-            print("validation species diagnostics:", diagnostics["validation_species"]["directory"], flush=True)
-        if "test_species" in diagnostics:
-            print("test species diagnostics:", diagnostics["test_species"]["directory"], flush=True)
-        print("diagnostics summary:", diagnostics["summary_json"], flush=True)
+        _print_diagnostics_paths(diagnostics)
         print(f"elapsed_seconds={elapsed:.3f}", flush=True)
         return
 
@@ -323,7 +345,7 @@ def main() -> None:
             error_core_scale_km=error_core_scale_km,
             error_energy_scale=error_energy_scale,
         )
-        val_metrics = reconstruction_metrics(pred_val, target_val)
+        val_metrics = _reconstruction_metrics_for_task(training_task, pred_val, target_val)
         mass_threshold = 0.5
         tuned_mass_threshold = (
             balanced_accuracy_threshold(mass_logit_val, mass_label_val)
@@ -340,7 +362,8 @@ def main() -> None:
             if mass_logit_val is not None and mass_label_val is not None
             else None
         )
-        print("validation metrics:", json.dumps(val_metrics, sort_keys=True), flush=True)
+        if val_metrics is not None:
+            print("validation metrics:", json.dumps(val_metrics, sort_keys=True), flush=True)
         if val_mass_metrics is not None:
             print("validation mass metrics:", json.dumps(val_mass_metrics, sort_keys=True), flush=True)
         if val_mass_tuned_metrics is not None:
@@ -378,7 +401,7 @@ def main() -> None:
             error_core_scale_km=error_core_scale_km,
             error_energy_scale=error_energy_scale,
         )
-        test_metrics = reconstruction_metrics(pred_test, target_test)
+        test_metrics = _reconstruction_metrics_for_task(training_task, pred_test, target_test)
         test_mass_metrics = (
             binary_classification_metrics(mass_logit_test, mass_label_test, threshold=mass_threshold)
             if mass_logit_test is not None and mass_label_test is not None
@@ -389,7 +412,8 @@ def main() -> None:
             if mass_logit_test is not None and mass_label_test is not None
             else None
         )
-        print("test metrics:", json.dumps(test_metrics, sort_keys=True), flush=True)
+        if test_metrics is not None:
+            print("test metrics:", json.dumps(test_metrics, sort_keys=True), flush=True)
         if test_mass_metrics is not None:
             print("test mass metrics:", json.dumps(test_mass_metrics, sort_keys=True), flush=True)
         if test_mass_tuned_metrics is not None:
@@ -431,6 +455,7 @@ def main() -> None:
             test_predicted_errors=predicted_error_test,
             energy_bin_width=args.diagnostic_energy_bin_width,
             min_bin_count=args.diagnostic_min_bin_count,
+            save_reconstruction=save_reconstruction,
         )
         elapsed = time.perf_counter() - started
         metrics = {
@@ -443,19 +468,7 @@ def main() -> None:
         }
         if output_path == checkpoint_path:
             _update_metrics_json(checkpoint_path, diagnostics, metrics, elapsed)
-        print("diagnostics directory:", diagnostics["directory"], flush=True)
-        print("learning curve:", diagnostics["learning_curve_pdf"], flush=True)
-        print("validation diagnostics:", diagnostics["validation"]["directory"], flush=True)
-        print("test diagnostics:", diagnostics["test"]["directory"], flush=True)
-        if "validation_species" in diagnostics:
-            print("validation species diagnostics:", diagnostics["validation_species"]["directory"], flush=True)
-        if "test_species" in diagnostics:
-            print("test species diagnostics:", diagnostics["test_species"]["directory"], flush=True)
-        if "validation_mass" in diagnostics:
-            print("validation mass diagnostics:", diagnostics["validation_mass"]["directory"], flush=True)
-        if "test_mass" in diagnostics:
-            print("test mass diagnostics:", diagnostics["test_mass"]["directory"], flush=True)
-        print("diagnostics summary:", diagnostics["summary_json"], flush=True)
+        _print_diagnostics_paths(diagnostics)
         print(f"elapsed_seconds={elapsed:.3f}", flush=True)
     finally:
         dataset.close()
