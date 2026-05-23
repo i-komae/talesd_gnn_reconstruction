@@ -52,6 +52,7 @@ TIME_LIMIT="${TIME_LIMIT:-2-00:00:00}"
 EXPORT_WORKERS="${EXPORT_WORKERS:-auto}"
 SUMMARY_WORKERS="${SUMMARY_WORKERS:-auto}"
 WORKER_MAX_FILES="${WORKER_MAX_FILES:-1}"
+FILE_INDEX_CHUNK_SIZE="${FILE_INDEX_CHUNK_SIZE:-128}"
 MAX_EVENTS="${MAX_EVENTS:-}"
 MAX_EVENTS_PER_FILE="${MAX_EVENTS_PER_FILE:-0}"
 MIN_EVENT_DATE="${MIN_EVENT_DATE:-191002}"
@@ -478,6 +479,7 @@ TIME_LIMIT=${TIME_LIMIT}
 EXPORT_WORKERS=${EXPORT_WORKERS}
 SUMMARY_WORKERS=${SUMMARY_WORKERS}
 WORKER_MAX_FILES=${WORKER_MAX_FILES}
+FILE_INDEX_CHUNK_SIZE=${FILE_INDEX_CHUNK_SIZE}
 MAX_EVENTS=${MAX_EVENTS}
 MAX_EVENTS_PER_FILE=${MAX_EVENTS_PER_FILE}
 MIN_EVENT_DATE=${MIN_EVENT_DATE}
@@ -555,6 +557,7 @@ echo "time_limit=${TIME_LIMIT}"
 echo "export_workers=${EXPORT_WORKERS}"
 echo "summary_workers=${SUMMARY_WORKERS}"
 echo "worker_max_files=${WORKER_MAX_FILES}"
+echo "file_index_chunk_size=${FILE_INDEX_CHUNK_SIZE}"
 echo "graph_output=${GRAPH_OUTPUT}"
 echo "kind=${KIND}"
 echo "const_dst=${CONST_DST}"
@@ -639,6 +642,7 @@ export_cmd+=(
   --const-dst $(q "${CONST_DST}")
   --workers "${EXPORT_WORKERS}"
   --worker-max-files "${WORKER_MAX_FILES}"
+  --file-index-chunk-size "${FILE_INDEX_CHUNK_SIZE}"
   --chunk-size "${CHUNK_SIZE}"
   --shard-size "${SHARD_SIZE}"
   --open-retries "${OPEN_RETRIES}"
@@ -755,6 +759,8 @@ cpus_per_task=${CPUS_PER_TASK}
 mem=${MEM}
 export_workers=${EXPORT_WORKERS}
 summary_workers=${SUMMARY_WORKERS}
+worker_max_files=${WORKER_MAX_FILES}
+file_index_chunk_size=${FILE_INDEX_CHUNK_SIZE}
 energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}
 energy_sample_stratify_particle=${ENERGY_SAMPLE_STRATIFY_PARTICLE}
 min_event_date=${MIN_EVENT_DATE}

@@ -240,6 +240,7 @@ def iter_dst_banks(
     mc_calib_dir: str | Path | None = None,
     min_event_date: int | None = None,
     skip_missing_mc_calibration: bool = False,
+    source_index_stop: int | None = None,
 ) -> Iterator[BankRecord]:
     """Stream TALE-SD-like calibev banks from data or MC DST files."""
 
@@ -273,6 +274,8 @@ def iter_dst_banks(
                 raise OSError(f"failed to open DST: {path}")
             with dst_handle as dst:
                 for source_index, event in enumerate(dst):
+                    if source_index_stop is not None and source_index > int(source_index_stop):
+                        break
                     if source_indices is not None and source_index not in source_indices:
                         continue
                     if min_event_date is not None:
