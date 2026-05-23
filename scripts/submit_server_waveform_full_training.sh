@@ -14,7 +14,22 @@ CPUS_PER_GPU="${CPUS_PER_GPU:-8}"
 MEM_PER_GPU_GB="${MEM_PER_GPU_GB:-256}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-$((GPUS * CPUS_PER_GPU))}"
 MEM="${MEM:-$((GPUS * MEM_PER_GPU_GB))G}"
-TIME_LIMIT="${TIME_LIMIT:-5-00:00:00}"
+if [[ -z "${TIME_LIMIT:-}" ]]; then
+  case "${PARTITION}" in
+    *_long*|*long-*)
+      TIME_LIMIT="7-00:00:00"
+      ;;
+    *_short*|*short-*)
+      TIME_LIMIT="6:00:00"
+      ;;
+    a100_devel-al9)
+      TIME_LIMIT="20:00"
+      ;;
+    *)
+      TIME_LIMIT="5-00:00:00"
+      ;;
+  esac
+fi
 
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-96}"
 BATCH_SIZE="${BATCH_SIZE:-256}"
