@@ -41,7 +41,7 @@ fi
 
 CPU_EXPORT_PARTITIONS="${CPU_EXPORT_PARTITIONS:-edr1-al9_large,edr2-al9_large}"
 AUTO_RESOURCES="${AUTO_RESOURCES:-1}"
-PIN_NODE="${PIN_NODE:-0}"
+PIN_NODE="${PIN_NODE:-1}"
 PARTITION="${PARTITION:-auto}"
 NODELIST="${NODELIST:-}"
 RESOURCE_SIZING_NODE="${RESOURCE_SIZING_NODE:-}"
@@ -375,6 +375,8 @@ if [[ "${AUTO_RESOURCES}" == "1" ]]; then
   if [[ "${PIN_NODE}" != "1" ]]; then
     status "PIN_NODE=0: submitting to partition=${PARTITION} without --nodelist; resource size was estimated from node=${RESOURCE_SIZING_NODE}"
     NODELIST=""
+  else
+    status "PIN_NODE=1: submitting to selected node=${NODELIST}; resource request is based on this node's current free CPU/MEM"
   fi
   adjust_resource_request_for_sbatch
 else
