@@ -134,7 +134,7 @@ select_cpu_resources() {
   local best_node=""
   local best_free_cpu=-1
   local best_free_mem=-1
-  local part node node_info parsed cpu_alloc cpu_tot real_mem alloc_mem free_cpu free_mem state
+  local part node node_info parsed cpu_alloc cpu_eff cpu_tot real_mem alloc_mem free_cpu free_mem state
 
   if ! command -v sinfo >/dev/null 2>&1 || ! command -v scontrol >/dev/null 2>&1; then
     echo "sinfo and scontrol are required for AUTO_RESOURCES=1." >&2
@@ -142,7 +142,7 @@ select_cpu_resources() {
   fi
 
   : > "${report_path}"
-  printf "partition\tnode\tstate\tfree_cpu\tcpu_total\tcpu_alloc\tfree_mem_mb\treal_mem_mb\talloc_mem_mb\n" >> "${report_path}"
+  printf "partition\tnode\tstate\tfree_cpu\tcpu_effective\tcpu_total\tcpu_alloc\tfree_mem_mb\treal_mem_mb\talloc_mem_mb\n" >> "${report_path}"
 
   for part in $(split_csv "${PARTITION}" | sed '/^auto$/d'); do
     [[ -n "${part}" ]] || continue
@@ -155,6 +155,7 @@ select_cpu_resources() {
             for (i = 1; i <= NF; i++) {
               split($i, f, "=")
               if (f[1] == "CPUAlloc") cpu_alloc = f[2]
+              if (f[1] == "CPUEfctv") cpu_eff = f[2]
               if (f[1] == "CPUTot") cpu_tot = f[2]
               if (f[1] == "RealMemory") real_mem = f[2]
               if (f[1] == "AllocMem") alloc_mem = f[2]
@@ -163,16 +164,18 @@ select_cpu_resources() {
           }
           END {
             if (cpu_alloc == "") cpu_alloc = 0
+            if (cpu_eff == "") cpu_eff = 0
             if (cpu_tot == "") cpu_tot = 0
+            if (cpu_eff <= 0 || (cpu_tot > 0 && cpu_eff > cpu_tot)) cpu_eff = cpu_tot
             if (real_mem == "") real_mem = 0
             if (alloc_mem == "") alloc_mem = 0
             if (state == "") state = "unknown"
-            print cpu_alloc, cpu_tot, real_mem, alloc_mem, state
+            print cpu_alloc, cpu_eff, cpu_tot, real_mem, alloc_mem, state
           }
         '
       )"
-      read -r cpu_alloc cpu_tot real_mem alloc_mem state <<< "${parsed}"
-      free_cpu=$((cpu_tot - cpu_alloc))
+      read -r cpu_alloc cpu_eff cpu_tot real_mem alloc_mem state <<< "${parsed}"
+      free_cpu=$((cpu_eff - cpu_alloc))
       free_mem=$((real_mem - alloc_mem))
       if (( free_cpu < 0 )); then
         free_cpu=0
@@ -180,8 +183,8 @@ select_cpu_resources() {
       if (( free_mem < 0 )); then
         free_mem=0
       fi
-      printf "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\n" \
-        "${part}" "${node}" "${state}" "${free_cpu}" "${cpu_tot}" "${cpu_alloc}" \
+      printf "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n" \
+        "${part}" "${node}" "${state}" "${free_cpu}" "${cpu_eff}" "${cpu_tot}" "${cpu_alloc}" \
         "${free_mem}" "${real_mem}" "${alloc_mem}" >> "${report_path}"
       if (( free_cpu > best_free_cpu || (free_cpu == best_free_cpu && free_mem > best_free_mem) )); then
         best_partition="${part}"
@@ -231,8 +234,8 @@ EOF
     exit 2
   fi
   {
-    printf "partition\tnode\tstate\tfree_cpu\tcpu_total\tcpu_alloc\tfree_mem_mb\treal_mem_mb\talloc_mem_mb\n"
-    printf "%s\t%s\tmanual\tunknown\tunknown\tunknown\tunknown\tunknown\tunknown\n" "${PARTITION}" "${NODELIST:-any}"
+    printf "partition\tnode\tstate\tfree_cpu\tcpu_effective\tcpu_total\tcpu_alloc\tfree_mem_mb\treal_mem_mb\talloc_mem_mb\n"
+    printf "%s\t%s\tmanual\tunknown\tunknown\tunknown\tunknown\tunknown\tunknown\tunknown\n" "${PARTITION}" "${NODELIST:-any}"
   } > "${RESOURCE_REPORT}"
 fi
 
