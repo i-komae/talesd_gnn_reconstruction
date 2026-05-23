@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from talesd_gnn_reconstruction.cli import _merge_candidate_reservoirs, _validate_mc_calibration_dates
+from talesd_gnn_reconstruction.cli import _merge_candidate_reservoirs, _selected_path_chunks, _validate_mc_calibration_dates
 from talesd_gnn_reconstruction.dst_reader import _event_date
 
 
@@ -52,6 +52,20 @@ class ExportDateFilterTest(unittest.TestCase):
                 )
 
         self.assertIn("191004(5)", str(raised.exception))
+
+    def test_selected_path_chunks_pack_by_selected_event_count(self) -> None:
+        chunks = _selected_path_chunks(
+            ["a.dst", "b.dst", "c.dst", "d.dst"],
+            {
+                "a.dst": {1, 2},
+                "b.dst": {3, 4},
+                "c.dst": set(),
+                "d.dst": {5},
+            },
+            shard_size=3,
+        )
+
+        self.assertEqual(chunks, [["a.dst"], ["b.dst", "d.dst"]])
 
 
 if __name__ == "__main__":

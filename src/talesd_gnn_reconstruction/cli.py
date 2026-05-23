@@ -359,6 +359,180 @@ def _build_graphs_for_file(
     }
 
 
+def _selected_path_chunks(
+    inputs: list[str],
+    selected_indices_by_path: dict[str, set[int]],
+    shard_size: int,
+) -> list[list[str]]:
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    current_count = 0
+    target_size = max(int(shard_size), 1)
+    for path in inputs:
+        selected = selected_indices_by_path.get(path)
+        if not selected:
+            continue
+        selected_count = len(selected)
+        if current and current_count + selected_count > target_size:
+            chunks.append(current)
+            current = []
+            current_count = 0
+        current.append(path)
+        current_count += selected_count
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _write_selected_graph_shard(
+    payload: tuple[
+        int,
+        list[str],
+        dict[str, set[int]],
+        dict[int, Any] | None,
+        str,
+        bool,
+        bool,
+        int,
+        float,
+        int | None,
+        str | None,
+        int | None,
+        bool,
+        str,
+        dict[str, Any],
+        float,
+        bool,
+    ]
+) -> dict[str, Any]:
+    from .dst_reader import iter_dst_banks
+    from .event_graph import build_graph_event
+    from .graph_io import create_graph_file, write_graph
+
+    (
+        shard_index,
+        paths,
+        selected_indices_by_path,
+        detector_positions,
+        kind,
+        require_trigger_mode0,
+        skip_errors,
+        open_retries,
+        open_retry_delay,
+        max_events_per_file,
+        mc_calib_dir,
+        min_event_date,
+        skip_missing_mc_calibration,
+        output,
+        config,
+        energy_bin_width,
+        stratify_particle,
+    ) = payload
+
+    output_path = _shard_path(output, shard_index)
+    shard_config = dict(config)
+    shard_config["shard_index"] = shard_index
+    handle = None
+    written = 0
+    skipped = 0
+    records = 0
+    graph_seen_by_bin: dict[int | tuple[str, int], int] = {}
+
+    try:
+        for path in paths:
+            selected = selected_indices_by_path.get(path)
+            if not selected:
+                continue
+            file_records = 0
+            for record in iter_dst_banks(
+                [path],
+                detector_positions=detector_positions,
+                kind=kind,
+                require_trigger_mode0=require_trigger_mode0,
+                skip_errors=skip_errors,
+                source_indices=selected,
+                open_retries=open_retries,
+                open_retry_delay=open_retry_delay,
+                mc_calib_dir=mc_calib_dir,
+                min_event_date=min_event_date,
+                skip_missing_mc_calibration=skip_missing_mc_calibration,
+            ):
+                records += 1
+                file_records += 1
+                graph = build_graph_event(record, detector_positions=detector_positions)
+                if graph is None:
+                    skipped += 1
+                    if max_events_per_file is not None and file_records >= max_events_per_file:
+                        break
+                    continue
+                if graph.target is None or graph.target.shape[0] == 0 or not math.isfinite(float(graph.target[0])):
+                    skipped += 1
+                    if max_events_per_file is not None and file_records >= max_events_per_file:
+                        break
+                    continue
+                particle = _particle_stratum_from_graph(graph) if stratify_particle else None
+                bin_key = _energy_sample_bin_key(float(graph.target[0]), float(energy_bin_width), particle=particle)
+                graph_seen_by_bin[bin_key] = graph_seen_by_bin.get(bin_key, 0) + 1
+                if handle is None:
+                    handle = create_graph_file(output_path, config=shard_config)
+                write_graph(handle, written, graph)
+                written += 1
+                if max_events_per_file is not None and file_records >= max_events_per_file:
+                    break
+    finally:
+        if handle is not None:
+            handle.close()
+
+    return {
+        "shard_index": shard_index,
+        "path": str(output_path) if written > 0 else None,
+        "written": written,
+        "skipped": skipped,
+        "records": records,
+        "graph_seen_by_bin": graph_seen_by_bin,
+    }
+
+
+def _iter_selected_shard_write_results(
+    inputs: list[str],
+    args: argparse.Namespace,
+    detector_positions: dict[int, Any] | None,
+    selected_indices_by_path: dict[str, set[int]],
+    config: dict[str, Any],
+) -> Iterator[dict[str, Any]]:
+    chunks = _selected_path_chunks(inputs, selected_indices_by_path, int(args.shard_size))
+    payloads = [
+        (
+            shard_index,
+            paths,
+            {path: selected_indices_by_path[path] for path in paths},
+            detector_positions,
+            args.kind,
+            not args.keep_non_mode0,
+            args.skip_errors,
+            int(args.open_retries),
+            float(args.open_retry_delay),
+            None if args.max_events_per_file is None or int(args.max_events_per_file) <= 0 else int(args.max_events_per_file),
+            str(Path(args.mc_calib_dir).expanduser()) if args.mc_calib_dir else None,
+            None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date),
+            bool(args.skip_errors and args.kind == "mc"),
+            str(Path(args.output).expanduser()),
+            config,
+            float(args.energy_bin_width),
+            bool(args.energy_sample_stratify_particle),
+        )
+        for shard_index, paths in enumerate(chunks)
+    ]
+    workers = min(max(int(args.workers), 1), len(payloads)) if payloads else 1
+    yield from _iter_process_pool(
+        payloads,
+        _write_selected_graph_shard,
+        workers,
+        "export/write shards",
+        max_tasks_per_child=max(int(args.worker_max_files), 0),
+    )
+
+
 def _iter_graphs(
     records: Iterable[Any],
     args: argparse.Namespace,
@@ -881,7 +1055,26 @@ def _cmd_export(args: argparse.Namespace) -> None:
             file_results = _iter_file_results(inputs, args, detector_positions, selected_indices_by_path=selected_by_path)
             graph_seen_by_bin: dict[int | tuple[str, int], int] = {}
             per_bin = max(int(args.energy_sample_per_bin), 1)
-            if preselect_per_bin <= per_bin:
+            if preselect_per_bin <= per_bin and int(args.shard_size) > 0 and int(args.workers) > 1:
+                config["energy_sample_parallel_shard_write"] = True
+                shard_results = _iter_selected_shard_write_results(
+                    inputs,
+                    args,
+                    detector_positions,
+                    selected_by_path,
+                    config,
+                )
+                written_total = 0
+                written_path_items: list[tuple[int, Path]] = []
+                for result in shard_results:
+                    skipped += int(result["skipped"])
+                    written_total += int(result["written"])
+                    if result.get("path"):
+                        written_path_items.append((int(result["shard_index"]), Path(str(result["path"]))))
+                    for bin_key, count in result.get("graph_seen_by_bin", {}).items():
+                        graph_seen_by_bin[bin_key] = graph_seen_by_bin.get(bin_key, 0) + int(count)
+                written_paths = [path for _index, path in sorted(written_path_items, key=lambda item: item[0])]
+            elif preselect_per_bin <= per_bin:
                 config["energy_sample_streaming_preselected"] = True
 
                 def selected_graphs_from_files() -> Iterator[Any]:
