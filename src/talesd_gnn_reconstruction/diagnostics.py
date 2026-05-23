@@ -1751,6 +1751,7 @@ def _save_mass_pdf(
             bbox={"boxstyle": "round,pad=0.28", "facecolor": (0, 0, 0, 0.18) if text_color == "white" else (1, 1, 1, 0.72), "edgecolor": "none"},
         )
     ax.set_title(f"{split_name}: mass confusion matrix")
+    ax.grid(False)
     colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
     colorbar.set_label("events")
     fig.tight_layout()
@@ -1766,14 +1767,6 @@ def _save_mass_pdf(
     if iron_scores.size:
         ax.hist(iron_scores, bins=bins, histtype="step", linewidth=1.6, label="true iron", color=IRON_COLOR)
     ax.axvline(float(threshold), color="0.25", linestyle="--", linewidth=1.1, label=f"threshold={threshold:.3g}")
-    if tuned_threshold is not None and abs(float(tuned_threshold) - float(threshold)) > 1.0e-6:
-        ax.axvline(
-            float(tuned_threshold),
-            color="0.5",
-            linestyle=":",
-            linewidth=1.1,
-            label=f"tuned={tuned_threshold:.3g}",
-        )
     ax.set_title(f"{split_name}: predicted iron probability")
     ax.set_xlabel("P(iron)")
     ax.set_ylabel("events")
