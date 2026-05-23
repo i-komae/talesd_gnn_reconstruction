@@ -135,6 +135,16 @@ split_csv() {
   printf "%s\n" ${value}
 }
 
+is_usable_node_state() {
+  local state="$1"
+  case "${state}" in
+    *DOWN*|*DRAIN*|*FAIL*|*MAINT*|*POWER*|*NOT_RESPONDING*|*UNKNOWN*)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 select_cpu_resources() {
   local report_path="$1"
   local best_partition=""
@@ -195,6 +205,10 @@ select_cpu_resources() {
         "${part}" "${node}" "${state}" "${free_cpu}" "${cpu_eff}" "${cpu_tot}" "${cpu_alloc}" \
         "${free_mem}" "${real_mem}" "${alloc_mem}" >> "${report_path}"
       status "  ${part} ${node}: state=${state} free_cpu=${free_cpu} cpu_effective=${cpu_eff} cpu_total=${cpu_tot} free_mem=${free_mem}M"
+      if ! is_usable_node_state "${state}"; then
+        status "    skipped: node state is not usable for new jobs"
+        continue
+      fi
       if (( free_cpu > best_free_cpu || (free_cpu == best_free_cpu && free_mem > best_free_mem) )); then
         best_partition="${part}"
         best_node="${node}"

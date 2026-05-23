@@ -87,6 +87,7 @@ ls "$MC_CALIB_DIR"/talesdcalib_pass2_*.dst* "$MC_CALIB_DIR"/talesdcalib_pass2_ty
 
 CPU export の submit script は `scripts/submit_server_graph_export.sh` である。
 標準では、script が `edr1-al9_large,edr2-al9_large` の各ノードを調べ、単一ノード内で空いている CPU と Slurm 上の未割当メモリが最も大きいノードを選ぶ。
+`DOWN`、`DRAIN`、`FAIL`、`MAINT` など、新規 job を受け付けない状態のノードは候補から除外する。
 CPU 数は `CPUTot` ではなく、Slurm が実際に割り当て可能な `CPUEfctv` から `CPUAlloc` を引いて決める。
 その値が `sbatch` に拒否される場合は、`sbatch --test-only` で受理される最大の `--cpus-per-task` まで自動で下げる。
 この確認中も、選択候補、`sbatch` の受理/拒否、調整後の CPU 数を端末に表示する。
