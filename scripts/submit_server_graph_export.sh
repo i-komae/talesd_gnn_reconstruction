@@ -73,6 +73,7 @@ OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 SBATCH_TEST_TIMEOUT="${SBATCH_TEST_TIMEOUT:-15}"
+AUTO_MEM_RESERVE_MB="${AUTO_MEM_RESERVE_MB:-32768}"
 
 if [[ ! -d "${REPO}" ]]; then
   echo "repo not found: ${REPO}" >&2
@@ -231,17 +232,22 @@ select_cpu_resources() {
   NODELIST="${best_node}"
   RESOURCE_SIZING_NODE="${best_node}"
   CPUS_PER_TASK="${best_free_cpu}"
-  MEM="${best_free_mem}M"
-  status "Selected CPU resource: partition=${PARTITION} node=${NODELIST} cpus_per_task=${CPUS_PER_TASK} mem=${MEM}"
+  if [[ "${AUTO_MEM_RESERVE_MB}" =~ ^[0-9]+$ ]] && (( best_free_mem > AUTO_MEM_RESERVE_MB )); then
+    MEM="$((best_free_mem - AUTO_MEM_RESERVE_MB))M"
+  else
+    MEM="${best_free_mem}M"
+  fi
+  status "Selected CPU resource: partition=${PARTITION} node=${NODELIST} cpus_per_task=${CPUS_PER_TASK} mem=${MEM} free_mem=${best_free_mem}M reserve=${AUTO_MEM_RESERVE_MB}M"
 }
 
 sbatch_accepts_cpu_request() {
   local cpus="$1"
+  local mem="$2"
   local sbatch_args=(
     --test-only
     --partition="${PARTITION}"
     --cpus-per-task="${cpus}"
-    --mem="${MEM}"
+    --mem="${mem}"
     --time="${TIME_LIMIT}"
     --wrap=true
   )
@@ -255,33 +261,86 @@ sbatch_accepts_cpu_request() {
   fi
 }
 
-adjust_cpu_request_for_sbatch() {
-  local original_cpus low high mid best
+sbatch_rejection_message() {
+  local cpus="$1"
+  local mem="$2"
+  local sbatch_args=(
+    --test-only
+    --partition="${PARTITION}"
+    --cpus-per-task="${cpus}"
+    --mem="${mem}"
+    --time="${TIME_LIMIT}"
+    --wrap=true
+  )
+  if [[ -n "${NODELIST}" ]]; then
+    sbatch_args+=(--nodelist="${NODELIST}")
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${SBATCH_TEST_TIMEOUT}s" sbatch "${sbatch_args[@]}" 2>&1 || true
+  else
+    sbatch "${sbatch_args[@]}" 2>&1 || true
+  fi
+}
+
+adjust_resource_request_for_sbatch() {
+  local original_cpus low high mid best mem_mb best_mem
   if ! command -v sbatch >/dev/null 2>&1; then
     return 0
   fi
   original_cpus="${CPUS_PER_TASK}"
-  if [[ ! "${original_cpus}" =~ ^[0-9]+$ ]] || (( original_cpus <= 1 )); then
+  if [[ ! "${original_cpus}" =~ ^[0-9]+$ ]] || (( original_cpus <= 0 )); then
     return 0
   fi
-  status "Checking sbatch CPU request: partition=${PARTITION} node=${NODELIST:-any} cpus=${original_cpus} mem=${MEM} timeout=${SBATCH_TEST_TIMEOUT}s"
-  if sbatch_accepts_cpu_request "${original_cpus}"; then
-    status "  sbatch accepts cpus_per_task=${original_cpus}"
+  status "Checking sbatch request: partition=${PARTITION} node=${NODELIST:-any} cpus=${original_cpus} mem=${MEM} timeout=${SBATCH_TEST_TIMEOUT}s"
+  if sbatch_accepts_cpu_request "${original_cpus}" "${MEM}"; then
+    status "  sbatch accepts cpus_per_task=${original_cpus} mem=${MEM}"
     return 0
   fi
-  status "  sbatch rejected cpus_per_task=${original_cpus}; searching for the largest acceptable value"
+  status "  sbatch rejected cpus_per_task=${original_cpus} mem=${MEM}"
+  sbatch_rejection_message "${original_cpus}" "${MEM}" | sed 's/^/    /' >&2
+
+  if [[ "${MEM}" =~ ^([0-9]+)M$ ]] && ! sbatch_accepts_cpu_request 1 "${MEM}"; then
+    mem_mb="${BASH_REMATCH[1]}"
+    status "  sbatch also rejects cpus_per_task=1 at mem=${MEM}; reducing memory request"
+    low=1024
+    high=$((mem_mb - 1))
+    best_mem=0
+    while (( low <= high )); do
+      mid=$(((low + high) / 2))
+      if sbatch_accepts_cpu_request 1 "${mid}M"; then
+        status "  sbatch accepts mem=${mid}M with cpus_per_task=1"
+        best_mem="${mid}"
+        low=$((mid + 1))
+      else
+        status "  sbatch rejects mem=${mid}M with cpus_per_task=1"
+        high=$((mid - 1))
+      fi
+    done
+    if (( best_mem <= 0 )); then
+      echo "No sbatch-valid memory request was found for partition=${PARTITION} node=${NODELIST:-any}." >&2
+      exit 2
+    fi
+    status "Adjusted mem from ${MEM} to ${best_mem}M; sbatch rejected the larger memory request."
+    MEM="${best_mem}M"
+  fi
+
+  if sbatch_accepts_cpu_request "${original_cpus}" "${MEM}"; then
+    status "  sbatch accepts cpus_per_task=${original_cpus} mem=${MEM}"
+    return 0
+  fi
+  status "  searching for the largest acceptable cpus_per_task at mem=${MEM}"
 
   low=1
   high=$((original_cpus - 1))
   best=0
   while (( low <= high )); do
     mid=$(((low + high) / 2))
-    if sbatch_accepts_cpu_request "${mid}"; then
-      status "  sbatch accepts cpus_per_task=${mid}"
+    if sbatch_accepts_cpu_request "${mid}" "${MEM}"; then
+      status "  sbatch accepts cpus_per_task=${mid} mem=${MEM}"
       best="${mid}"
       low=$((mid + 1))
     else
-      status "  sbatch rejects cpus_per_task=${mid}"
+      status "  sbatch rejects cpus_per_task=${mid} mem=${MEM}"
       high=$((mid - 1))
     fi
   done
@@ -316,7 +375,7 @@ if [[ "${AUTO_RESOURCES}" == "1" ]]; then
     status "PIN_NODE=0: submitting to partition=${PARTITION} without --nodelist; resource size was estimated from node=${RESOURCE_SIZING_NODE}"
     NODELIST=""
   fi
-  adjust_cpu_request_for_sbatch
+  adjust_resource_request_for_sbatch
 else
   if [[ "${PARTITION}" == "auto" || -z "${PARTITION}" || "${CPUS_PER_TASK}" == "auto" || "${MEM}" == "auto" ]]; then
     cat >&2 <<EOF
@@ -364,6 +423,7 @@ PARTITION=${PARTITION}
 CPU_EXPORT_PARTITIONS=${CPU_EXPORT_PARTITIONS}
 AUTO_RESOURCES=${AUTO_RESOURCES}
 PIN_NODE=${PIN_NODE}
+AUTO_MEM_RESERVE_MB=${AUTO_MEM_RESERVE_MB}
 NODELIST=${NODELIST}
 RESOURCE_SIZING_NODE=${RESOURCE_SIZING_NODE}
 CPUS_PER_TASK=${CPUS_PER_TASK}
@@ -439,6 +499,7 @@ echo "nodelist=${NODELIST:-}"
 echo "resource_sizing_node=${RESOURCE_SIZING_NODE:-}"
 echo "cpus_per_task=${CPUS_PER_TASK}"
 echo "mem=${MEM}"
+echo "auto_mem_reserve_mb=${AUTO_MEM_RESERVE_MB}"
 echo "time_limit=${TIME_LIMIT}"
 echo "export_workers=${EXPORT_WORKERS}"
 echo "summary_workers=${SUMMARY_WORKERS}"
@@ -629,6 +690,7 @@ nodelist=${NODELIST:-}
 resource_sizing_node=${RESOURCE_SIZING_NODE:-}
 auto_resources=${AUTO_RESOURCES}
 pin_node=${PIN_NODE}
+auto_mem_reserve_mb=${AUTO_MEM_RESERVE_MB}
 time_limit=${TIME_LIMIT}
 cpus_per_task=${CPUS_PER_TASK}
 mem=${MEM}
