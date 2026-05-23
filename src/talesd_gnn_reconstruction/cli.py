@@ -20,7 +20,6 @@ from .progress import write as _progress_write
 
 MAX_CONFIG_PATHS = 200
 DEFAULT_WORKER_MAX_FILES = 1
-DEFAULT_FILE_INDEX_CHUNK_SIZE = 128
 DEFAULT_TRAIN_WORKERS = -1
 
 
@@ -244,7 +243,7 @@ def _scan_energy_candidates_for_file(
                 if min_event_date is not None and (date <= 0 or date < int(min_event_date)):
                     continue
                 time_value = int(rusdraw.get("hhmmss", 0) or 0)
-                if mc_calibration is not None and not mc_calibration.has_calibration_source(date, time_value):
+                if mc_calibration is not None and not mc_calibration.has_calibration_time(date, time_value):
                     missing_calibration_events += 1
                     continue
                 xxyy = rusdraw.get("xxyy", [])
@@ -306,7 +305,6 @@ def _build_graphs_for_file(
         str | None,
         int | None,
         bool,
-        int | None,
     ]
 ) -> dict[str, Any]:
     from .dst_reader import iter_dst_banks
@@ -325,7 +323,6 @@ def _build_graphs_for_file(
         mc_calib_dir,
         min_event_date,
         skip_missing_mc_calibration,
-        source_index_stop,
     ) = payload
     graphs = []
     skipped = 0
@@ -342,7 +339,6 @@ def _build_graphs_for_file(
         mc_calib_dir=mc_calib_dir,
         min_event_date=min_event_date,
         skip_missing_mc_calibration=skip_missing_mc_calibration,
-        source_index_stop=source_index_stop,
     ):
         records += 1
         graph = build_graph_event(record, detector_positions=detector_positions)
@@ -412,38 +408,24 @@ def _iter_file_results(
     detector_positions: dict[int, Any] | None,
     selected_indices_by_path: dict[str, set[int]] | None = None,
 ) -> Iterator[dict[str, Any]]:
-    payloads = []
-    index_chunk_size = max(int(args.file_index_chunk_size), 1)
-    for path in inputs:
-        if selected_indices_by_path is not None:
-            selected_indices = selected_indices_by_path.get(path)
-            if not selected_indices:
-                continue
-            source_index_chunks: list[set[int] | None] = [
-                set(indices)
-                for indices in _chunked(sorted(selected_indices), index_chunk_size)
-            ]
-        else:
-            source_index_chunks = [None]
-        for source_indices in source_index_chunks:
-            source_index_stop = max(source_indices) if source_indices else None
-            payloads.append(
-                (
-                    path,
-                    detector_positions,
-                    args.kind,
-                    not args.keep_non_mode0,
-                    args.skip_errors,
-                    source_indices,
-                    int(args.open_retries),
-                    float(args.open_retry_delay),
-                    None if args.max_events_per_file is None or int(args.max_events_per_file) <= 0 else int(args.max_events_per_file),
-                    str(Path(args.mc_calib_dir).expanduser()) if args.mc_calib_dir else None,
-                    None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date),
-                    bool(args.skip_errors and args.kind == "mc"),
-                    source_index_stop,
-                )
-            )
+    payloads = [
+        (
+            path,
+            detector_positions,
+            args.kind,
+            not args.keep_non_mode0,
+            args.skip_errors,
+            selected_indices_by_path.get(path) if selected_indices_by_path is not None else None,
+            int(args.open_retries),
+            float(args.open_retry_delay),
+            None if args.max_events_per_file is None or int(args.max_events_per_file) <= 0 else int(args.max_events_per_file),
+            str(Path(args.mc_calib_dir).expanduser()) if args.mc_calib_dir else None,
+            None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date),
+            bool(args.skip_errors and args.kind == "mc"),
+        )
+        for path in inputs
+        if selected_indices_by_path is None or path in selected_indices_by_path
+    ]
     workers = max(int(args.workers), 1)
     if workers == 1:
         for payload in _progress(payloads, desc="export files", total=len(payloads)):
@@ -813,7 +795,6 @@ def _cmd_export(args: argparse.Namespace) -> None:
         "seed": args.seed,
         "workers": args.workers,
         "worker_max_files": args.worker_max_files,
-        "file_index_chunk_size": args.file_index_chunk_size,
         "chunk_size": args.chunk_size,
         "shard_size": args.shard_size,
         "open_retries": args.open_retries,
@@ -1114,7 +1095,6 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--seed", type=int, default=12345, help="energy-flat samplingの乱数seed")
     export.add_argument("--workers", type=int, default=1, help="DST読み込みとグラフ構築に使うファイル単位worker数。--max-events指定時だけイベントchunk単位")
     export.add_argument("--worker-max-files", type=int, default=DEFAULT_WORKER_MAX_FILES, help="ファイル単位workerをNファイル処理ごとに再起動する。0なら無効")
-    export.add_argument("--file-index-chunk-size", type=int, default=DEFAULT_FILE_INDEX_CHUNK_SIZE, help="energy-flat preselection後に1 workerへ渡す同一DST内source index数")
     export.add_argument("--chunk-size", type=int, default=128, help="--max-events指定時にworkerへ渡すイベントchunkサイズ")
     export.add_argument("--shard-size", type=int, default=0, help="NグラフごとにHDF5を分割する。0なら分割しない")
     export.add_argument("--open-retries", type=int, default=3, help="DST open失敗時の再試行回数")
