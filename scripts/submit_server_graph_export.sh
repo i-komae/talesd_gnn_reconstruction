@@ -208,6 +208,58 @@ select_cpu_resources() {
   MEM="${best_free_mem}M"
 }
 
+sbatch_accepts_cpu_request() {
+  local cpus="$1"
+  local sbatch_args=(
+    --test-only
+    --partition="${PARTITION}"
+    --cpus-per-task="${cpus}"
+    --mem="${MEM}"
+    --time="${TIME_LIMIT}"
+    --wrap=true
+  )
+  if [[ -n "${NODELIST}" ]]; then
+    sbatch_args+=(--nodelist="${NODELIST}")
+  fi
+  sbatch "${sbatch_args[@]}" >/dev/null 2>&1
+}
+
+adjust_cpu_request_for_sbatch() {
+  local original_cpus low high mid best
+  if ! command -v sbatch >/dev/null 2>&1; then
+    return 0
+  fi
+  original_cpus="${CPUS_PER_TASK}"
+  if [[ ! "${original_cpus}" =~ ^[0-9]+$ ]] || (( original_cpus <= 1 )); then
+    return 0
+  fi
+  if sbatch_accepts_cpu_request "${original_cpus}"; then
+    return 0
+  fi
+
+  low=1
+  high=$((original_cpus - 1))
+  best=0
+  while (( low <= high )); do
+    mid=$(((low + high) / 2))
+    if sbatch_accepts_cpu_request "${mid}"; then
+      best="${mid}"
+      low=$((mid + 1))
+    else
+      high=$((mid - 1))
+    fi
+  done
+
+  if (( best <= 0 )); then
+    echo "No sbatch-valid CPU count was found for partition=${PARTITION} node=${NODELIST:-any} mem=${MEM}." >&2
+    echo "Try lowering MEM or selecting another partition/node." >&2
+    exit 2
+  fi
+
+  echo "Adjusted cpus_per_task from ${original_cpus} to ${best}; sbatch --test-only rejected the larger request." >&2
+  CPUS_PER_TASK="${best}"
+}
+
 SBATCH_DIR="${RUN_DIR}/slurm"
 SLURM_LOG_DIR="${RUN_DIR}/slurm_logs"
 LOG_DIR="${RUN_DIR}/logs"
@@ -223,6 +275,7 @@ if [[ "${AUTO_RESOURCES}" == "1" ]]; then
     PARTITION="${CPU_EXPORT_PARTITIONS}"
   fi
   select_cpu_resources "${RESOURCE_REPORT}"
+  adjust_cpu_request_for_sbatch
 else
   if [[ "${PARTITION}" == "auto" || -z "${PARTITION}" || "${CPUS_PER_TASK}" == "auto" || "${MEM}" == "auto" ]]; then
     cat >&2 <<EOF

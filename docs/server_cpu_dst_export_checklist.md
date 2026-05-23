@@ -88,6 +88,7 @@ ls "$MC_CALIB_DIR"/talesdcalib_pass2_*.dst* "$MC_CALIB_DIR"/talesdcalib_pass2_ty
 CPU export の submit script は `scripts/submit_server_graph_export.sh` である。
 標準では、script が `edr1-al9_large,edr2-al9_large` の各ノードを調べ、単一ノード内で空いている CPU と Slurm 上の未割当メモリが最も大きいノードを選ぶ。
 CPU 数は `CPUTot` ではなく、Slurm が実際に割り当て可能な `CPUEfctv` から `CPUAlloc` を引いて決める。
+その値が `sbatch` に拒否される場合は、`sbatch --test-only` で受理される最大の `--cpus-per-task` まで自動で下げる。
 選んだノードは `--nodelist` で固定し、その時点で空いている CPU 数を `--cpus-per-task`、未割当メモリを `--mem` に使う。
 これにより、DST export の 1 プロセスが実際に使える単一ノード資源をフルに要求する。
 標準的な初期設定は次の通り。
