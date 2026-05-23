@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+status() {
+  printf "%s\n" "$*" >&2
+}
+
+status "submit_server_graph_export.sh: starting"
+
 REPO="${REPO:-/dicos_ui_home/ikomae/work/src/talesd_gnn_reconstruction}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_reconstruction}"
 GRAPH_ROOT="${GRAPH_ROOT:-/dicos_ui_home/ikomae/work/gnn/graphs}"
@@ -64,6 +70,7 @@ UV_SYNC_ARGS="${UV_SYNC_ARGS:-}"
 OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 DRY_RUN="${DRY_RUN:-0}"
+SBATCH_TEST_TIMEOUT="${SBATCH_TEST_TIMEOUT:-15}"
 
 if [[ ! -d "${REPO}" ]]; then
   echo "repo not found: ${REPO}" >&2
@@ -141,6 +148,7 @@ select_cpu_resources() {
     return 2
   fi
 
+  status "Scanning CPU resources: partitions=${PARTITION}"
   : > "${report_path}"
   printf "partition\tnode\tstate\tfree_cpu\tcpu_effective\tcpu_total\tcpu_alloc\tfree_mem_mb\treal_mem_mb\talloc_mem_mb\n" >> "${report_path}"
 
@@ -186,6 +194,7 @@ select_cpu_resources() {
       printf "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n" \
         "${part}" "${node}" "${state}" "${free_cpu}" "${cpu_eff}" "${cpu_tot}" "${cpu_alloc}" \
         "${free_mem}" "${real_mem}" "${alloc_mem}" >> "${report_path}"
+      status "  ${part} ${node}: state=${state} free_cpu=${free_cpu} cpu_effective=${cpu_eff} cpu_total=${cpu_tot} free_mem=${free_mem}M"
       if (( free_cpu > best_free_cpu || (free_cpu == best_free_cpu && free_mem > best_free_mem) )); then
         best_partition="${part}"
         best_node="${node}"
@@ -206,6 +215,7 @@ select_cpu_resources() {
   NODELIST="${best_node}"
   CPUS_PER_TASK="${best_free_cpu}"
   MEM="${best_free_mem}M"
+  status "Selected CPU resource: partition=${PARTITION} node=${NODELIST} cpus_per_task=${CPUS_PER_TASK} mem=${MEM}"
 }
 
 sbatch_accepts_cpu_request() {
@@ -221,7 +231,11 @@ sbatch_accepts_cpu_request() {
   if [[ -n "${NODELIST}" ]]; then
     sbatch_args+=(--nodelist="${NODELIST}")
   fi
-  sbatch "${sbatch_args[@]}" >/dev/null 2>&1
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${SBATCH_TEST_TIMEOUT}s" sbatch "${sbatch_args[@]}" >/dev/null 2>&1
+  else
+    sbatch "${sbatch_args[@]}" >/dev/null 2>&1
+  fi
 }
 
 adjust_cpu_request_for_sbatch() {
@@ -233,9 +247,12 @@ adjust_cpu_request_for_sbatch() {
   if [[ ! "${original_cpus}" =~ ^[0-9]+$ ]] || (( original_cpus <= 1 )); then
     return 0
   fi
+  status "Checking sbatch CPU request: partition=${PARTITION} node=${NODELIST:-any} cpus=${original_cpus} mem=${MEM} timeout=${SBATCH_TEST_TIMEOUT}s"
   if sbatch_accepts_cpu_request "${original_cpus}"; then
+    status "  sbatch accepts cpus_per_task=${original_cpus}"
     return 0
   fi
+  status "  sbatch rejected cpus_per_task=${original_cpus}; searching for the largest acceptable value"
 
   low=1
   high=$((original_cpus - 1))
@@ -243,9 +260,11 @@ adjust_cpu_request_for_sbatch() {
   while (( low <= high )); do
     mid=$(((low + high) / 2))
     if sbatch_accepts_cpu_request "${mid}"; then
+      status "  sbatch accepts cpus_per_task=${mid}"
       best="${mid}"
       low=$((mid + 1))
     else
+      status "  sbatch rejects cpus_per_task=${mid}"
       high=$((mid - 1))
     fi
   done
@@ -256,7 +275,7 @@ adjust_cpu_request_for_sbatch() {
     exit 2
   fi
 
-  echo "Adjusted cpus_per_task from ${original_cpus} to ${best}; sbatch --test-only rejected the larger request." >&2
+  status "Adjusted cpus_per_task from ${original_cpus} to ${best}; sbatch --test-only rejected the larger request."
   CPUS_PER_TASK="${best}"
 }
 
@@ -274,6 +293,7 @@ if [[ "${AUTO_RESOURCES}" == "1" ]]; then
   if [[ "${PARTITION}" == "auto" ]]; then
     PARTITION="${CPU_EXPORT_PARTITIONS}"
   fi
+  status "AUTO_RESOURCES=1: selecting CPU node before writing sbatch"
   select_cpu_resources "${RESOURCE_REPORT}"
   adjust_cpu_request_for_sbatch
 else
