@@ -1182,6 +1182,7 @@ def train_model(
     lr_factor: float = 0.5,
     lr_patience: int = 2,
     early_stopping_patience: int = 0,
+    early_stopping_min_epochs: int = 0,
     model_architecture: str = "baseline",
     readout_heads: int = 4,
     classification_arch: str = "enhanced",
@@ -1550,6 +1551,7 @@ def train_model(
 
     best_val = float("inf")
     best_state = None
+    best_epoch = 0
     epochs_without_improvement = 0
     mass_collapse_epochs = 0
     history: list[dict[str, Any]] = []
@@ -1850,6 +1852,7 @@ def train_model(
         history.append(epoch_row)
         if epoch_row["val_loss"] < best_val:
             best_val = epoch_row["val_loss"]
+            best_epoch = int(epoch)
             best_state = {key: value.detach().cpu() for key, value in model.state_dict().items()}
             epochs_without_improvement = 0
         else:
@@ -1914,16 +1917,22 @@ def train_model(
                     "fix the model/input/loss before spending more GPU time."
                 )
                 break
-        if early_stopping_patience > 0 and epochs_without_improvement >= int(early_stopping_patience):
+        if (
+            early_stopping_patience > 0
+            and epoch >= int(early_stopping_min_epochs)
+            and epochs_without_improvement >= int(early_stopping_patience)
+        ):
             _progress_write(
                 f"early stopping at epoch={epoch:04d} "
-                f"best_val_loss={best_val:.6f} patience={early_stopping_patience}",
+                f"best_val_loss={best_val:.6f} patience={early_stopping_patience} "
+                f"min_epochs={early_stopping_min_epochs}",
             )
             break
     stage_seconds["epochs"] = time.perf_counter() - stage_started
 
     if best_state is not None:
         model.load_state_dict(best_state)
+        _progress_write(f"loaded best validation checkpoint: epoch={best_epoch:04d} val_loss={best_val:.6f}")
 
     stage_started = time.perf_counter()
     pred_val, target_val, mass_logit_val, mass_label_val, quality_val, error_val = _predict_numpy(
@@ -2100,6 +2109,9 @@ def train_model(
             "lr_factor": lr_factor,
             "lr_patience": lr_patience,
             "early_stopping_patience": early_stopping_patience,
+            "early_stopping_min_epochs": early_stopping_min_epochs,
+            "best_epoch": best_epoch,
+            "best_val_loss": best_val,
             "hidden_dim": hidden_dim,
             "layers": num_layers,
             "dropout": dropout,

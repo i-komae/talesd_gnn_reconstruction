@@ -837,6 +837,7 @@ def _cmd_train(args: argparse.Namespace) -> None:
         lr_factor=args.lr_factor,
         lr_patience=args.lr_patience,
         early_stopping_patience=args.early_stopping_patience,
+        early_stopping_min_epochs=args.early_stopping_min_epochs,
         model_architecture=args.model_architecture,
         readout_heads=args.readout_heads,
         classification_arch=args.classification_arch,
@@ -999,6 +1000,7 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--lr-factor", type=float, default=0.5, help="reduce-on-plateauでLRを下げる倍率")
     train.add_argument("--lr-patience", type=int, default=2, help="reduce-on-plateauで何epoch改善なしを待つか")
     train.add_argument("--early-stopping-patience", type=int, default=0, help="0なら無効。指定epoch数validation改善なしで停止")
+    train.add_argument("--early-stopping-min-epochs", type=int, default=0, help="early stoppingを有効にする前に最低限走らせるepoch数")
     train.add_argument("--model-architecture", choices=["baseline", "physics"], default="baseline")
     train.add_argument("--readout-heads", type=int, default=4, help="physics architectureのattention readout head数")
     train.add_argument(

@@ -9,7 +9,7 @@ Usage:
   scripts/submit_server_mass_only_training.sh [epochs]
 
 Submit mass-only waveform training with the project-standard server settings.
-Default: 48 epochs. The optional epochs argument overrides TRAIN_EPOCHS.
+Default: 48 max epochs with validation early stopping. The optional epochs argument overrides TRAIN_EPOCHS.
 EOF
 }
 
@@ -44,6 +44,10 @@ export MASS_LOSS_MODE="${MASS_LOSS_MODE:-bce}"
 export MASS_POS_WEIGHT_MODE="${MASS_POS_WEIGHT_MODE:-none}"
 export MASS_RANKING_WEIGHT="${MASS_RANKING_WEIGHT:-0.5}"
 export MASS_RANKING_MARGIN="${MASS_RANKING_MARGIN:-1.0}"
+export EARLY_STOPPING_PATIENCE="${EARLY_STOPPING_PATIENCE:-10}"
+export EARLY_STOPPING_MIN_EPOCHS="${EARLY_STOPPING_MIN_EPOCHS:-20}"
+export DROPOUT="${DROPOUT:-0.12}"
+export WEIGHT_DECAY="${WEIGHT_DECAY:-5e-4}"
 export LR_SCHEDULER="${LR_SCHEDULER:-cosine}"
 export SUMMARIZE_GRAPHS="${SUMMARIZE_GRAPHS:-1}"
 

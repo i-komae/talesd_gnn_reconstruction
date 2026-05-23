@@ -38,6 +38,7 @@ QUALITY_CUT_KEEP_FRACTIONS = (1.00, 0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.
 QUALITY_ENERGY_KEEP_FRACTIONS = (1.00, 0.95, 0.90, 0.80, 0.50, 0.10)
 QUALITY_MARKER_KEEP_FRACTIONS = (0.95, 0.90, 0.80, 0.50, 0.10)
 ERROR_SCATTER_MAX_POINTS = 50000
+BALANCED_ACCURACY_PLOT_MIN_DELTA = 0.01
 
 
 def require_matplotlib_latex() -> None:
@@ -1069,6 +1070,21 @@ def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Pa
     has_reconstruction = "train_reconstruction_loss" in history[0] if history else False
     has_mass = "train_mass_loss" in history[0] if history else False
     has_mass_accuracy = "train_mass_accuracy" in history[0] and "val_mass_accuracy" in history[0] if history else False
+    has_mass_balanced_accuracy = False
+    if history and "train_mass_balanced_accuracy" in history[0] and "val_mass_balanced_accuracy" in history[0]:
+        train_delta = np.max(
+            np.abs(
+                np.asarray([row["train_mass_accuracy"] for row in history], dtype=float)
+                - np.asarray([row["train_mass_balanced_accuracy"] for row in history], dtype=float)
+            )
+        )
+        val_delta = np.max(
+            np.abs(
+                np.asarray([row["val_mass_accuracy"] for row in history], dtype=float)
+                - np.asarray([row["val_mass_balanced_accuracy"] for row in history], dtype=float)
+            )
+        )
+        has_mass_balanced_accuracy = max(float(train_delta), float(val_delta)) >= BALANCED_ACCURACY_PLOT_MIN_DELTA
     mass_loss_duplicates_total = bool(
         has_mass
         and not has_reconstruction
@@ -1081,7 +1097,7 @@ def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Pa
     show_separate_mass_loss = bool(has_mass and not mass_loss_duplicates_total)
 
     if has_mass:
-        ncols = 1 + int(show_separate_mass_loss) + int(has_mass_accuracy)
+        ncols = 1 + int(show_separate_mass_loss) + int(has_mass_accuracy) + int(has_mass_balanced_accuracy)
         fig, axes = plt.subplots(1, ncols, figsize=(5.0 * ncols, 4.2))
         axes = np.atleast_1d(axes)
         ax = axes[0]
@@ -1108,24 +1124,34 @@ def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Pa
         _style_axes(ax)
     if has_mass_accuracy:
         ax = axes[panel_index]
+        panel_index += 1
         ax.plot(epochs, [row["train_mass_accuracy"] for row in history], marker="o", markersize=2.5, linewidth=1.4, label="train accuracy")
         ax.plot(epochs, [row["val_mass_accuracy"] for row in history], marker="s", markersize=2.5, linewidth=1.4, label="validation accuracy")
+        ax.set_xlabel("epoch")
+        ax.set_ylabel("accuracy")
+        ax.set_ylim(0.0, 1.02)
+        ax.legend(frameon=False)
+        _style_axes(ax)
+    if has_mass_balanced_accuracy:
+        ax = axes[panel_index]
         ax.plot(
             epochs,
             [row["train_mass_balanced_accuracy"] for row in history],
-            linestyle="--",
-            linewidth=1.0,
-            label="train balanced",
+            marker="o",
+            markersize=2.5,
+            linewidth=1.4,
+            label="train balanced accuracy",
         )
         ax.plot(
             epochs,
             [row["val_mass_balanced_accuracy"] for row in history],
-            linestyle=":",
-            linewidth=1.2,
-            label="validation balanced",
+            marker="s",
+            markersize=2.5,
+            linewidth=1.4,
+            label="validation balanced accuracy",
         )
         ax.set_xlabel("epoch")
-        ax.set_ylabel("accuracy")
+        ax.set_ylabel("balanced accuracy")
         ax.set_ylim(0.0, 1.02)
         ax.legend(frameon=False)
         _style_axes(ax)
@@ -1692,7 +1718,7 @@ def _save_mass_pdf(
     split_dir = _diagnostics_root(output_path) / split_name
     pdf_files: list[str] = []
 
-    fig, ax = plt.subplots(figsize=FIGSIZE_SINGLE)
+    fig, ax = plt.subplots(figsize=(7.0, 5.2))
     matrix = np.asarray(
         [
             [metrics["tn_proton"], metrics["fp_iron"]],
@@ -1700,13 +1726,45 @@ def _save_mass_pdf(
         ],
         dtype=float,
     )
-    image = ax.imshow(matrix, cmap="Blues")
+    total_entries = float(np.sum(matrix))
+    matrix_percent = np.zeros_like(matrix)
+    if total_entries > 0:
+        matrix_percent = 100.0 * matrix / total_entries
+    summary["confusion_counts"] = {
+        "tn_proton": int(matrix[0, 0]),
+        "fp_iron": int(matrix[0, 1]),
+        "fn_iron": int(matrix[1, 0]),
+        "tp_iron": int(matrix[1, 1]),
+    }
+    summary["confusion_percent_of_all"] = {
+        "tn_proton": _to_float(matrix_percent[0, 0]),
+        "fp_iron": _to_float(matrix_percent[0, 1]),
+        "fn_iron": _to_float(matrix_percent[1, 0]),
+        "tp_iron": _to_float(matrix_percent[1, 1]),
+    }
+    image = ax.imshow(matrix_percent, cmap="Blues", vmin=0.0)
     ax.set_xticks([0, 1], labels=["pred proton", "pred iron"])
     ax.set_yticks([0, 1], labels=["true proton", "true iron"])
+    cell_names = np.asarray([["TN", "FP"], ["FN", "TP"]])
+    threshold_percent = 0.45 * float(np.nanmax(matrix_percent)) if np.any(np.isfinite(matrix_percent)) else 0.0
     for (row, col), value in np.ndenumerate(matrix):
-        ax.text(col, row, f"{int(value)}", ha="center", va="center", color="black")
+        percent = matrix_percent[row, col]
+        text_color = "white" if percent >= threshold_percent and threshold_percent > 0.0 else "black"
+        ax.text(
+            col,
+            row,
+            f"{cell_names[row, col]}\n{int(value):,}\n{percent:.1f}\\%",
+            ha="center",
+            va="center",
+            color=text_color,
+            fontsize=12,
+            linespacing=1.35,
+            bbox={"boxstyle": "round,pad=0.28", "facecolor": (0, 0, 0, 0.18) if text_color == "white" else (1, 1, 1, 0.72), "edgecolor": "none"},
+        )
     ax.set_title(f"{split_name}: mass confusion matrix")
-    fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    ax.text(0.5, -0.18, "percentages are fractions of all events", ha="center", va="top", transform=ax.transAxes, fontsize=9)
+    colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    colorbar.set_label("events [\\%]")
     fig.tight_layout()
     pdf_files.append(_save_pdf(fig, split_dir / "mass_confusion_matrix.pdf"))
     plt.close(fig)
