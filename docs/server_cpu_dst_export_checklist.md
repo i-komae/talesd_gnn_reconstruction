@@ -92,14 +92,18 @@ CPU 数は `CPUTot` ではなく、Slurm が実際に割り当て可能な `CPUE
 その値が `sbatch` に拒否される場合は、`sbatch --test-only` で受理される最大の `--cpus-per-task` まで自動で下げる。
 この確認中も、選択候補、`sbatch` の受理/拒否、調整後の CPU 数を端末に表示する。
 `sbatch --test-only` が遅い環境では、`SBATCH_TEST_TIMEOUT` で 1 回あたりの待ち時間を秒単位で変更できる。
-選んだノードは `--nodelist` で固定し、その時点で空いている CPU 数を `--cpus-per-task`、未割当メモリを `--mem` に使う。
+標準では、選んだノードは資源量の見積もりにだけ使い、`--nodelist` では固定しない。
+実際に使うノードは Slurm に選ばせる。
+特定ノードへ固定したい場合だけ `PIN_NODE=1` を指定する。
+その時点で空いている CPU 数を `--cpus-per-task`、未割当メモリを `--mem` に使う。
 これにより、DST export の 1 プロセスが実際に使える単一ノード資源をフルに要求する。
 標準的な初期設定は次の通り。
 
 ```text
 candidate partitions  edr1-al9_large,edr2-al9_large
 partition             auto-selected
-nodelist              auto-selected
+nodelist              not fixed by default
+pin-node              0
 cpus-per-task         free CPUs on selected node
 memory                unallocated Slurm memory on selected node
 time-limit       2-00:00:00

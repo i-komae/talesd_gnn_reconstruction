@@ -41,8 +41,10 @@ fi
 
 CPU_EXPORT_PARTITIONS="${CPU_EXPORT_PARTITIONS:-edr1-al9_large,edr2-al9_large}"
 AUTO_RESOURCES="${AUTO_RESOURCES:-1}"
+PIN_NODE="${PIN_NODE:-0}"
 PARTITION="${PARTITION:-auto}"
 NODELIST="${NODELIST:-}"
+RESOURCE_SIZING_NODE="${RESOURCE_SIZING_NODE:-}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-auto}"
 MEM="${MEM:-auto}"
 TIME_LIMIT="${TIME_LIMIT:-2-00:00:00}"
@@ -227,6 +229,7 @@ select_cpu_resources() {
 
   PARTITION="${best_partition}"
   NODELIST="${best_node}"
+  RESOURCE_SIZING_NODE="${best_node}"
   CPUS_PER_TASK="${best_free_cpu}"
   MEM="${best_free_mem}M"
   status "Selected CPU resource: partition=${PARTITION} node=${NODELIST} cpus_per_task=${CPUS_PER_TASK} mem=${MEM}"
@@ -309,6 +312,10 @@ if [[ "${AUTO_RESOURCES}" == "1" ]]; then
   fi
   status "AUTO_RESOURCES=1: selecting CPU node before writing sbatch"
   select_cpu_resources "${RESOURCE_REPORT}"
+  if [[ "${PIN_NODE}" != "1" ]]; then
+    status "PIN_NODE=0: submitting to partition=${PARTITION} without --nodelist; resource size was estimated from node=${RESOURCE_SIZING_NODE}"
+    NODELIST=""
+  fi
   adjust_cpu_request_for_sbatch
 else
   if [[ "${PARTITION}" == "auto" || -z "${PARTITION}" || "${CPUS_PER_TASK}" == "auto" || "${MEM}" == "auto" ]]; then
@@ -356,7 +363,9 @@ MC_CALIB_DIR=${MC_CALIB_DIR}
 PARTITION=${PARTITION}
 CPU_EXPORT_PARTITIONS=${CPU_EXPORT_PARTITIONS}
 AUTO_RESOURCES=${AUTO_RESOURCES}
+PIN_NODE=${PIN_NODE}
 NODELIST=${NODELIST}
+RESOURCE_SIZING_NODE=${RESOURCE_SIZING_NODE}
 CPUS_PER_TASK=${CPUS_PER_TASK}
 MEM=${MEM}
 TIME_LIMIT=${TIME_LIMIT}
@@ -427,6 +436,7 @@ echo "hostname=\$(hostname)"
 echo "slurm_job_id=\${SLURM_JOB_ID:-}"
 echo "partition=${PARTITION}"
 echo "nodelist=${NODELIST:-}"
+echo "resource_sizing_node=${RESOURCE_SIZING_NODE:-}"
 echo "cpus_per_task=${CPUS_PER_TASK}"
 echo "mem=${MEM}"
 echo "time_limit=${TIME_LIMIT}"
@@ -616,7 +626,9 @@ job_log:
 
 partition=${PARTITION}
 nodelist=${NODELIST:-}
+resource_sizing_node=${RESOURCE_SIZING_NODE:-}
 auto_resources=${AUTO_RESOURCES}
+pin_node=${PIN_NODE}
 time_limit=${TIME_LIMIT}
 cpus_per_task=${CPUS_PER_TASK}
 mem=${MEM}
