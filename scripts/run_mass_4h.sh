@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 
 MAX_EVENTS_PER_FILE="${MAX_EVENTS_PER_FILE:-16}"
 EXPORT_WORKERS="${EXPORT_WORKERS:-6}"
+WORKER_MAX_FILES="${WORKER_MAX_FILES:-0}"
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-6}"
 TRAIN_WORKERS="${TRAIN_WORKERS:-4}"
 BATCH_SIZE="${BATCH_SIZE:-256}"
@@ -22,6 +23,7 @@ mkdir -p outputs/graphs
 echo "tag=${TAG}"
 echo "max_events_per_file=${MAX_EVENTS_PER_FILE}"
 echo "export_workers=${EXPORT_WORKERS}"
+echo "worker_max_files=${WORKER_MAX_FILES}"
 echo "train_epochs=${TRAIN_EPOCHS}"
 echo "train_workers=${TRAIN_WORKERS}"
 echo "batch_size=${BATCH_SIZE}"
@@ -42,7 +44,7 @@ echo "test_fraction=${TEST_FRACTION}"
   --kind mc \
   --max-events-per-file "${MAX_EVENTS_PER_FILE}" \
   --workers "${EXPORT_WORKERS}" \
-  --worker-max-files 200 \
+  --worker-max-files "${WORKER_MAX_FILES}" \
   --shard-size 50000 \
   --open-retries 3 \
   --skip-errors

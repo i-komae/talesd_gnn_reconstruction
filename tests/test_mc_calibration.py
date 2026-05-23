@@ -54,7 +54,14 @@ class TaleMcCalibrationTest(unittest.TestCase):
             },
         ]
 
-        fake_dstio = types.SimpleNamespace(open=lambda *_args, **_kwargs: _FakeDst(events))
+        open_count = 0
+
+        def fake_open(*_args, **_kwargs):
+            nonlocal open_count
+            open_count += 1
+            return _FakeDst(events)
+
+        fake_dstio = types.SimpleNamespace(open=fake_open)
         old_dstio = sys.modules.get("dstio")
         sys.modules["dstio"] = fake_dstio
         try:
@@ -62,6 +69,7 @@ class TaleMcCalibrationTest(unittest.TestCase):
                 (Path(tmpdir) / f"talesdcalib_pass2_{date:06d}.dst").touch()
                 db = TaleMcCalibrationDB(Path(tmpdir))
                 record = db.get_record(date, 120000, 5401)
+                records = db.get_records(date, 120000)
                 missing_time_record = db.get_record(date, 130000, 5401)
                 has_matching_time = db.has_calibration_time(date, 120000)
                 has_missing_time = db.has_calibration_time(date, 130000)
@@ -73,6 +81,9 @@ class TaleMcCalibrationTest(unittest.TestCase):
 
         self.assertIsNotNone(record)
         assert record is not None
+        self.assertIsNotNone(records)
+        assert records is not None
+        self.assertIs(record, records[5401])
         self.assertEqual(record["lid"], 5401)
         self.assertEqual(record["umipMev2cnt"], 21.0)
         self.assertEqual(record["lmipMev2cnt"], 22.0)
@@ -81,6 +92,7 @@ class TaleMcCalibrationTest(unittest.TestCase):
         self.assertIsNone(missing_time_record)
         self.assertTrue(has_matching_time)
         self.assertFalse(has_missing_time)
+        self.assertEqual(open_count, 1)
 
 
 if __name__ == "__main__":

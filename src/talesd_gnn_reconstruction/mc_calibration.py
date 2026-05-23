@@ -45,8 +45,11 @@ class TaleMcCalibrationDB:
         self._source_cache: dict[int, bool] = {}
         self._time_cache: dict[tuple[int, int], bool] = {}
 
+    def get_records(self, date: int, time: int) -> dict[int, dict[str, Any]] | None:
+        return self._select_daily_records(date, time)
+
     def get_record(self, date: int, time: int, lid: int) -> dict[str, Any] | None:
-        records = self._select_daily_records(date, time)
+        records = self.get_records(date, time)
         if records is None:
             return None
         return records.get(int(lid))
@@ -109,3 +112,17 @@ class TaleMcCalibrationDB:
             if abs(bank_sec - target_sec) < int(self.max_time_difference_seconds):
                 return records
         return None
+
+
+_MC_CALIBRATION_CACHE: dict[str, TaleMcCalibrationDB] = {}
+
+
+def get_cached_mc_calibration_db(calib_dir: str | Path | None) -> TaleMcCalibrationDB | None:
+    if calib_dir is None:
+        return None
+    key = str(Path(calib_dir).expanduser())
+    db = _MC_CALIBRATION_CACHE.get(key)
+    if db is None:
+        db = TaleMcCalibrationDB(Path(key))
+        _MC_CALIBRATION_CACHE[key] = db
+    return db

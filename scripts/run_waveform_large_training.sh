@@ -17,6 +17,7 @@ ENERGY_SAMPLE_STRATIFY_PARTICLE="${ENERGY_SAMPLE_STRATIFY_PARTICLE:-1}"
 ENERGY_BIN_WIDTH="${ENERGY_BIN_WIDTH:-0.1}"
 ENERGY_OVERSAMPLE_FACTOR="${ENERGY_OVERSAMPLE_FACTOR:-1.0}"
 EXPORT_WORKERS="${EXPORT_WORKERS:-6}"
+WORKER_MAX_FILES="${WORKER_MAX_FILES:-0}"
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-24}"
 TRAIN_WORKERS="${TRAIN_WORKERS:-4}"
 BATCH_SIZE="${BATCH_SIZE:-192}"
@@ -131,7 +132,7 @@ EOF
       --kind mc
       --max-events-per-file "${MAX_EVENTS_PER_FILE}"
       --workers "${EXPORT_WORKERS}"
-      --worker-max-files 200
+      --worker-max-files "${WORKER_MAX_FILES}"
       --shard-size 50000
       --open-retries 3
       "${export_energy_args[@]}"

@@ -19,7 +19,7 @@ from .progress import progress_bar as _progress_bar
 from .progress import write as _progress_write
 
 MAX_CONFIG_PATHS = 200
-DEFAULT_WORKER_MAX_FILES = 1
+DEFAULT_WORKER_MAX_FILES = 0
 DEFAULT_TRAIN_WORKERS = -1
 
 
@@ -52,7 +52,8 @@ def _is_dst_unit_exhaustion(exc: BaseException) -> bool:
 def _raise_dst_unit_exhaustion(exc: BaseException) -> None:
     raise DstUnitExhaustionError(
         "DST unit handles were exhausted inside a worker. "
-        "Use a smaller --worker-max-files value, or keep the default worker recycling enabled."
+        "Update and rebuild dstio so closed DST units are reused, or set --worker-max-files "
+        "to a positive value as a temporary workaround."
     ) from exc
 
 
@@ -210,9 +211,9 @@ def _scan_energy_candidates_for_file(
     ) = payload
     mc_calibration = None
     if mc_calib_dir and skip_missing_mc_calibration:
-        from .mc_calibration import TaleMcCalibrationDB
+        from .mc_calibration import get_cached_mc_calibration_db
 
-        mc_calibration = TaleMcCalibrationDB(Path(mc_calib_dir))
+        mc_calibration = get_cached_mc_calibration_db(Path(mc_calib_dir))
     reservoirs: dict[int | tuple[str, int], list[tuple[float, str, int, float, int, int]]] = {}
     seen_by_bin: dict[int | tuple[str, int], int] = {}
     raw_events = 0

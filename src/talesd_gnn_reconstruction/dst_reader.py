@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .layout import DetectorPosition
-from .mc_calibration import TaleMcCalibrationDB
+from .mc_calibration import TaleMcCalibrationDB, get_cached_mc_calibration_db
 
 
 class DstUnitExhaustionError(RuntimeError):
@@ -27,18 +27,8 @@ class BankRecord:
     source_kind: str
 
 
-_MC_CALIBRATION_CACHE: dict[str, TaleMcCalibrationDB] = {}
-
-
 def _get_mc_calibration_db(calib_dir: str | Path | None) -> TaleMcCalibrationDB | None:
-    if calib_dir is None:
-        return None
-    key = str(Path(calib_dir).expanduser())
-    db = _MC_CALIBRATION_CACHE.get(key)
-    if db is None:
-        db = TaleMcCalibrationDB(Path(key))
-        _MC_CALIBRATION_CACHE[key] = db
-    return db
+    return get_cached_mc_calibration_db(calib_dir)
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -143,7 +133,8 @@ def _convert_rusdraw_event(
         return None
     date = int(rusdraw.get("yymmdd", 0))
     time_value = int(rusdraw.get("hhmmss", 0))
-    if mc_calibration is not None and not mc_calibration.has_calibration_time(date, time_value):
+    calibration_records = mc_calibration.get_records(date, time_value) if mc_calibration is not None else None
+    if mc_calibration is not None and calibration_records is None:
         raise MissingMcCalibrationError(
             f"TALE MC calibration source/time not found for event date/time {date:06d} {time_value:06d} "
             f"in {mc_calibration.calib_dir}"
@@ -155,8 +146,8 @@ def _convert_rusdraw_event(
         detector = detector_positions.get(lid)
         if detector is None:
             continue
-        calibration_record = mc_calibration.get_record(date, time_value, lid) if mc_calibration is not None else None
-        if mc_calibration is not None and calibration_record is None:
+        calibration_record = calibration_records.get(lid) if calibration_records is not None else None
+        if calibration_records is not None and calibration_record is None:
             continue
         try:
             sub.append(_rusdraw_sub_to_talesd(rusdraw, sid, lid, detector, calibration_record=calibration_record))
@@ -223,7 +214,8 @@ def _is_dst_unit_exhaustion(exc: BaseException) -> bool:
 def _raise_dst_unit_exhaustion(exc: BaseException) -> None:
     raise DstUnitExhaustionError(
         "DST unit handles were exhausted in this process. "
-        "For large exports, keep file-level worker recycling enabled with --worker-max-files."
+        "Update and rebuild dstio so closed DST units are reused, or use --worker-max-files "
+        "as a temporary workaround."
     ) from exc
 
 
