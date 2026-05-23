@@ -75,6 +75,10 @@ PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 SBATCH_TEST_TIMEOUT="${SBATCH_TEST_TIMEOUT:-15}"
 AUTO_MEM_RESERVE_MB="${AUTO_MEM_RESERVE_MB:-32768}"
+AUTO_MAX_CPUS="${AUTO_MAX_CPUS:-64}"
+AUTO_CPU_FRACTION_PERCENT="${AUTO_CPU_FRACTION_PERCENT:-50}"
+AUTO_MEM_PER_CPU_MB="${AUTO_MEM_PER_CPU_MB:-4096}"
+AUTO_MAX_MEM_MB="${AUTO_MAX_MEM_MB:-0}"
 
 if [[ ! -d "${REPO}" ]]; then
   echo "repo not found: ${REPO}" >&2
@@ -155,7 +159,10 @@ select_cpu_resources() {
   local best_node=""
   local best_free_cpu=-1
   local best_free_mem=-1
+  local best_request_cpu=-1
+  local best_request_mem=-1
   local part node node_info parsed cpu_alloc cpu_eff cpu_tot real_mem alloc_mem free_cpu free_mem state
+  local request_cpu request_mem mem_by_cpu
 
   if ! command -v sinfo >/dev/null 2>&1 || ! command -v scontrol >/dev/null 2>&1; then
     echo "sinfo and scontrol are required for AUTO_RESOURCES=1." >&2
@@ -164,7 +171,7 @@ select_cpu_resources() {
 
   status "Scanning CPU resources: partitions=${PARTITION}"
   : > "${report_path}"
-  printf "partition\tnode\tstate\tfree_cpu\tcpu_effective\tcpu_total\tcpu_alloc\tfree_mem_mb\treal_mem_mb\talloc_mem_mb\n" >> "${report_path}"
+  printf "partition\tnode\tstate\tfree_cpu\tcpu_effective\tcpu_total\tcpu_alloc\tfree_mem_mb\treal_mem_mb\talloc_mem_mb\trequest_cpu\trequest_mem_mb\n" >> "${report_path}"
 
   for part in $(split_csv "${PARTITION}" | sed '/^auto$/d'); do
     [[ -n "${part}" ]] || continue
@@ -205,24 +212,60 @@ select_cpu_resources() {
       if (( free_mem < 0 )); then
         free_mem=0
       fi
-      printf "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n" \
+      request_cpu="${free_cpu}"
+      if [[ "${AUTO_CPU_FRACTION_PERCENT}" =~ ^[0-9]+$ ]] && (( AUTO_CPU_FRACTION_PERCENT > 0 && AUTO_CPU_FRACTION_PERCENT < 100 )); then
+        request_cpu=$((free_cpu * AUTO_CPU_FRACTION_PERCENT / 100))
+        if (( free_cpu > 0 && request_cpu < 1 )); then
+          request_cpu=1
+        fi
+      fi
+      if [[ "${AUTO_MAX_CPUS}" =~ ^[0-9]+$ ]] && (( AUTO_MAX_CPUS > 0 && request_cpu > AUTO_MAX_CPUS )); then
+        request_cpu="${AUTO_MAX_CPUS}"
+      fi
+      if (( request_cpu > free_cpu )); then
+        request_cpu="${free_cpu}"
+      fi
+
+      request_mem="${free_mem}"
+      if [[ "${AUTO_MEM_RESERVE_MB}" =~ ^[0-9]+$ ]]; then
+        request_mem=$((request_mem - AUTO_MEM_RESERVE_MB))
+      fi
+      if (( request_mem < 0 )); then
+        request_mem=0
+      fi
+      if [[ "${AUTO_MEM_PER_CPU_MB}" =~ ^[0-9]+$ ]] && (( AUTO_MEM_PER_CPU_MB > 0 && request_cpu > 0 )); then
+        mem_by_cpu=$((request_cpu * AUTO_MEM_PER_CPU_MB))
+        if (( request_mem > mem_by_cpu )); then
+          request_mem="${mem_by_cpu}"
+        fi
+      fi
+      if [[ "${AUTO_MAX_MEM_MB}" =~ ^[0-9]+$ ]] && (( AUTO_MAX_MEM_MB > 0 && request_mem > AUTO_MAX_MEM_MB )); then
+        request_mem="${AUTO_MAX_MEM_MB}"
+      fi
+      printf "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n" \
         "${part}" "${node}" "${state}" "${free_cpu}" "${cpu_eff}" "${cpu_tot}" "${cpu_alloc}" \
-        "${free_mem}" "${real_mem}" "${alloc_mem}" >> "${report_path}"
-      status "  ${part} ${node}: state=${state} free_cpu=${free_cpu} cpu_effective=${cpu_eff} cpu_total=${cpu_tot} free_mem=${free_mem}M"
+        "${free_mem}" "${real_mem}" "${alloc_mem}" "${request_cpu}" "${request_mem}" >> "${report_path}"
+      status "  ${part} ${node}: state=${state} free_cpu=${free_cpu} cpu_effective=${cpu_eff} cpu_total=${cpu_tot} free_mem=${free_mem}M request_cpu=${request_cpu} request_mem=${request_mem}M"
       if ! is_usable_node_state "${state}"; then
         status "    skipped: node state is not usable for new jobs"
         continue
       fi
-      if (( free_cpu > best_free_cpu || (free_cpu == best_free_cpu && free_mem > best_free_mem) )); then
+      if (( request_cpu <= 0 || request_mem <= 0 )); then
+        status "    skipped: capped request would be empty"
+        continue
+      fi
+      if (( request_cpu > best_request_cpu || (request_cpu == best_request_cpu && request_mem > best_request_mem) )); then
         best_partition="${part}"
         best_node="${node}"
         best_free_cpu="${free_cpu}"
         best_free_mem="${free_mem}"
+        best_request_cpu="${request_cpu}"
+        best_request_mem="${request_mem}"
       fi
     done < <(sinfo -h -p "${part}" -N -o "%N" 2>/dev/null | sort -u)
   done
 
-  if [[ -z "${best_partition}" || -z "${best_node}" || "${best_free_cpu}" -le 0 || "${best_free_mem}" -le 0 ]]; then
+  if [[ -z "${best_partition}" || -z "${best_node}" || "${best_request_cpu}" -le 0 || "${best_request_mem}" -le 0 ]]; then
     echo "No usable free CPU node was found in candidate partitions: ${PARTITION}" >&2
     echo "Resource scan:" >&2
     cat "${report_path}" >&2
@@ -232,13 +275,9 @@ select_cpu_resources() {
   PARTITION="${best_partition}"
   NODELIST="${best_node}"
   RESOURCE_SIZING_NODE="${best_node}"
-  CPUS_PER_TASK="${best_free_cpu}"
-  if [[ "${AUTO_MEM_RESERVE_MB}" =~ ^[0-9]+$ ]] && (( best_free_mem > AUTO_MEM_RESERVE_MB )); then
-    MEM="$((best_free_mem - AUTO_MEM_RESERVE_MB))M"
-  else
-    MEM="${best_free_mem}M"
-  fi
-  status "Selected CPU resource: partition=${PARTITION} node=${NODELIST} cpus_per_task=${CPUS_PER_TASK} mem=${MEM} free_mem=${best_free_mem}M reserve=${AUTO_MEM_RESERVE_MB}M"
+  CPUS_PER_TASK="${best_request_cpu}"
+  MEM="${best_request_mem}M"
+  status "Selected CPU resource: partition=${PARTITION} node=${NODELIST} cpus_per_task=${CPUS_PER_TASK} mem=${MEM} free_cpu=${best_free_cpu} free_mem=${best_free_mem}M caps=max_cpus=${AUTO_MAX_CPUS} cpu_fraction=${AUTO_CPU_FRACTION_PERCENT}% mem_per_cpu=${AUTO_MEM_PER_CPU_MB}M max_mem=${AUTO_MAX_MEM_MB}M reserve=${AUTO_MEM_RESERVE_MB}M"
 }
 
 sbatch_accepts_cpu_request() {
@@ -427,6 +466,10 @@ CPU_EXPORT_PARTITIONS=${CPU_EXPORT_PARTITIONS}
 AUTO_RESOURCES=${AUTO_RESOURCES}
 PIN_NODE=${PIN_NODE}
 AUTO_MEM_RESERVE_MB=${AUTO_MEM_RESERVE_MB}
+AUTO_MAX_CPUS=${AUTO_MAX_CPUS}
+AUTO_CPU_FRACTION_PERCENT=${AUTO_CPU_FRACTION_PERCENT}
+AUTO_MEM_PER_CPU_MB=${AUTO_MEM_PER_CPU_MB}
+AUTO_MAX_MEM_MB=${AUTO_MAX_MEM_MB}
 NODELIST=${NODELIST}
 RESOURCE_SIZING_NODE=${RESOURCE_SIZING_NODE}
 CPUS_PER_TASK=${CPUS_PER_TASK}
@@ -504,6 +547,10 @@ echo "resource_sizing_node=${RESOURCE_SIZING_NODE:-}"
 echo "cpus_per_task=${CPUS_PER_TASK}"
 echo "mem=${MEM}"
 echo "auto_mem_reserve_mb=${AUTO_MEM_RESERVE_MB}"
+echo "auto_max_cpus=${AUTO_MAX_CPUS}"
+echo "auto_cpu_fraction_percent=${AUTO_CPU_FRACTION_PERCENT}"
+echo "auto_mem_per_cpu_mb=${AUTO_MEM_PER_CPU_MB}"
+echo "auto_max_mem_mb=${AUTO_MAX_MEM_MB}"
 echo "time_limit=${TIME_LIMIT}"
 echo "export_workers=${EXPORT_WORKERS}"
 echo "summary_workers=${SUMMARY_WORKERS}"
@@ -699,6 +746,10 @@ resource_sizing_node=${RESOURCE_SIZING_NODE:-}
 auto_resources=${AUTO_RESOURCES}
 pin_node=${PIN_NODE}
 auto_mem_reserve_mb=${AUTO_MEM_RESERVE_MB}
+auto_max_cpus=${AUTO_MAX_CPUS}
+auto_cpu_fraction_percent=${AUTO_CPU_FRACTION_PERCENT}
+auto_mem_per_cpu_mb=${AUTO_MEM_PER_CPU_MB}
+auto_max_mem_mb=${AUTO_MAX_MEM_MB}
 time_limit=${TIME_LIMIT}
 cpus_per_task=${CPUS_PER_TASK}
 mem=${MEM}
