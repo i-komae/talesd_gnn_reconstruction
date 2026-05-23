@@ -37,6 +37,7 @@ def predict_graphs(
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
     target_dim = int(model_config.get("target_dim", 7))
+    has_reconstruction_output = target_dim >= 7
     classification_dim = int(model_config.get("classification_dim", 0))
     quality_dim = int(model_config.get("quality_dim", 0))
     error_dim = int(model_config.get("error_dim", 0))
@@ -61,6 +62,8 @@ def predict_graphs(
         "source_index",
         "n_nodes",
         "n_edges",
+    ]
+    reconstruction_fields = [
         "log10_energy_eV",
         "energy_eV",
         "core_x_km",
@@ -69,13 +72,15 @@ def predict_graphs(
         "zenith_deg",
         "azimuth_deg",
     ]
+    if has_reconstruction_output:
+        fieldnames.extend(reconstruction_fields)
     if classification_dim > 0:
         fieldnames.extend(["p_iron", "p_proton", "pred_parttype"])
     if quality_dim > 0:
         fieldnames.append("quality")
     if error_dim > 0:
         fieldnames.extend(["pred_energy_abs_relative_error", "pred_opening_angle_deg", "pred_core_error_km"])
-    truth_fields = [
+    truth_reconstruction_fields = [
         "true_log10_energy_eV",
         "true_core_x_km",
         "true_core_y_km",
@@ -86,6 +91,15 @@ def predict_graphs(
         "core_error_km",
         "angular_error_deg",
     ]
+    truth_only_fields = [
+        "true_log10_energy_eV",
+        "true_core_x_km",
+        "true_core_y_km",
+        "true_core_z_km",
+        "true_zenith_deg",
+        "true_azimuth_deg",
+    ]
+    truth_fields = list(truth_reconstruction_fields if has_reconstruction_output else truth_only_fields)
     if classification_dim > 0:
         truth_fields.extend(["true_parttype", "true_particle_label", "mass_correct"])
     if include_truth:
@@ -99,11 +113,15 @@ def predict_graphs(
                 samples = [dataset[i] for i in range(start, min(start + batch_size, len(dataset)))]
                 batch = collate_graphs(samples, scalers=scalers, device=device, require_target=False)
                 pred_all = model(batch).detach().cpu().numpy()
-                pred_scaled = pred_all[:, :target_dim]
-                pred = scalers["target"].inverse_transform(pred_scaled)
-                direction = normalize_directions(pred)
-                zenith, azimuth = direction_to_angles(direction)
-                pred[:, 4:7] = direction
+                pred = None
+                zenith = None
+                azimuth = None
+                if has_reconstruction_output:
+                    pred_scaled = pred_all[:, :target_dim]
+                    pred = scalers["target"].inverse_transform(pred_scaled)
+                    direction = normalize_directions(pred)
+                    zenith, azimuth = direction_to_angles(direction)
+                    pred[:, 4:7] = direction
                 p_iron = None
                 pred_is_iron = None
                 quality = None
@@ -135,14 +153,19 @@ def predict_graphs(
                         "source_index": int(attrs.get("source_index", -1)),
                         "n_nodes": int(attrs.get("n_nodes", sample["node_features"].shape[0])),
                         "n_edges": int(attrs.get("n_edges", sample["edge_features"].shape[0])),
-                        "log10_energy_eV": float(pred[row_idx, 0]),
-                        "energy_eV": float(10.0 ** pred[row_idx, 0]),
-                        "core_x_km": float(pred[row_idx, 1]),
-                        "core_y_km": float(pred[row_idx, 2]),
-                        "core_z_km": float(pred[row_idx, 3]),
-                        "zenith_deg": float(zenith[row_idx]),
-                        "azimuth_deg": float(azimuth[row_idx]),
                     }
+                    if has_reconstruction_output and pred is not None and zenith is not None and azimuth is not None:
+                        row.update(
+                            {
+                                "log10_energy_eV": float(pred[row_idx, 0]),
+                                "energy_eV": float(10.0 ** pred[row_idx, 0]),
+                                "core_x_km": float(pred[row_idx, 1]),
+                                "core_y_km": float(pred[row_idx, 2]),
+                                "core_z_km": float(pred[row_idx, 3]),
+                                "zenith_deg": float(zenith[row_idx]),
+                                "azimuth_deg": float(azimuth[row_idx]),
+                            }
+                        )
                     if classification_dim > 0 and p_iron is not None and pred_is_iron is not None:
                         row.update(
                             {
@@ -165,19 +188,23 @@ def predict_graphs(
                     if include_truth and target is not None:
                         target_dir = normalize_directions(target[None, :])
                         true_zenith, true_azimuth = direction_to_angles(target_dir)
-                        row.update(
-                            {
-                                "true_log10_energy_eV": float(target[0]),
-                                "true_core_x_km": float(target[1]),
-                                "true_core_y_km": float(target[2]),
-                                "true_core_z_km": float(target[3]),
-                                "true_zenith_deg": float(true_zenith[0]),
-                                "true_azimuth_deg": float(true_azimuth[0]),
-                                "delta_log10_energy": float(pred[row_idx, 0] - target[0]),
-                                "core_error_km": float(np.linalg.norm(pred[row_idx, 1:4] - target[1:4])),
-                                "angular_error_deg": float(angular_error_deg(pred[row_idx : row_idx + 1], target[None, :])[0]),
-                            }
-                        )
+                        truth_row = {
+                            "true_log10_energy_eV": float(target[0]),
+                            "true_core_x_km": float(target[1]),
+                            "true_core_y_km": float(target[2]),
+                            "true_core_z_km": float(target[3]),
+                            "true_zenith_deg": float(true_zenith[0]),
+                            "true_azimuth_deg": float(true_azimuth[0]),
+                        }
+                        if has_reconstruction_output and pred is not None:
+                            truth_row.update(
+                                {
+                                    "delta_log10_energy": float(pred[row_idx, 0] - target[0]),
+                                    "core_error_km": float(np.linalg.norm(pred[row_idx, 1:4] - target[1:4])),
+                                    "angular_error_deg": float(angular_error_deg(pred[row_idx : row_idx + 1], target[None, :])[0]),
+                                }
+                            )
+                        row.update(truth_row)
                     if include_truth and classification_dim > 0 and "particle_label" in sample:
                         label = sample.get("particle_label")
                         if label is not None and np.isfinite(float(label)):

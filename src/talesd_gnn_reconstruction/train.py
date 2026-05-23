@@ -1137,7 +1137,10 @@ def _predict_numpy(
             )
             pred_scaled = pred_scaled_tensor.detach().cpu().numpy()
             target_scaled = batch["y"].detach().cpu().numpy()
-            pred_rows.append(scalers["target"].inverse_transform(pred_scaled))
+            if pred_scaled.shape[1] == 0:
+                pred_rows.append(np.empty((target_scaled.shape[0], 0), dtype=target_scaled.dtype))
+            else:
+                pred_rows.append(scalers["target"].inverse_transform(pred_scaled))
             target_rows.append(scalers["target"].inverse_transform(target_scaled))
             if mass_classification and mass_logit_tensor is not None:
                 calibrated = mass_logit_tensor - float(mass_logit_offset)
@@ -1260,6 +1263,7 @@ def train_model(
         raise ValueError("training_task must be 'reconstruction' or 'mass'")
     if training_task == "mass":
         mass_classification = True
+        quality_prediction = False
         error_prediction = False
     loss_mode = str(loss_mode).lower()
     valid_loss_modes = {"scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics", "physics-nll", "nll"}
@@ -1392,6 +1396,8 @@ def train_model(
     _progress_write(f"stage=done fit_scalers elapsed={stage_seconds['fit_scalers']:.1f}s")
     stage_started = time.perf_counter()
     first = dataset[train_indices[0]]
+    graph_target_dim = int(first["target"].shape[0])
+    model_target_dim = 0 if training_task == "mass" else graph_target_dim
     model_kwargs = {
         "node_dim": first["node_features"].shape[1],
         "edge_dim": first["edge_features"].shape[1],
@@ -1406,7 +1412,7 @@ def train_model(
         "waveform_embedding_dim": waveform_embedding_dim,
         "waveform_transformer_heads": waveform_transformer_heads,
         "waveform_transformer_layers": waveform_transformer_layers,
-        "target_dim": first["target"].shape[0],
+        "target_dim": model_target_dim,
         "classification_dim": 1 if mass_classification else 0,
         "quality_dim": 1 if quality_prediction else 0,
         "error_dim": 3 if error_prediction else 0,
@@ -1443,7 +1449,7 @@ def train_model(
         )
     elif lr_scheduler != "none":
         raise ValueError("lr_scheduler must be 'none', 'reduce-on-plateau', or 'cosine'")
-    target_dim = int(first["target"].shape[0])
+    target_dim = model_target_dim
     target_mean, target_std = _target_scaler_tensors(scalers, device)
     bce_loss_fn = None
     mass_pos_weight = 1.0

@@ -523,7 +523,7 @@ class TaleSdGNN(nn.Module):
         }
         self.pulse_dim = int(pulse_dim)
         self.hidden_dim = int(hidden_dim)
-        self.target_dim = int(target_dim)
+        self.target_dim = max(int(target_dim), 0)
         self.classification_dim = int(classification_dim)
         self.quality_dim = int(quality_dim)
         self.error_dim = int(error_dim)
@@ -552,14 +552,16 @@ class TaleSdGNN(nn.Module):
         self.layers = nn.ModuleList(
             [EdgeMessageLayer(hidden_dim=hidden_dim, edge_dim=edge_dim, dropout=dropout) for _ in range(num_layers)]
         )
-        self.head = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.SiLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.SiLU(),
-            nn.Linear(hidden_dim // 2, target_dim),
-        )
+        self.head = None
+        if self.target_dim > 0:
+            self.head = nn.Sequential(
+                nn.Linear(hidden_dim * 2, hidden_dim),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.SiLU(),
+                nn.Linear(hidden_dim // 2, self.target_dim),
+            )
         self.class_head = None
         if self.classification_dim > 0:
             class_input_dim = hidden_dim * 2
@@ -687,7 +689,10 @@ class TaleSdGNN(nn.Module):
             node = layer(node, src, dst, batch["edge_attr"], degree)
         num_graphs = int(batch["num_graphs"])
         pooled = self._pool(node, batch["batch"], num_graphs)
-        reconstruction = self.head(pooled)
+        if self.head is None:
+            reconstruction = pooled.new_zeros((num_graphs, 0))
+        else:
+            reconstruction = self.head(pooled)
         outputs = [reconstruction]
         if self.class_head is not None:
             class_input = pooled
@@ -767,7 +772,7 @@ class PhysicsTaleSdGNN(nn.Module):
         }
         self.pulse_dim = int(pulse_dim)
         self.hidden_dim = int(hidden_dim)
-        self.target_dim = int(target_dim)
+        self.target_dim = max(int(target_dim), 0)
         self.classification_dim = int(classification_dim)
         self.quality_dim = int(quality_dim)
         self.error_dim = int(error_dim)
@@ -805,16 +810,28 @@ class PhysicsTaleSdGNN(nn.Module):
         )
         self.readout = AttentiveReadout(hidden_dim, heads=readout_heads)
         pooled_dim = hidden_dim * (2 + readout_heads)
-        self.shared = nn.Sequential(
-            nn.Linear(pooled_dim, hidden_dim * 2),
-            nn.SiLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.SiLU(),
+        needs_shared = (
+            self.target_dim > 0
+            or self.quality_dim > 0
+            or self.error_dim > 0
+            or (self.classification_dim > 0 and self.classification_arch != "enhanced")
         )
-        self.energy_head = nn.Linear(hidden_dim, 1)
-        self.core_head = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, 3))
-        self.direction_head = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, 3))
+        self.shared = None
+        if needs_shared:
+            self.shared = nn.Sequential(
+                nn.Linear(pooled_dim, hidden_dim * 2),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim * 2, hidden_dim),
+                nn.SiLU(),
+            )
+        self.energy_head = None
+        self.core_head = None
+        self.direction_head = None
+        if self.target_dim > 0:
+            self.energy_head = nn.Linear(hidden_dim, 1)
+            self.core_head = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, 3))
+            self.direction_head = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, 3))
         self.class_head = None
         if self.classification_dim > 0:
             class_input_dim = hidden_dim
@@ -923,19 +940,26 @@ class PhysicsTaleSdGNN(nn.Module):
             ],
             dim=-1,
         )
-        shared = self.shared(pooled)
-        reconstruction = torch.cat(
-            [
-                self.energy_head(shared),
-                self.core_head(shared),
-                self.direction_head(shared),
-            ],
-            dim=-1,
-        )
-        if self.target_dim != 7:
-            reconstruction = reconstruction[:, : self.target_dim]
+        shared = self.shared(pooled) if self.shared is not None else None
+        if self.target_dim <= 0:
+            reconstruction = pooled.new_zeros((num_graphs, 0))
+        else:
+            if shared is None or self.energy_head is None or self.core_head is None or self.direction_head is None:
+                raise RuntimeError("reconstruction heads are not initialized")
+            reconstruction = torch.cat(
+                [
+                    self.energy_head(shared),
+                    self.core_head(shared),
+                    self.direction_head(shared),
+                ],
+                dim=-1,
+            )
+            if self.target_dim != 7:
+                reconstruction = reconstruction[:, : self.target_dim]
         outputs = [reconstruction]
         if self.class_head is not None:
+            if shared is None and self.classification_arch != "enhanced":
+                raise RuntimeError("legacy classification head requires the shared readout")
             class_input = shared
             if self.classification_arch == "enhanced":
                 initial_pooled = torch.cat(
@@ -956,8 +980,12 @@ class PhysicsTaleSdGNN(nn.Module):
                 class_input = torch.cat([pooled, initial_pooled, context, waveform_direct], dim=-1)
             outputs.append(self.class_head(class_input))
         if self.quality_head is not None:
+            if shared is None:
+                raise RuntimeError("quality head requires the shared readout")
             outputs.append(self.quality_head(shared))
         if self.error_head is not None:
+            if shared is None:
+                raise RuntimeError("error head requires the shared readout")
             outputs.append(self.error_head(shared))
         return torch.cat(outputs, dim=-1)
 
