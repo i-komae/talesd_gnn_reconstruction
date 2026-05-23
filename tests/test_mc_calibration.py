@@ -23,6 +23,11 @@ class _FakeDst:
         return iter(self._events)
 
 
+class _ExplodingSub:
+    def __iter__(self):
+        raise AssertionError("sub records should not be read for time-only calibration checks")
+
+
 class TaleMcCalibrationTest(unittest.TestCase):
     def test_reads_matching_talesdcalib_pass2_dst_event(self) -> None:
         date = 160101
@@ -93,6 +98,24 @@ class TaleMcCalibrationTest(unittest.TestCase):
         self.assertTrue(has_matching_time)
         self.assertFalse(has_missing_time)
         self.assertEqual(open_count, 1)
+
+    def test_time_lookup_does_not_parse_detector_records(self) -> None:
+        date = 160101
+        events = [{"talesdcalib": {"time": 120100, "sub": _ExplodingSub()}}]
+
+        fake_dstio = types.SimpleNamespace(open=lambda *_args, **_kwargs: _FakeDst(events))
+        old_dstio = sys.modules.get("dstio")
+        sys.modules["dstio"] = fake_dstio
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                (Path(tmpdir) / f"talesdcalib_pass2_{date:06d}.dst").touch()
+                db = TaleMcCalibrationDB(Path(tmpdir))
+                self.assertTrue(db.has_calibration_time(date, 120000))
+        finally:
+            if old_dstio is None:
+                sys.modules.pop("dstio", None)
+            else:
+                sys.modules["dstio"] = old_dstio
 
 
 if __name__ == "__main__":

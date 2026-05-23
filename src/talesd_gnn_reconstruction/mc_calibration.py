@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,10 +39,12 @@ class TaleMcCalibrationDB:
 
     calib_dir: Path
     max_time_difference_seconds: int = 300
+    max_record_cache_days: int = 8
 
     def __post_init__(self) -> None:
         self.calib_dir = Path(self.calib_dir).expanduser()
-        self._daily_cache: dict[int, list[tuple[int, dict[int, dict[str, Any]]]] | None] = {}
+        self._daily_cache: OrderedDict[int, list[tuple[int, dict[int, dict[str, Any]]]] | None] = OrderedDict()
+        self._daily_time_cache: dict[int, list[int] | None] = {}
         self._source_cache: dict[int, bool] = {}
         self._time_cache: dict[tuple[int, int], bool] = {}
 
@@ -63,7 +66,7 @@ class TaleMcCalibrationDB:
     def has_calibration_time(self, date: int, time: int) -> bool:
         key = (int(date), int(time))
         if key not in self._time_cache:
-            self._time_cache[key] = self._select_daily_records(*key) is not None
+            self._time_cache[key] = self._has_daily_time(*key)
         return self._time_cache[key]
 
     def _daily_candidate(self, date: int) -> Path | None:
@@ -76,15 +79,55 @@ class TaleMcCalibrationDB:
 
     def _load_daily_records(self, date: int) -> list[tuple[int, dict[int, dict[str, Any]]]] | None:
         date = int(date)
+        if date in self._daily_cache:
+            self._daily_cache.move_to_end(date)
+            return self._daily_cache[date]
+
+        path = self._daily_candidate(date)
+        if path is None:
+            self._daily_cache[date] = None
+            self._daily_time_cache[date] = None
+            self._trim_record_cache()
+            return None
+
+        import dstio
+
+        daily_records: list[tuple[int, dict[int, dict[str, Any]]]] = []
+        daily_times: list[int] = []
+        with dstio.open(str(path), banks=["talesdcalib", "talesdcalibev"]) as dst:
+            for event in dst:
+                bank = event.get("talesdcalib") or event.get("talesdcalibev")
+                if not bank:
+                    continue
+                bank_time_raw = bank.get("time")
+                if bank_time_raw is None:
+                    continue
+                bank_sec = _seconds_from_hhmmss(int(bank_time_raw))
+                records: dict[int, dict[str, Any]] = {}
+                for sub in bank.get("sub", []):
+                    record = _record_from_calib_sub(sub)
+                    if record is not None:
+                        records[int(record["lid"])] = record
+                daily_records.append((bank_sec, records))
+                daily_times.append(bank_sec)
+        self._daily_cache[date] = daily_records
+        self._daily_time_cache[date] = daily_times
+        self._trim_record_cache()
+        return daily_records
+
+    def _load_daily_times(self, date: int) -> list[int] | None:
+        date = int(date)
+        if date in self._daily_time_cache:
+            return self._daily_time_cache[date]
         if date not in self._daily_cache:
             path = self._daily_candidate(date)
             if path is None:
-                self._daily_cache[date] = None
+                self._daily_time_cache[date] = None
                 return None
 
             import dstio
 
-            daily_records: list[tuple[int, dict[int, dict[str, Any]]]] = []
+            daily_times: list[int] = []
             with dstio.open(str(path), banks=["talesdcalib", "talesdcalibev"]) as dst:
                 for event in dst:
                     bank = event.get("talesdcalib") or event.get("talesdcalibev")
@@ -93,15 +136,19 @@ class TaleMcCalibrationDB:
                     bank_time_raw = bank.get("time")
                     if bank_time_raw is None:
                         continue
-                    bank_time = int(bank_time_raw)
-                    records: dict[int, dict[str, Any]] = {}
-                    for sub in bank.get("sub", []):
-                        record = _record_from_calib_sub(sub)
-                        if record is not None:
-                            records[int(record["lid"])] = record
-                    daily_records.append((_seconds_from_hhmmss(bank_time), records))
-            self._daily_cache[date] = daily_records
-        return self._daily_cache[date]
+                    daily_times.append(_seconds_from_hhmmss(int(bank_time_raw)))
+            self._daily_time_cache[date] = daily_times
+        else:
+            daily_records = self._daily_cache[date]
+            self._daily_time_cache[date] = None if daily_records is None else [bank_sec for bank_sec, _records in daily_records]
+        return self._daily_time_cache[date]
+
+    def _has_daily_time(self, date: int, time: int) -> bool:
+        daily_times = self._load_daily_times(date)
+        if not daily_times:
+            return False
+        target_sec = _seconds_from_hhmmss(time)
+        return any(abs(bank_sec - target_sec) < int(self.max_time_difference_seconds) for bank_sec in daily_times)
 
     def _select_daily_records(self, date: int, time: int) -> dict[int, dict[str, Any]] | None:
         daily_records = self._load_daily_records(date)
@@ -112,6 +159,13 @@ class TaleMcCalibrationDB:
             if abs(bank_sec - target_sec) < int(self.max_time_difference_seconds):
                 return records
         return None
+
+    def _trim_record_cache(self) -> None:
+        max_days = int(self.max_record_cache_days)
+        if max_days <= 0:
+            return
+        while len(self._daily_cache) > max_days:
+            self._daily_cache.popitem(last=False)
 
 
 _MC_CALIBRATION_CACHE: dict[str, TaleMcCalibrationDB] = {}
