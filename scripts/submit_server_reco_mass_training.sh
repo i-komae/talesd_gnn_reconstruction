@@ -9,7 +9,8 @@ Usage:
   scripts/submit_server_reco_mass_training.sh
 
 Submit joint reconstruction + mass-classification training.
-GRAPH_INPUT must point to the exported HDF5 graph directory or file.
+By default, GRAPH_INPUT points to the current energy-flat HDF5 graph directory.
+Set GRAPH_INPUT explicitly to override it.
 EOF
 }
 
@@ -23,8 +24,10 @@ if [[ $# -gt 0 ]]; then
 fi
 
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+DEFAULT_GRAPH_INPUT="${DEFAULT_GRAPH_INPUT:-/dicos_ui_home/ikomae/work/gnn/graphs/server_graph_export_energyflat200000_20260524_075508}"
 
 export RUN_ID
+export GRAPH_INPUT="${GRAPH_INPUT:-${DEFAULT_GRAPH_INPUT}}"
 export RUN_NAME="${RUN_NAME:-server_reco_mass_quality_b6000_${RUN_ID}}"
 export TRAINING_TASK="reconstruction"
 export MASS_CLASSIFICATION="1"
@@ -42,10 +45,10 @@ export WEIGHT_DECAY="${WEIGHT_DECAY:-3e-4}"
 export CLASSIFICATION_ARCH="${CLASSIFICATION_ARCH:-enhanced}"
 export WAVEFORM_ENCODER="${WAVEFORM_ENCODER:-cnn-gru}"
 
-export TRAIN_EPOCHS="${TRAIN_EPOCHS:-48}"
+export TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}"
 export LR_SCHEDULER="${LR_SCHEDULER:-reduce-on-plateau}"
-export EARLY_STOPPING_PATIENCE="${EARLY_STOPPING_PATIENCE:-10}"
-export EARLY_STOPPING_MIN_EPOCHS="${EARLY_STOPPING_MIN_EPOCHS:-30}"
+export EARLY_STOPPING_PATIENCE="${EARLY_STOPPING_PATIENCE:-12}"
+export EARLY_STOPPING_MIN_EPOCHS="${EARLY_STOPPING_MIN_EPOCHS:-32}"
 
 export LOSS_MODE="${LOSS_MODE:-physics}"
 export ENERGY_WEIGHT="${ENERGY_WEIGHT:-1.2}"

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 REPO="${REPO:-/dicos_ui_home/ikomae/work/src/talesd_gnn_reconstruction}"
-GRAPH_INPUT="${GRAPH_INPUT:-}"
+DEFAULT_GRAPH_INPUT="${DEFAULT_GRAPH_INPUT:-/dicos_ui_home/ikomae/work/gnn/graphs/server_graph_export_energyflat200000_20260524_075508}"
+GRAPH_INPUT="${GRAPH_INPUT:-${DEFAULT_GRAPH_INPUT}}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_reconstruction}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 RUN_NAME="${RUN_NAME:-server_waveform_full_b6000_${RUN_ID}}"
@@ -31,7 +32,7 @@ if [[ -z "${TIME_LIMIT:-}" ]]; then
   esac
 fi
 
-TRAIN_EPOCHS="${TRAIN_EPOCHS:-48}"
+TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}"
 BATCH_SIZE="${BATCH_SIZE:-256}"
 TRAIN_WORKERS="${TRAIN_WORKERS:-6}"
 PREPROCESS_WORKERS="${PREPROCESS_WORKERS:-${CPUS_PER_TASK}}"
@@ -66,8 +67,8 @@ WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
 LR_SCHEDULER="${LR_SCHEDULER:-reduce-on-plateau}"
 LR_FACTOR="${LR_FACTOR:-0.5}"
 LR_PATIENCE="${LR_PATIENCE:-2}"
-EARLY_STOPPING_PATIENCE="${EARLY_STOPPING_PATIENCE:-10}"
-EARLY_STOPPING_MIN_EPOCHS="${EARLY_STOPPING_MIN_EPOCHS:-30}"
+EARLY_STOPPING_PATIENCE="${EARLY_STOPPING_PATIENCE:-12}"
+EARLY_STOPPING_MIN_EPOCHS="${EARLY_STOPPING_MIN_EPOCHS:-32}"
 LOSS_MODE="${LOSS_MODE:-physics}"
 ENERGY_WEIGHT="${ENERGY_WEIGHT:-1.2}"
 CORE_WEIGHT="${CORE_WEIGHT:-1.0}"
@@ -120,19 +121,9 @@ if [[ ! -d "${REPO}" ]]; then
   echo "repo not found: ${REPO}" >&2
   exit 2
 fi
-if [[ -z "${GRAPH_INPUT}" ]]; then
-  cat >&2 <<EOF
-GRAPH_INPUT is required.
-
-The waveform schema changed to rise-aligned raw plus accepted-gapped traces.
-Re-export graph HDF5 shards from DST, transfer them to the server, then submit with:
-
-  GRAPH_INPUT=/path/to/new_graph_directory_or_h5 scripts/submit_server_waveform_full_training.sh
-EOF
-  exit 2
-fi
 if [[ ! -e "${GRAPH_INPUT}" ]]; then
   echo "graph input not found: ${GRAPH_INPUT}" >&2
+  echo "Set GRAPH_INPUT=/path/to/graph_directory_or_h5 to override the default." >&2
   exit 2
 fi
 
