@@ -1067,6 +1067,17 @@ def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Pa
     epochs = [row["epoch"] for row in history]
     train = [row["train_loss"] for row in history]
     val = [row["val_loss"] for row in history]
+    best_epoch = None
+    best_val_loss = math.inf
+    for row in history:
+        try:
+            epoch_value = int(row["epoch"])
+            val_loss = float(row["val_loss"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(val_loss) and val_loss < best_val_loss:
+            best_epoch = epoch_value
+            best_val_loss = val_loss
     has_reconstruction = "train_reconstruction_loss" in history[0] if history else False
     has_mass = "train_mass_loss" in history[0] if history else False
     has_mass_accuracy = "train_mass_accuracy" in history[0] and "val_mass_accuracy" in history[0] if history else False
@@ -1106,6 +1117,14 @@ def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Pa
         axes = [ax]
     ax.plot(epochs, train, marker="o", markersize=2.5, linewidth=1.4, label="train")
     ax.plot(epochs, val, marker="s", markersize=2.5, linewidth=1.4, label="validation")
+    if best_epoch is not None:
+        ax.axvline(
+            best_epoch,
+            color=NEUTRAL_COLOR,
+            linestyle=":",
+            linewidth=LINEWIDTH_THIN,
+            label=f"selected epoch {best_epoch}",
+        )
     ax.set_xlabel("epoch")
     ax.set_ylabel("BCE loss" if mass_loss_duplicates_total else "loss")
     ax.set_yscale("log")
@@ -1570,7 +1589,6 @@ def _save_species_reconstruction_outputs(
                 label=name,
             )
     if ax.has_data():
-        _add_energy_bias_guides(ax)
         ax.legend(frameon=False)
     else:
         ax.text(0.5, 0.5, "no energy bin has enough entries", ha="center", va="center", transform=ax.transAxes)
@@ -1614,8 +1632,6 @@ def _save_species_reconstruction_outputs(
             capsize=2.5,
             label=name,
         )
-    _add_energy_bias_guides(axes[0])
-    _add_energy_sigma_guides(axes[1])
     axes[0].set_title(f"{split_name}: Gaussian mu by true energy and species")
     axes[0].set_ylabel("Gaussian mu")
     axes[1].set_title(f"{split_name}: Gaussian sigma by true energy and species")
@@ -1656,8 +1672,6 @@ def _save_species_reconstruction_outputs(
     axes[1].set_title(f"{split_name}: core resolution by true energy and species")
     axes[1].set_xlabel(r"true $\log_{10}(E/\mathrm{eV})$")
     axes[1].set_ylabel("core position error [km]")
-    _add_angular_target(axes[0])
-    _add_core_target(axes[1], unit="km")
     for ax in axes:
         ax.legend(frameon=False)
         _style_axes(ax)
@@ -1907,7 +1921,6 @@ def _save_reconstruction_cut_pages(
             mu = _rows_array(valid_rows, "mu")
             sigma = _rows_array(valid_rows, "sigma")
             ax.errorbar(x, mu, yerr=sigma, fmt="o", color=PROTON_COLOR, capsize=CAPSIZE, label=r"Gaussian $\mu\pm\sigma$")
-            _add_energy_bias_guides(ax)
             ax.legend(frameon=False)
         else:
             ax.text(0.5, 0.5, "no energy bin has enough entries", ha="center", va="center", transform=ax.transAxes)
@@ -1967,8 +1980,6 @@ def _save_reconstruction_cut_pages(
                 capsize=CAPSIZE,
                 label="median",
             )
-            _add_angular_target(axes[0])
-            _add_core_target(axes[1], unit="km")
             for ax in axes:
                 ax.legend(frameon=False)
         else:
@@ -2156,7 +2167,6 @@ def _save_reconstruction_pdf(
             mu = np.asarray([row["mu"] for row in valid_rows], dtype=float)
             sigma = np.asarray([row["sigma"] for row in valid_rows], dtype=float)
             ax.errorbar(x, mu, yerr=sigma, fmt="o", color="#d62728", capsize=2.5, label=r"Gaussian $\mu\pm\sigma$")
-            _add_energy_bias_guides(ax)
             ax.legend(frameon=False)
         else:
             ax.text(0.5, 0.5, "no energy bin has enough entries", ha="center", va="center", transform=ax.transAxes)
@@ -2184,8 +2194,6 @@ def _save_reconstruction_pdf(
             axes[0].errorbar(x, opening50, yerr=opening50_err, fmt="s--", color="#72b7b2", linewidth=1.2, markersize=3.5, capsize=2.5, label="median")
             axes[1].errorbar(x, core68, yerr=core68_err, fmt="o-", color="#54a24b", linewidth=1.4, markersize=4, capsize=2.5, label=r"68\%")
             axes[1].errorbar(x, core50, yerr=core50_err, fmt="s--", color="#b79a20", linewidth=1.2, markersize=3.5, capsize=2.5, label="median")
-            _add_angular_target(axes[0])
-            _add_core_target(axes[1], unit="km")
             for ax in axes:
                 ax.legend(frameon=False)
         else:
@@ -2326,9 +2334,6 @@ def _save_reconstruction_pdf(
             axes[2].set_title(f"{split_name}: energy resolution by true energy and quality")
             axes[2].set_ylabel("Gaussian sigma")
             axes[2].set_xlabel(r"true $\log_{10}(E/\mathrm{eV})$")
-            _add_angular_target(axes[0])
-            _add_core_target(axes[1], unit="m")
-            _add_energy_sigma_guides(axes[2])
             for index, ax in enumerate(axes):
                 if plotted[index]:
                     ax.legend(frameon=False)

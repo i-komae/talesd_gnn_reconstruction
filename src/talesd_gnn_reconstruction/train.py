@@ -1560,6 +1560,144 @@ def train_model(
     epochs_without_improvement = 0
     mass_collapse_epochs = 0
     history: list[dict[str, Any]] = []
+    output = Path(output_path).expanduser()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_train_indices = np.asarray(train_indices, dtype=np.int64)
+    checkpoint_val_indices = np.asarray(val_indices, dtype=np.int64)
+    checkpoint_test_indices = np.asarray(test_indices, dtype=np.int64)
+
+    def _split_payload() -> dict[str, Any]:
+        return {
+            "val_fraction": val_fraction,
+            "test_fraction": test_fraction,
+            "split_mode": split_mode,
+            "n_train": len(train_indices),
+            "n_val": len(val_indices),
+            "n_test": len(test_indices),
+            "particle_filter": particle_filter,
+        }
+
+    def _runtime_payload(
+        *,
+        mass_threshold: float = 0.5,
+        tuned_mass_threshold: float | None = None,
+        checkpoint_complete: bool,
+    ) -> dict[str, Any]:
+        return {
+            "device": device,
+            "num_workers": num_workers,
+            "preprocess_workers": preprocess_workers,
+            "prefetch_factor": prefetch_factor,
+            "collate_backend": collate_backend,
+            "requested_collate_backend": requested_collate_backend,
+            "collate_threads": collate_threads,
+            "training_task": training_task,
+            "mass_classification": mass_classification,
+            "mass_loss_weight": mass_loss_weight,
+            "mass_loss_mode": mass_loss_mode,
+            "mass_focal_gamma": mass_focal_gamma,
+            "mass_pos_weight_mode": mass_pos_weight_mode,
+            "mass_pos_weight": mass_pos_weight,
+            "mass_primary_threshold": mass_threshold,
+            "mass_tuned_threshold": tuned_mass_threshold,
+            "mass_ranking_weight": mass_ranking_weight,
+            "mass_ranking_margin": mass_ranking_margin,
+            "mass_collapse_patience": mass_collapse_patience,
+            "mass_collapse_score_std": mass_collapse_score_std,
+            "mass_collapse_balanced_accuracy": mass_collapse_balanced_accuracy,
+            "quality_prediction": quality_prediction,
+            "quality_loss_weight": quality_loss_weight,
+            "quality_angular_scale_deg": quality_angular_scale_deg,
+            "quality_core_scale_km": quality_core_scale_km,
+            "quality_energy_scale": quality_energy_scale,
+            "error_prediction": error_prediction,
+            "error_loss_weight": error_loss_weight,
+            "error_angular_scale_deg": error_angular_scale_deg,
+            "error_core_scale_km": error_core_scale_km,
+            "error_energy_scale": error_energy_scale,
+            "nll_loss_weight": nll_loss_weight,
+            "nll_sigma_energy_floor": nll_sigma_energy_floor,
+            "nll_sigma_angle_floor_deg": nll_sigma_angle_floor_deg,
+            "nll_sigma_core_floor_km": nll_sigma_core_floor_km,
+            "learning_rate": learning_rate,
+            "weight_decay": weight_decay,
+            "lr_scheduler": lr_scheduler,
+            "lr_factor": lr_factor,
+            "lr_patience": lr_patience,
+            "early_stopping_patience": early_stopping_patience,
+            "early_stopping_min_epochs": early_stopping_min_epochs,
+            "best_epoch": best_epoch,
+            "best_val_loss": best_val,
+            "checkpoint_complete": checkpoint_complete,
+            "hidden_dim": hidden_dim,
+            "layers": num_layers,
+            "dropout": dropout,
+            "classification_arch": classification_arch,
+            "detector_embedding_dim": max(int(detector_embedding_dim), 0),
+            "detector_count": len(detector_lids),
+            "waveform_encoder": waveform_encoder,
+            "waveform_embedding_dim": waveform_embedding_dim,
+            "waveform_transformer_heads": waveform_transformer_heads,
+            "waveform_transformer_layers": waveform_transformer_layers,
+            "waveform_channels": model_kwargs["waveform_channels"],
+            "waveform_length": model_kwargs["waveform_length"],
+            "loss_mode": loss_mode,
+            "energy_loss_weight": energy_loss_weight,
+            "core_loss_weight": core_loss_weight,
+            "direction_loss_weight": direction_loss_weight,
+            "core_loss_scale_km": core_loss_scale_km,
+            "angular_loss_scale_deg": angular_loss_scale_deg,
+            "max_graphs": max_graphs,
+            "particle_filter": particle_filter,
+            "stage_seconds": {name: round(value, 3) for name, value in stage_seconds.items()},
+        }
+
+    empty_metrics = {
+        "validation": None,
+        "test": None,
+        "validation_mass": None,
+        "test_mass": None,
+        "validation_mass_tuned": None,
+        "test_mass_tuned": None,
+    }
+
+    def _checkpoint_payload(
+        model_state: dict[str, Any],
+        *,
+        metrics: dict[str, Any] | None = None,
+        diagnostics: dict[str, Any] | None = None,
+        mass_threshold: float = 0.5,
+        tuned_mass_threshold: float | None = None,
+        checkpoint_complete: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "model_state": model_state,
+            "model_config": model.config,
+            "scalers": {name: scaler.to_dict() for name, scaler in scalers.items()},
+            "history": history,
+            "metrics": empty_metrics if metrics is None else metrics,
+            "diagnostics": {} if diagnostics is None else diagnostics,
+            "train_indices": checkpoint_train_indices,
+            "val_indices": checkpoint_val_indices,
+            "test_indices": checkpoint_test_indices,
+            "split": _split_payload(),
+            "runtime": _runtime_payload(
+                mass_threshold=mass_threshold,
+                tuned_mass_threshold=tuned_mass_threshold,
+                checkpoint_complete=checkpoint_complete,
+            ),
+        }
+
+    def _atomic_torch_save(payload: dict[str, Any], path: Path) -> None:
+        tmp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+        try:
+            torch.save(payload, tmp_path)
+            os.replace(tmp_path, path)
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     stage_started = time.perf_counter()
     epoch_iter = _progress(range(1, epochs + 1), desc="epochs", total=epochs, enabled=show_progress, position=0)
@@ -1860,6 +1998,17 @@ def train_model(
             best_epoch = int(epoch)
             best_state = {key: value.detach().cpu() for key, value in model.state_dict().items()}
             epochs_without_improvement = 0
+            save_started = time.perf_counter()
+            _atomic_torch_save(
+                _checkpoint_payload(best_state, checkpoint_complete=False),
+                output,
+            )
+            save_elapsed = time.perf_counter() - save_started
+            stage_seconds["save_best_checkpoint"] = stage_seconds.get("save_best_checkpoint", 0.0) + save_elapsed
+            _progress_write(
+                f"saved best validation checkpoint: epoch={best_epoch:04d} "
+                f"val_loss={best_val:.6f} path={output} elapsed={save_elapsed:.1f}s"
+            )
         else:
             epochs_without_improvement += 1
 
@@ -2018,8 +2167,6 @@ def train_model(
     if test_mass_tuned_metrics is not None:
         _progress_write("test mass tuned metrics: " + json.dumps(test_mass_tuned_metrics, sort_keys=True))
 
-    output = Path(output_path).expanduser()
-    output.parent.mkdir(parents=True, exist_ok=True)
     diagnostics: dict[str, Any] = {}
     if save_diagnostics:
         stage_started = time.perf_counter()
@@ -2046,102 +2193,24 @@ def train_model(
         )
         stage_seconds["diagnostics"] = time.perf_counter() - stage_started
     stage_seconds["total_before_save"] = time.perf_counter() - overall_started
-    checkpoint = {
-        "model_state": model.state_dict(),
-        "model_config": model.config,
-        "scalers": {name: scaler.to_dict() for name, scaler in scalers.items()},
-        "history": history,
-        "metrics": {
-            "validation": val_metrics,
-            "test": test_metrics,
-            "validation_mass": val_mass_metrics,
-            "test_mass": test_mass_metrics,
-            "validation_mass_tuned": val_mass_tuned_metrics,
-            "test_mass_tuned": test_mass_tuned_metrics,
-        },
-        "diagnostics": diagnostics,
-        "train_indices": train_indices,
-        "val_indices": val_indices,
-        "test_indices": test_indices,
-        "split": {
-            "val_fraction": val_fraction,
-            "test_fraction": test_fraction,
-            "split_mode": split_mode,
-            "n_train": len(train_indices),
-            "n_val": len(val_indices),
-            "n_test": len(test_indices),
-            "particle_filter": particle_filter,
-        },
-        "runtime": {
-            "device": device,
-            "num_workers": num_workers,
-            "preprocess_workers": preprocess_workers,
-            "prefetch_factor": prefetch_factor,
-            "collate_backend": collate_backend,
-            "requested_collate_backend": requested_collate_backend,
-            "collate_threads": collate_threads,
-            "training_task": training_task,
-            "mass_classification": mass_classification,
-            "mass_loss_weight": mass_loss_weight,
-            "mass_loss_mode": mass_loss_mode,
-            "mass_focal_gamma": mass_focal_gamma,
-            "mass_pos_weight_mode": mass_pos_weight_mode,
-            "mass_pos_weight": mass_pos_weight,
-            "mass_primary_threshold": mass_threshold,
-            "mass_tuned_threshold": tuned_mass_threshold,
-            "mass_ranking_weight": mass_ranking_weight,
-            "mass_ranking_margin": mass_ranking_margin,
-            "mass_collapse_patience": mass_collapse_patience,
-            "mass_collapse_score_std": mass_collapse_score_std,
-            "mass_collapse_balanced_accuracy": mass_collapse_balanced_accuracy,
-            "quality_prediction": quality_prediction,
-            "quality_loss_weight": quality_loss_weight,
-            "quality_angular_scale_deg": quality_angular_scale_deg,
-            "quality_core_scale_km": quality_core_scale_km,
-            "quality_energy_scale": quality_energy_scale,
-            "error_prediction": error_prediction,
-            "error_loss_weight": error_loss_weight,
-            "error_angular_scale_deg": error_angular_scale_deg,
-            "error_core_scale_km": error_core_scale_km,
-            "error_energy_scale": error_energy_scale,
-            "nll_loss_weight": nll_loss_weight,
-            "nll_sigma_energy_floor": nll_sigma_energy_floor,
-            "nll_sigma_angle_floor_deg": nll_sigma_angle_floor_deg,
-            "nll_sigma_core_floor_km": nll_sigma_core_floor_km,
-            "learning_rate": learning_rate,
-            "weight_decay": weight_decay,
-            "lr_scheduler": lr_scheduler,
-            "lr_factor": lr_factor,
-            "lr_patience": lr_patience,
-            "early_stopping_patience": early_stopping_patience,
-            "early_stopping_min_epochs": early_stopping_min_epochs,
-            "best_epoch": best_epoch,
-            "best_val_loss": best_val,
-            "hidden_dim": hidden_dim,
-            "layers": num_layers,
-            "dropout": dropout,
-            "classification_arch": classification_arch,
-            "detector_embedding_dim": max(int(detector_embedding_dim), 0),
-            "detector_count": len(detector_lids),
-            "waveform_encoder": waveform_encoder,
-            "waveform_embedding_dim": waveform_embedding_dim,
-            "waveform_transformer_heads": waveform_transformer_heads,
-            "waveform_transformer_layers": waveform_transformer_layers,
-            "waveform_channels": model_kwargs["waveform_channels"],
-            "waveform_length": model_kwargs["waveform_length"],
-            "loss_mode": loss_mode,
-            "energy_loss_weight": energy_loss_weight,
-            "core_loss_weight": core_loss_weight,
-            "direction_loss_weight": direction_loss_weight,
-            "core_loss_scale_km": core_loss_scale_km,
-            "angular_loss_scale_deg": angular_loss_scale_deg,
-            "max_graphs": max_graphs,
-            "particle_filter": particle_filter,
-            "stage_seconds": {name: round(value, 3) for name, value in stage_seconds.items()},
-        },
+    final_metrics = {
+        "validation": val_metrics,
+        "test": test_metrics,
+        "validation_mass": val_mass_metrics,
+        "test_mass": test_mass_metrics,
+        "validation_mass_tuned": val_mass_tuned_metrics,
+        "test_mass_tuned": test_mass_tuned_metrics,
     }
+    checkpoint = _checkpoint_payload(
+        model.state_dict(),
+        metrics=final_metrics,
+        diagnostics=diagnostics,
+        mass_threshold=mass_threshold,
+        tuned_mass_threshold=tuned_mass_threshold,
+        checkpoint_complete=True,
+    )
     stage_started = time.perf_counter()
-    torch.save(checkpoint, output)
+    _atomic_torch_save(checkpoint, output)
     stage_seconds["save_checkpoint"] = time.perf_counter() - stage_started
     checkpoint["runtime"]["stage_seconds"] = {name: round(value, 3) for name, value in stage_seconds.items()}
 
@@ -2151,14 +2220,7 @@ def train_model(
         json.dumps(
             {
                 "history": history,
-                "metrics": {
-                    "validation": val_metrics,
-                    "test": test_metrics,
-                    "validation_mass": val_mass_metrics,
-                    "test_mass": test_mass_metrics,
-                    "validation_mass_tuned": val_mass_tuned_metrics,
-                    "test_mass_tuned": test_mass_tuned_metrics,
-                },
+                "metrics": final_metrics,
                 "split": checkpoint["split"],
                 "runtime": checkpoint["runtime"],
                 "diagnostics": diagnostics,
