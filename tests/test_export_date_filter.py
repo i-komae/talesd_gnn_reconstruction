@@ -4,7 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from talesd_gnn_reconstruction.cli import _merge_candidate_reservoirs, _selected_path_chunks, _validate_mc_calibration_dates
+from talesd_gnn_reconstruction.cli import (
+    _interleaved_selected_entries,
+    _merge_candidate_reservoirs,
+    _selected_path_chunks,
+    _validate_mc_calibration_dates,
+)
 from talesd_gnn_reconstruction.dst_reader import _event_date
 
 
@@ -15,7 +20,7 @@ class ExportDateFilterTest(unittest.TestCase):
         self.assertIsNone(_event_date({"rusdraw": {"yymmdd": 0}}))
 
     def test_merge_candidate_reservoirs_tracks_selected_event_dates(self) -> None:
-        selected_by_path, _seen_by_bin, selected_by_bin, selected_event_dates, _missing, _raw_events, _hit_events = (
+        selected_by_path, selected_entries, _seen_by_bin, selected_by_bin, selected_event_dates, _missing, _raw_events, _hit_events = (
             _merge_candidate_reservoirs(
                 [
                     {
@@ -36,8 +41,37 @@ class ExportDateFilterTest(unittest.TestCase):
         )
 
         self.assertEqual(selected_by_path, {"/tmp/a.dst.gz": {0, 1}})
+        self.assertEqual([entry[3] for entry in selected_entries], [0, 1])
         self.assertEqual(selected_by_bin, {160: 2})
         self.assertEqual(selected_event_dates, {191003: 1, 191004: 1})
+
+    def test_interleaved_selected_entries_keeps_short_source_runs(self) -> None:
+        entries = []
+        for source_offset, particle in enumerate(("proton", "iron")):
+            for index in range(8):
+                entries.append(
+                    (
+                        (particle, 170),
+                        f"{particle}:{index}",
+                        f"/tmp/{particle}.dst.gz",
+                        source_offset * 100 + index,
+                        17.0,
+                        191004,
+                        120000,
+                    )
+                )
+
+        ordered = _interleaved_selected_entries(entries, seed=123, locality_run_size=2)
+        self.assertEqual(sorted(entry[1] for entry in ordered), sorted(entry[1] for entry in entries))
+        max_run = 1
+        current = 1
+        for previous, current_entry in zip(ordered, ordered[1:]):
+            if previous[2] == current_entry[2] and previous[0] == current_entry[0]:
+                current += 1
+                max_run = max(max_run, current)
+            else:
+                current = 1
+        self.assertLessEqual(max_run, 2)
 
     def test_validate_mc_calibration_dates_reports_missing_selected_dates(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -6,7 +6,7 @@ from talesd_gnn_reconstruction.train import LocalityBatchSampler
 
 
 class LocalityBatchSamplerTest(unittest.TestCase):
-    def test_training_shuffle_breaks_contiguous_batches(self) -> None:
+    def test_training_shuffle_changes_batch_order_but_keeps_local_reads(self) -> None:
         sampler = LocalityBatchSampler(
             indices=list(range(40)),
             batch_size=5,
@@ -19,9 +19,9 @@ class LocalityBatchSamplerTest(unittest.TestCase):
 
         self.assertEqual(len(batches), 8)
         self.assertEqual(sorted(flattened), list(range(40)))
-        self.assertTrue(
-            any(batch != list(range(min(batch), min(batch) + len(batch))) for batch in batches)
-        )
+        self.assertNotEqual(batches, [list(range(start, start + 5)) for start in range(0, 40, 5)])
+        for batch in batches:
+            self.assertEqual(batch, list(range(min(batch), min(batch) + len(batch))))
 
     def test_validation_order_keeps_sorted_batches(self) -> None:
         sampler = LocalityBatchSampler(

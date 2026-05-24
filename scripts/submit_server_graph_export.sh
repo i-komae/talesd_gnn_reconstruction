@@ -56,6 +56,9 @@ MAX_EVENTS="${MAX_EVENTS:-}"
 MAX_EVENTS_PER_FILE="${MAX_EVENTS_PER_FILE:-0}"
 MIN_EVENT_DATE="${MIN_EVENT_DATE:-191002}"
 SHARD_SIZE="${SHARD_SIZE:-100000}"
+OUTPUT_ORDER="${OUTPUT_ORDER:-interleaved}"
+OUTPUT_LOCALITY_RUN_SIZE="${OUTPUT_LOCALITY_RUN_SIZE:-32}"
+WRITE_BLOCK_SIZE="${WRITE_BLOCK_SIZE:-2048}"
 OPEN_RETRIES="${OPEN_RETRIES:-3}"
 OPEN_RETRY_DELAY="${OPEN_RETRY_DELAY:-1.0}"
 CHUNK_SIZE="${CHUNK_SIZE:-128}"
@@ -75,8 +78,8 @@ PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 SBATCH_TEST_TIMEOUT="${SBATCH_TEST_TIMEOUT:-15}"
 AUTO_MEM_RESERVE_MB="${AUTO_MEM_RESERVE_MB:-32768}"
-AUTO_MAX_CPUS="${AUTO_MAX_CPUS:-96}"
-AUTO_CPU_FRACTION_PERCENT="${AUTO_CPU_FRACTION_PERCENT:-50}"
+AUTO_MAX_CPUS="${AUTO_MAX_CPUS:-128}"
+AUTO_CPU_FRACTION_PERCENT="${AUTO_CPU_FRACTION_PERCENT:-75}"
 AUTO_MEM_PER_CPU_MB="${AUTO_MEM_PER_CPU_MB:-4096}"
 AUTO_MAX_MEM_MB="${AUTO_MAX_MEM_MB:-0}"
 
@@ -482,6 +485,9 @@ MAX_EVENTS=${MAX_EVENTS}
 MAX_EVENTS_PER_FILE=${MAX_EVENTS_PER_FILE}
 MIN_EVENT_DATE=${MIN_EVENT_DATE}
 SHARD_SIZE=${SHARD_SIZE}
+OUTPUT_ORDER=${OUTPUT_ORDER}
+OUTPUT_LOCALITY_RUN_SIZE=${OUTPUT_LOCALITY_RUN_SIZE}
+WRITE_BLOCK_SIZE=${WRITE_BLOCK_SIZE}
 OPEN_RETRIES=${OPEN_RETRIES}
 OPEN_RETRY_DELAY=${OPEN_RETRY_DELAY}
 CHUNK_SIZE=${CHUNK_SIZE}
@@ -567,6 +573,9 @@ echo "energy_sample_stratify_particle=${ENERGY_SAMPLE_STRATIFY_PARTICLE}"
 echo "energy_bin_width=${ENERGY_BIN_WIDTH}"
 echo "energy_oversample_factor=${ENERGY_OVERSAMPLE_FACTOR}"
 echo "shard_size=${SHARD_SIZE}"
+echo "output_order=${OUTPUT_ORDER}"
+echo "output_locality_run_size=${OUTPUT_LOCALITY_RUN_SIZE}"
+echo "write_block_size=${WRITE_BLOCK_SIZE}"
 echo "This job reads DST files and writes local HDF5 graph shards."
 echo "======================================================================"
 
@@ -641,6 +650,9 @@ export_cmd+=(
   --worker-max-files "${WORKER_MAX_FILES}"
   --chunk-size "${CHUNK_SIZE}"
   --shard-size "${SHARD_SIZE}"
+  --output-order "${OUTPUT_ORDER}"
+  --output-locality-run-size "${OUTPUT_LOCALITY_RUN_SIZE}"
+  --write-block-size "${WRITE_BLOCK_SIZE}"
   --open-retries "${OPEN_RETRIES}"
   --open-retry-delay "${OPEN_RETRY_DELAY}"
   --seed "${SEED}"
@@ -758,6 +770,9 @@ summary_workers=${SUMMARY_WORKERS}
 energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}
 energy_sample_stratify_particle=${ENERGY_SAMPLE_STRATIFY_PARTICLE}
 min_event_date=${MIN_EVENT_DATE}
+output_order=${OUTPUT_ORDER}
+output_locality_run_size=${OUTPUT_LOCALITY_RUN_SIZE}
+write_block_size=${WRITE_BLOCK_SIZE}
 
 Default DST inputs:
   ${INPUT_DIRS}

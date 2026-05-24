@@ -21,6 +21,7 @@ from .progress import write as _progress_write
 MAX_CONFIG_PATHS = 200
 DEFAULT_WORKER_MAX_FILES = 0
 DEFAULT_TRAIN_WORKERS = -1
+SelectedEntry = tuple[int | tuple[str, int], str, str, int, float, int, int]
 
 
 class DstUnitExhaustionError(RuntimeError):
@@ -384,6 +385,57 @@ def _selected_path_chunks(
     return chunks
 
 
+def _interleaved_selected_entries(
+    entries: list[SelectedEntry],
+    *,
+    seed: int,
+    locality_run_size: int,
+) -> list[SelectedEntry]:
+    run_size = max(int(locality_run_size), 1)
+    by_bin_and_path: dict[int | tuple[str, int], dict[str, list[SelectedEntry]]] = {}
+    for entry in entries:
+        bin_key = entry[0]
+        path = entry[2]
+        by_bin_and_path.setdefault(bin_key, {}).setdefault(path, []).append(entry)
+
+    runs_by_bin: dict[int | tuple[str, int], deque[list[SelectedEntry]]] = {}
+    for bin_key, by_path in by_bin_and_path.items():
+        runs: list[list[SelectedEntry]] = []
+        for path_entries in by_path.values():
+            path_entries = sorted(path_entries, key=lambda entry: entry[3])
+            for start in range(0, len(path_entries), run_size):
+                runs.append(path_entries[start : start + run_size])
+        runs.sort(
+            key=lambda run: _sample_key_from_parts(
+                int(seed) + 104729,
+                run[0][1],
+                run[0][2],
+                run[0][3],
+            )
+        )
+        runs_by_bin[bin_key] = deque(runs)
+
+    bin_order = list(runs_by_bin)
+    bin_order.sort(key=lambda bin_key: _sample_key_from_parts(int(seed) + 15485863, str(bin_key), "", 0))
+
+    ordered: list[SelectedEntry] = []
+    while bin_order:
+        next_bin_order: list[int | tuple[str, int]] = []
+        for bin_key in bin_order:
+            runs = runs_by_bin[bin_key]
+            if runs:
+                ordered.extend(runs.popleft())
+            if runs:
+                next_bin_order.append(bin_key)
+        bin_order = next_bin_order
+    return ordered
+
+
+def _selected_entry_chunks(entries: list[SelectedEntry], shard_size: int) -> list[list[SelectedEntry]]:
+    target_size = max(int(shard_size), 1)
+    return [entries[start : start + target_size] for start in range(0, len(entries), target_size)]
+
+
 def _write_selected_graph_shard(
     payload: tuple[
         int,
@@ -522,6 +574,146 @@ def _write_selected_graph_shard(
     }
 
 
+def _write_ordered_selected_graph_shard(
+    payload: tuple[
+        int,
+        list[SelectedEntry],
+        dict[int, Any] | None,
+        str,
+        bool,
+        bool,
+        int,
+        float,
+        int | None,
+        str | None,
+        int | None,
+        bool,
+        str,
+        dict[str, Any],
+        float,
+        bool,
+        int,
+    ]
+) -> dict[str, Any]:
+    from .dst_reader import iter_dst_banks
+    from .event_graph import build_graph_event
+    from .graph_io import create_graph_file, write_graph
+
+    (
+        shard_index,
+        entries,
+        detector_positions,
+        kind,
+        require_trigger_mode0,
+        skip_errors,
+        open_retries,
+        open_retry_delay,
+        max_events_per_file,
+        mc_calib_dir,
+        min_event_date,
+        skip_missing_mc_calibration,
+        output,
+        config,
+        energy_bin_width,
+        stratify_particle,
+        write_block_size,
+    ) = payload
+
+    output_path = _shard_path(output, shard_index)
+    shard_config = dict(config)
+    shard_config["shard_index"] = shard_index
+    handle = None
+    written = 0
+    skipped = 0
+    records = 0
+    graph_seen_by_bin: dict[int | tuple[str, int], int] = {}
+    interval = max(float(os.environ.get("TALESD_GNN_PROGRESS_INTERVAL", "30")), 1.0)
+    last_report = time.perf_counter()
+    block_size = max(int(write_block_size), 1)
+
+    _progress_write(
+        f"export/write shard {shard_index:04d}: start ordered_events={len(entries)} "
+        f"block_size={block_size} output={output_path.name}"
+    )
+
+    try:
+        for block_number, block in enumerate(_chunked(entries, block_size), start=1):
+            wanted_by_path: dict[str, set[int]] = {}
+            for _bin_key, _unique_id, path, source_index, _log10_energy, _date, _time_value in block:
+                wanted_by_path.setdefault(path, set()).add(int(source_index))
+
+            graph_by_key: dict[tuple[str, int], Any] = {}
+            for path, source_indices in wanted_by_path.items():
+                file_records = 0
+                for record in iter_dst_banks(
+                    [path],
+                    detector_positions=detector_positions,
+                    kind=kind,
+                    require_trigger_mode0=require_trigger_mode0,
+                    skip_errors=skip_errors,
+                    source_indices=source_indices,
+                    open_retries=open_retries,
+                    open_retry_delay=open_retry_delay,
+                    mc_calib_dir=mc_calib_dir,
+                    min_event_date=min_event_date,
+                    skip_missing_mc_calibration=skip_missing_mc_calibration,
+                ):
+                    records += 1
+                    file_records += 1
+                    graph = build_graph_event(record, detector_positions=detector_positions)
+                    if graph is not None:
+                        graph_by_key[(path, int(record.source_index))] = graph
+                    if max_events_per_file is not None and file_records >= max_events_per_file:
+                        break
+
+            for _bin_key, _unique_id, path, source_index, _log10_energy, _date, _time_value in block:
+                graph = graph_by_key.get((path, int(source_index)))
+                if graph is None:
+                    skipped += 1
+                    continue
+                if graph.target is None or graph.target.shape[0] == 0 or not math.isfinite(float(graph.target[0])):
+                    skipped += 1
+                    continue
+                particle = _particle_stratum_from_graph(graph) if stratify_particle else None
+                bin_key = _energy_sample_bin_key(float(graph.target[0]), float(energy_bin_width), particle=particle)
+                graph_seen_by_bin[bin_key] = graph_seen_by_bin.get(bin_key, 0) + 1
+                if handle is None:
+                    handle = create_graph_file(output_path, config=shard_config)
+                write_graph(handle, written, graph)
+                written += 1
+
+            now = time.perf_counter()
+            if now - last_report >= interval:
+                _progress_write(
+                    f"export/write shard {shard_index:04d}: blocks={block_number} "
+                    f"records={records} written={written} skipped={skipped}"
+                )
+                last_report = now
+    except BaseException as exc:
+        _progress_write(
+            f"export/write shard {shard_index:04d}: failed ordered_events={len(entries)} "
+            f"records={records} written={written} skipped={skipped} error={exc}"
+        )
+        raise
+    finally:
+        if handle is not None:
+            handle.close()
+
+    _progress_write(
+        f"export/write shard {shard_index:04d}: done ordered_events={len(entries)} "
+        f"records={records} written={written} skipped={skipped} output={output_path.name if written > 0 else '(empty)'}"
+    )
+
+    return {
+        "shard_index": shard_index,
+        "path": str(output_path) if written > 0 else None,
+        "written": written,
+        "skipped": skipped,
+        "records": records,
+        "graph_seen_by_bin": graph_seen_by_bin,
+    }
+
+
 def _iter_selected_shard_write_results(
     inputs: list[str],
     args: argparse.Namespace,
@@ -564,6 +756,49 @@ def _iter_selected_shard_write_results(
         _write_selected_graph_shard,
         workers,
         "export/write shards",
+        max_tasks_per_child=max(int(args.worker_max_files), 0),
+    )
+
+
+def _iter_ordered_selected_shard_write_results(
+    args: argparse.Namespace,
+    detector_positions: dict[int, Any] | None,
+    selected_entries: list[SelectedEntry],
+    config: dict[str, Any],
+) -> Iterator[dict[str, Any]]:
+    chunks = _selected_entry_chunks(selected_entries, int(args.shard_size))
+    payloads = [
+        (
+            shard_index,
+            entries,
+            detector_positions,
+            args.kind,
+            not args.keep_non_mode0,
+            args.skip_errors,
+            int(args.open_retries),
+            float(args.open_retry_delay),
+            None if args.max_events_per_file is None or int(args.max_events_per_file) <= 0 else int(args.max_events_per_file),
+            str(Path(args.mc_calib_dir).expanduser()) if args.mc_calib_dir else None,
+            None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date),
+            bool(args.skip_errors and args.kind == "mc"),
+            str(Path(args.output).expanduser()),
+            config,
+            float(args.energy_bin_width),
+            bool(args.energy_sample_stratify_particle),
+            int(args.write_block_size),
+        )
+        for shard_index, entries in enumerate(chunks)
+    ]
+    workers = min(max(int(args.workers), 1), len(payloads)) if payloads else 1
+    _progress_write(
+        f"export/write ordered shards: start shards={len(payloads)} workers={workers} "
+        f"selected_events={len(selected_entries)} block_size={int(args.write_block_size)}"
+    )
+    yield from _iter_process_pool(
+        payloads,
+        _write_ordered_selected_graph_shard,
+        workers,
+        "export/write ordered shards",
         max_tasks_per_child=max(int(args.worker_max_files), 0),
     )
 
@@ -898,6 +1133,7 @@ def _merge_candidate_reservoirs(
     per_bin_limit: int,
 ) -> tuple[
     dict[str, set[int]],
+    list[SelectedEntry],
     dict[int | tuple[str, int], int],
     dict[int | tuple[str, int], int],
     dict[int, int],
@@ -937,15 +1173,28 @@ def _merge_candidate_reservoirs(
                     heapq.heapreplace(bucket, entry)
 
     selected_by_path: dict[str, set[int]] = {}
+    selected_entries: list[SelectedEntry] = []
     selected_by_bin: dict[int | tuple[str, int], int] = {}
     selected_event_dates: dict[int, int] = {}
     for bin_key, entries in merged.items():
         selected_by_bin[bin_key] = len(entries)
-        for _neg_key, _unique_id, path, source_index, _log10_energy, date, _time_value in entries:
+        for _neg_key, unique_id, path, source_index, log10_energy, date, time_value in entries:
             selected_by_path.setdefault(path, set()).add(int(source_index))
             selected_event_dates[int(date)] = selected_event_dates.get(int(date), 0) + 1
+            selected_entries.append(
+                (
+                    bin_key,
+                    unique_id,
+                    path,
+                    int(source_index),
+                    float(log10_energy),
+                    int(date),
+                    int(time_value),
+                )
+            )
     return (
         selected_by_path,
+        selected_entries,
         seen_by_bin,
         selected_by_bin,
         selected_event_dates,
@@ -1002,6 +1251,9 @@ def _cmd_export(args: argparse.Namespace) -> None:
         "energy_sample_stratify_particle": bool(args.energy_sample_stratify_particle),
         "energy_bin_width": args.energy_bin_width,
         "energy_oversample_factor": args.energy_oversample_factor,
+        "output_order": args.output_order,
+        "output_locality_run_size": args.output_locality_run_size,
+        "write_block_size": args.write_block_size,
         "seed": args.seed,
         "workers": args.workers,
         "worker_max_files": args.worker_max_files,
@@ -1059,6 +1311,7 @@ def _cmd_export(args: argparse.Namespace) -> None:
             )
             (
                 selected_by_path,
+                selected_entries,
                 seen_by_bin,
                 selected_by_bin,
                 selected_event_dates,
@@ -1093,19 +1346,42 @@ def _cmd_export(args: argparse.Namespace) -> None:
                 f"bins={len(selected_by_bin)} raw_events={raw_events} hit_events={hit_events} "
                 f"missing_calibration_events={missing_calibration_events}"
             )
+            if selected_event_count != len(selected_entries):
+                raise RuntimeError(
+                    "energy-flat preselection bookkeeping mismatch: "
+                    f"selected_by_path={selected_event_count} selected_entries={len(selected_entries)}"
+                )
 
             file_results = _iter_file_results(inputs, args, detector_positions, selected_indices_by_path=selected_by_path)
             graph_seen_by_bin: dict[int | tuple[str, int], int] = {}
             per_bin = max(int(args.energy_sample_per_bin), 1)
             if preselect_per_bin <= per_bin and int(args.shard_size) > 0 and int(args.workers) > 1:
-                config["energy_sample_parallel_shard_write"] = True
-                shard_results = _iter_selected_shard_write_results(
-                    inputs,
-                    args,
-                    detector_positions,
-                    selected_by_path,
-                    config,
-                )
+                output_order = str(args.output_order).lower()
+                config["energy_sample_output_order"] = output_order
+                config["energy_sample_output_locality_run_size"] = int(args.output_locality_run_size)
+                config["energy_sample_write_block_size"] = int(args.write_block_size)
+                if output_order == "interleaved":
+                    selected_entries = _interleaved_selected_entries(
+                        selected_entries,
+                        seed=int(args.seed),
+                        locality_run_size=int(args.output_locality_run_size),
+                    )
+                    config["energy_sample_parallel_ordered_shard_write"] = True
+                    shard_results = _iter_ordered_selected_shard_write_results(
+                        args,
+                        detector_positions,
+                        selected_entries,
+                        config,
+                    )
+                else:
+                    config["energy_sample_parallel_shard_write"] = True
+                    shard_results = _iter_selected_shard_write_results(
+                        inputs,
+                        args,
+                        detector_positions,
+                        selected_by_path,
+                        config,
+                    )
                 written_total = 0
                 written_path_items: list[tuple[int, Path]] = []
                 for result in shard_results:
@@ -1333,6 +1609,9 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--worker-max-files", type=int, default=DEFAULT_WORKER_MAX_FILES, help="ファイル単位workerをNファイル処理ごとに再起動する。0なら無効")
     export.add_argument("--chunk-size", type=int, default=128, help="--max-events指定時にworkerへ渡すイベントchunkサイズ")
     export.add_argument("--shard-size", type=int, default=0, help="NグラフごとにHDF5を分割する。0なら分割しない")
+    export.add_argument("--output-order", choices=["source", "interleaved"], default="interleaved", help="energy-flat出力時のHDF5内event順。interleavedは粒子種・energy binを短いrun単位で混ぜる")
+    export.add_argument("--output-locality-run-size", type=int, default=32, help="--output-order=interleavedで同一source/binから連続して書く最大event数")
+    export.add_argument("--write-block-size", type=int, default=2048, help="ordered shard書き出しで一度にgraph化して並べ替えるevent数")
     export.add_argument("--open-retries", type=int, default=3, help="DST open失敗時の再試行回数")
     export.add_argument("--open-retry-delay", type=float, default=1.0, help="DST open再試行の待ち時間。試行ごとに線形に増やす")
     export.add_argument("--keep-non-mode0", action="store_true", help="trgMode != 0 も残す")

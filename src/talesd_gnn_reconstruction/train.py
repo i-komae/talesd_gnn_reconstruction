@@ -82,14 +82,13 @@ class LocalityBatchSampler:
         self.epoch = 0
 
     def __iter__(self):
-        indices = list(self.indices)
+        batches = [
+            self.indices[start : start + self.batch_size]
+            for start in range(0, len(self.indices), self.batch_size)
+        ]
         if self.shuffle_batches:
             rng = random.Random(self.seed + self.epoch)
-            rng.shuffle(indices)
-        batches = [
-            indices[start : start + self.batch_size]
-            for start in range(0, len(indices), self.batch_size)
-        ]
+            rng.shuffle(batches)
         self.epoch += 1
         yield from batches
 
