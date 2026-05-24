@@ -122,10 +122,17 @@ line_count() {
 request_resize() {
   local rows="$1"
   local cols="$2"
+  local current_rows
+  local current_cols
   [[ "${RESIZE_TERMINAL}" == "1" ]] || return 0
   [[ -t 1 ]] || return 0
   [[ "${TERM:-}" != "dumb" ]] || return 0
   [[ "${rows}" -gt 0 && "${cols}" -gt 0 ]] || return 0
+  current_rows="$(terminal_rows)"
+  current_cols="$(terminal_cols)"
+  if [[ "${current_rows}" == "${rows}" && "${current_cols}" == "${cols}" ]]; then
+    return 0
+  fi
   printf '\033[8;%d;%dt' "${rows}" "${cols}"
   RESIZED=1
 }
@@ -301,8 +308,6 @@ while true; do
       AUTO_VERTICAL_LOCK=0
       AUTO_VERTICAL_COLS=0
     fi
-  else
-    request_resize "$(terminal_rows)" "${needed_cols_with_margin}"
   fi
   current_rows="$(terminal_rows)"
   current_cols="$(terminal_cols)"
