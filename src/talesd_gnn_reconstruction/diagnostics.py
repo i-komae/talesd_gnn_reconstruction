@@ -2015,7 +2015,7 @@ def _save_reconstruction_cut_pages(
                 _draw_gaussian_hist(
                     ax,
                     q["rel_energy"][mask],
-                    f"{low:.1f} <= logE < {high:.1f}",
+                    rf"${low:.1f} \leq \log_{{10}}(E/\mathrm{{eV}}) < {high:.1f}$",
                     r"$(E_{\mathrm{rec}}-E_{\mathrm{true}})/E_{\mathrm{true}}$",
                     color="#b279a2",
                     show_central68=False,
@@ -2363,7 +2363,7 @@ def _save_reconstruction_pdf(
                 _draw_gaussian_hist(
                     ax,
                     values,
-                    f"{low:.1f} <= logE < {high:.1f}",
+                    rf"${low:.1f} \leq \log_{{10}}(E/\mathrm{{eV}}) < {high:.1f}$",
                     r"$(E_{\mathrm{rec}}-E_{\mathrm{true}})/E_{\mathrm{true}}$",
                     color="#b279a2",
                     show_central68=False,
