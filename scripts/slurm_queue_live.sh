@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SUMMARY_SCRIPT="${SCRIPT_DIR}/slurm_queue_summary.sh"
 INTERVAL="${INTERVAL:-5}"
 LIVE_HEADER_MAX_WIDTH="${LIVE_HEADER_MAX_WIDTH:-80}"
+SLURM_QUEUE_LIVE_LAYOUT="${SLURM_QUEUE_LIVE_LAYOUT:-auto}"
+RESIZE_SETTLE_SECONDS="${RESIZE_SETTLE_SECONDS:-0.05}"
 RESIZE_TERMINAL=1
 SUMMARY_ARGS=()
 
@@ -20,12 +22,13 @@ fi
 
 usage() {
   cat <<'EOF'
-Usage: scripts/slurm_queue_live.sh [-i SEC] [--no-resize] [--] [slurm_queue_summary options]
+Usage: scripts/slurm_queue_live.sh [-i SEC] [--layout auto|wide|vertical] [--no-resize] [--] [slurm_queue_summary options]
 
 Periodically redraw scripts/slurm_queue_summary.sh with ANSI colors preserved.
 
 Options:
   -i SEC, --interval SEC  Refresh interval in seconds. Default: 5.
+  --layout MODE           GPU/CPU block layout: auto, wide, or vertical. Default: auto.
   --no-resize            Do not request terminal resize.
   -h, --help             Show this help.
 
@@ -54,6 +57,18 @@ while [[ $# -gt 0 ]]; do
       RESIZE_TERMINAL=0
       shift
       ;;
+    --layout)
+      if [[ $# -lt 2 ]]; then
+        echo "$1 requires a value" >&2
+        exit 2
+      fi
+      SLURM_QUEUE_LIVE_LAYOUT="$2"
+      shift 2
+      ;;
+    --layout=*)
+      SLURM_QUEUE_LIVE_LAYOUT="${1#*=}"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -72,6 +87,10 @@ done
 
 if [[ ! "${INTERVAL}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "invalid interval: ${INTERVAL}" >&2
+  exit 2
+fi
+if [[ "${SLURM_QUEUE_LIVE_LAYOUT}" != "auto" && "${SLURM_QUEUE_LIVE_LAYOUT}" != "wide" && "${SLURM_QUEUE_LIVE_LAYOUT}" != "vertical" ]]; then
+  echo "invalid layout: ${SLURM_QUEUE_LIVE_LAYOUT}" >&2
   exit 2
 fi
 
@@ -109,6 +128,15 @@ request_resize() {
   [[ "${rows}" -gt 0 && "${cols}" -gt 0 ]] || return 0
   printf '\033[8;%d;%dt' "${rows}" "${cols}"
   RESIZED=1
+}
+
+capture_summary() {
+  local layout="$1"
+  if output="$(SLURM_QUEUE_LAYOUT="${layout}" FORCE_COLOR=1 "${SUMMARY_SCRIPT}" "${SUMMARY_ARGS[@]}" 2>&1)"; then
+    status=0
+  else
+    status=$?
+  fi
 }
 
 summary_args_label() {
@@ -194,13 +222,20 @@ sleep_with_countdown() {
 ORIG_ROWS="$(terminal_rows)"
 ORIG_COLS="$(terminal_cols)"
 RESIZED=0
+ALT_SCREEN_ACTIVE=0
 
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
   if [[ -t 1 ]]; then
+    # Clear the live frame before leaving the alternate screen.  This also
+    # keeps terminals that ignore smcup/rmcup from leaving stale text above
+    # the restored shell prompt.
+    printf '\033[H\033[J'
     tput cnorm 2>/dev/null || true
-    tput rmcup 2>/dev/null || true
+    if [[ "${ALT_SCREEN_ACTIVE}" == "1" ]]; then
+      tput rmcup 2>/dev/null || true
+    fi
     if [[ "${RESIZED}" == "1" && "${ORIG_ROWS}" -gt 0 && "${ORIG_COLS}" -gt 0 ]]; then
       printf '\033[8;%d;%dt' "${ORIG_ROWS}" "${ORIG_COLS}"
     fi
@@ -211,18 +246,28 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if [[ -t 1 ]]; then
-  tput smcup 2>/dev/null || true
+  if tput smcup 2>/dev/null; then
+    ALT_SCREEN_ACTIVE=1
+  fi
   tput civis 2>/dev/null || true
 fi
+
+AUTO_VERTICAL_LOCK=0
+AUTO_VERTICAL_COLS=0
 
 while true; do
   output=""
   status=0
-  if output="$(SLURM_QUEUE_LAYOUT=wide FORCE_COLOR=1 "${SUMMARY_SCRIPT}" "${SUMMARY_ARGS[@]}" 2>&1)"; then
-    status=0
-  else
-    status=$?
+  current_cols="$(terminal_cols)"
+  summary_layout="${SLURM_QUEUE_LIVE_LAYOUT}"
+  if [[ "${summary_layout}" == "auto" && -t 1 && "${RESIZE_TERMINAL}" == "1" && "${TERM:-}" != "dumb" ]]; then
+    if [[ "${AUTO_VERTICAL_LOCK}" == "1" && "${current_cols}" -gt 0 && "${current_cols}" -le "${AUTO_VERTICAL_COLS}" ]]; then
+      summary_layout="vertical"
+    else
+      summary_layout="wide"
+    fi
   fi
+  capture_summary "${summary_layout}"
   updated_at="$(date '+%Y-%m-%d %H:%M:%S')"
   header="$(make_header "${updated_at}" "${INTERVAL}")"
   frame="${header}"$'\n'"${output}"
@@ -233,6 +278,32 @@ while true; do
   plain="$(printf "%s\n" "${frame}" | strip_ansi)"
   needed_rows="$(printf "%s\n" "${plain}" | line_count)"
   needed_cols="$(printf "%s\n" "${plain}" | max_line_width)"
+  needed_cols_with_margin=$((needed_cols + 1))
+
+  if [[ "${SLURM_QUEUE_LIVE_LAYOUT}" == "auto" && "${summary_layout}" == "wide" && "${current_cols}" -gt 0 && "${needed_cols_with_margin}" -gt "${current_cols}" ]]; then
+    request_resize "$(terminal_rows)" "${needed_cols_with_margin}"
+    sleep "${RESIZE_SETTLE_SECONDS}" 2>/dev/null || true
+    current_cols="$(terminal_cols)"
+    if [[ "${current_cols}" -le 0 || "${needed_cols_with_margin}" -gt "${current_cols}" ]]; then
+      capture_summary "vertical"
+      header="$(make_header "${updated_at}" "${INTERVAL}")"
+      frame="${header}"$'\n'"${output}"
+      if [[ "${status}" -ne 0 ]]; then
+        frame="${frame}"$'\n'$'\n'"slurm_queue_summary exited with status ${status}"
+      fi
+      plain="$(printf "%s\n" "${frame}" | strip_ansi)"
+      needed_rows="$(printf "%s\n" "${plain}" | line_count)"
+      needed_cols="$(printf "%s\n" "${plain}" | max_line_width)"
+      needed_cols_with_margin=$((needed_cols + 1))
+      AUTO_VERTICAL_LOCK=1
+      AUTO_VERTICAL_COLS="${current_cols}"
+    else
+      AUTO_VERTICAL_LOCK=0
+      AUTO_VERTICAL_COLS=0
+    fi
+  else
+    request_resize "$(terminal_rows)" "${needed_cols_with_margin}"
+  fi
   current_rows="$(terminal_rows)"
   current_cols="$(terminal_cols)"
   target_rows="${current_rows}"
