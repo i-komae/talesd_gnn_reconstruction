@@ -52,6 +52,6 @@ export EARLY_STOPPING_MIN_EPOCHS="${EARLY_STOPPING_MIN_EPOCHS:-32}"
 export DROPOUT="${DROPOUT:-0.12}"
 export WEIGHT_DECAY="${WEIGHT_DECAY:-5e-4}"
 export LR_SCHEDULER="${LR_SCHEDULER:-cosine}"
-export SUMMARIZE_GRAPHS="${SUMMARIZE_GRAPHS:-1}"
+export SUMMARIZE_GRAPHS="${SUMMARIZE_GRAPHS:-0}"
 
 exec "${SCRIPT_DIR}/submit_server_waveform_full_training.sh"
