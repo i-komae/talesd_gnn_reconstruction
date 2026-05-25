@@ -1491,6 +1491,7 @@ def _cmd_train(args: argparse.Namespace) -> None:
         num_workers=args.num_workers,
         preprocess_workers=args.preprocess_workers,
         prefetch_factor=args.prefetch_factor,
+        persistent_workers=args.persistent_workers,
         collate_backend=args.collate_backend,
         collate_threads=args.collate_threads,
         training_task=args.training_task,
@@ -1677,6 +1678,7 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--num-workers", type=int, default=DEFAULT_TRAIN_WORKERS, help="学習DataLoaderのworker数。-1でauto、0で単一process")
     train.add_argument("--preprocess-workers", type=int, default=0, help="split scanとscaler fitに使う前処理worker数。0/1で単一process")
     train.add_argument("--prefetch-factor", type=int, default=2, help="各DataLoader workerが先読みするbatch数")
+    train.add_argument("--persistent-workers", action="store_true", help="DataLoader workerをepoch間で保持する。大きいHDF5ではメモリを残しやすいので既定では無効")
     train.add_argument("--collate-backend", choices=["auto", "cpp", "python"], default="auto", help="batch構築backend。autoは小規模入力ではpython、大規模/worker利用時はcppを選ぶ")
     train.add_argument("--collate-threads", type=int, default=1, help="C++ collate内部のthread数。0ならautoまたはTALESD_GNN_COLLATE_THREADS")
     train.add_argument("--training-task", choices=["reconstruction", "mass"], default="reconstruction", help="reconstructionは幾何/エネルギー再構成、massはproton/iron分類のみを学習する")

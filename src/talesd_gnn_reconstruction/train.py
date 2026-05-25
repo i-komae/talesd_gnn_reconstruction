@@ -1210,6 +1210,7 @@ def train_model(
     num_workers: int = -1,
     preprocess_workers: int = 0,
     prefetch_factor: int = 2,
+    persistent_workers: bool = False,
     collate_backend: str = "auto",
     collate_threads: int = 1,
     training_task: str = "reconstruction",
@@ -1296,6 +1297,7 @@ def train_model(
     stage_seconds["resolve_device"] = time.perf_counter() - stage_started
     _progress_write(f"stage=done resolve_device resolved={device} elapsed={stage_seconds['resolve_device']:.1f}s")
     prefetch_factor = max(int(prefetch_factor), 1)
+    persistent_workers = bool(persistent_workers)
     collate_threads = max(int(collate_threads), 0)
     pin_memory = device.startswith("cuda")
     if save_diagnostics:
@@ -1483,7 +1485,7 @@ def train_model(
         prefetch_factor=prefetch_factor,
         seed=seed,
         pin_memory=pin_memory,
-        persistent_workers=True,
+        persistent_workers=persistent_workers,
         collate_backend=collate_backend,
         collate_threads=collate_threads,
     )
@@ -1498,7 +1500,7 @@ def train_model(
         prefetch_factor=prefetch_factor,
         seed=seed,
         pin_memory=pin_memory,
-        persistent_workers=True,
+        persistent_workers=persistent_workers,
         collate_backend=collate_backend,
         collate_threads=collate_threads,
     )
@@ -1521,7 +1523,8 @@ def train_model(
     _progress_write(
         f"device={device} data_loader_workers={num_workers} "
         f"preprocess_workers={preprocess_workers} "
-        f"prefetch_factor={prefetch_factor} collate_backend={collate_backend} "
+        f"prefetch_factor={prefetch_factor} persistent_workers={int(persistent_workers)} "
+        f"collate_backend={collate_backend} "
         f"collate_threads={collate_threads or 'auto'}"
         + f" split_mode={split_mode} model_architecture={model_architecture}"
         + f" classification_arch={classification_arch}"
@@ -1588,6 +1591,7 @@ def train_model(
             "num_workers": num_workers,
             "preprocess_workers": preprocess_workers,
             "prefetch_factor": prefetch_factor,
+            "persistent_workers": persistent_workers,
             "collate_backend": collate_backend,
             "requested_collate_backend": requested_collate_backend,
             "collate_threads": collate_threads,
