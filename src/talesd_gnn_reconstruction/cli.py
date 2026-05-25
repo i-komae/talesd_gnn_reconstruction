@@ -1488,6 +1488,7 @@ def _cmd_train(args: argparse.Namespace) -> None:
         sample_cache_size=args.sample_cache_size,
         max_graphs=args.max_graphs,
         particle_filter=args.particle_filter,
+        pin_memory=None if not args.no_pin_memory else False,
         num_workers=args.num_workers,
         preprocess_workers=args.preprocess_workers,
         prefetch_factor=args.prefetch_factor,
@@ -1675,6 +1676,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="all",
         help="学習に使う核種を絞る。allはproton/iron混合、protonはrusdmc.parttype=14、ironは5626のみ",
     )
+    train.add_argument("--no-pin-memory", action="store_true", help="CUDA転送用のpinned memoryを使わない。大きいHDF5でCPU RSSを抑えたい場合に使う")
     train.add_argument("--num-workers", type=int, default=DEFAULT_TRAIN_WORKERS, help="学習DataLoaderのworker数。-1でauto、0で単一process")
     train.add_argument("--preprocess-workers", type=int, default=0, help="split scanとscaler fitに使う前処理worker数。0/1で単一process")
     train.add_argument("--prefetch-factor", type=int, default=2, help="各DataLoader workerが先読みするbatch数")

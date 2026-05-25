@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from bisect import bisect_right
 from collections import OrderedDict
 from pathlib import Path
@@ -153,6 +154,7 @@ class H5GraphDataset:
         max_graphs: int | None = None,
         particle_filter: str = "all",
         show_progress: bool = False,
+        max_open_files: int | None = None,
     ):
         self.paths = _as_paths(path)
         self.require_target = require_target
@@ -163,10 +165,13 @@ class H5GraphDataset:
         self.load_particle_label = load_particle_label or require_particle_label
         self.load_detector_lids = bool(load_detector_lids)
         self.max_graphs = None if max_graphs is None or max_graphs <= 0 else int(max_graphs)
+        if max_open_files is None:
+            max_open_files = int(os.environ.get("TALESD_GNN_H5_MAX_OPEN_FILES", "4"))
+        self.max_open_files = max(int(max_open_files), 0)
         self.particle_filter = particle_filter.lower()
         if self.particle_filter not in {"all", "proton", "iron"}:
             raise ValueError("particle_filter must be 'all', 'proton', or 'iron'")
-        self._handles: dict[int, h5py.File] = {}
+        self._handles: OrderedDict[int, h5py.File] = OrderedDict()
         self._cache: OrderedDict[int, dict[str, Any]] = OrderedDict()
         self._path_key_lists: list[list[str] | None] = []
         self._path_local_indices: list[list[int] | None] = []
@@ -235,14 +240,22 @@ class H5GraphDataset:
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
-        state["_handles"] = {}
+        state["_handles"] = OrderedDict()
         state["_cache"] = OrderedDict()
         return state
 
     def _handle(self, path_index: int) -> h5py.File:
-        if path_index not in self._handles:
-            self._handles[path_index] = h5py.File(self.paths[path_index], "r")
-        return self._handles[path_index]
+        if path_index in self._handles:
+            handle = self._handles.pop(path_index)
+            self._handles[path_index] = handle
+            return handle
+        handle = h5py.File(self.paths[path_index], "r")
+        self._handles[path_index] = handle
+        if self.max_open_files > 0:
+            while len(self._handles) > self.max_open_files:
+                _old_path_index, old_handle = self._handles.popitem(last=False)
+                old_handle.close()
+        return handle
 
     def close(self) -> None:
         for handle in self._handles.values():

@@ -83,6 +83,37 @@ class EventGraphWaveformTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "old compact accepted-pulse waveforms"):
                 H5GraphDataset(path)
 
+    def test_hdf5_handles_are_lru_limited(self) -> None:
+        def write_graph(path: Path) -> None:
+            with h5py.File(path, "w") as handle:
+                event = handle.create_group("events").create_group("00000000")
+                event.create_dataset("node_features", data=np.zeros((1, 1), dtype=np.float32))
+                event.create_dataset("edge_index", data=np.zeros((2, 0), dtype=np.int64))
+                event.create_dataset("edge_features", data=np.zeros((0, 1), dtype=np.float32))
+                event.create_dataset("pulse_features", data=np.zeros((0, 1), dtype=np.float32))
+                event.create_dataset("waveform_features", data=np.zeros((1, 0, 0), dtype=np.float32))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first = Path(tmpdir) / "first.h5"
+            second = Path(tmpdir) / "second.h5"
+            write_graph(first)
+            write_graph(second)
+
+            dataset = H5GraphDataset(
+                [first, second],
+                max_open_files=1,
+                load_attrs=False,
+                load_node_positions=False,
+            )
+            dataset[0]
+            first_handle = dataset._handles[0]
+            self.assertEqual(list(dataset._handles), [0])
+
+            dataset[1]
+            self.assertEqual(list(dataset._handles), [1])
+            self.assertFalse(bool(first_handle.id.valid))
+            dataset.close()
+
 
 if __name__ == "__main__":
     unittest.main()

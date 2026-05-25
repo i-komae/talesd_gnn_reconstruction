@@ -1207,6 +1207,7 @@ def train_model(
     sample_cache_size: int = 0,
     max_graphs: int | None = None,
     particle_filter: str = "all",
+    pin_memory: bool | None = None,
     num_workers: int = -1,
     preprocess_workers: int = 0,
     prefetch_factor: int = 2,
@@ -1299,7 +1300,7 @@ def train_model(
     prefetch_factor = max(int(prefetch_factor), 1)
     persistent_workers = bool(persistent_workers)
     collate_threads = max(int(collate_threads), 0)
-    pin_memory = device.startswith("cuda")
+    pin_memory = device.startswith("cuda") if pin_memory is None else bool(pin_memory)
     if save_diagnostics:
         stage_started = time.perf_counter()
         _progress_write("stage=start latex_check")
@@ -1326,7 +1327,7 @@ def train_model(
     stage_seconds["dataset_init"] = time.perf_counter() - stage_started
     _progress_write(
         f"stage=done dataset_init graphs={len(dataset)} shards={len(dataset.paths)} "
-        f"elapsed={stage_seconds['dataset_init']:.1f}s"
+        f"h5_max_open_files={dataset.max_open_files} elapsed={stage_seconds['dataset_init']:.1f}s"
     )
     if len(dataset) < 2:
         raise ValueError("training needs at least two graphs with MC targets")
@@ -1524,6 +1525,7 @@ def train_model(
         f"device={device} data_loader_workers={num_workers} "
         f"preprocess_workers={preprocess_workers} "
         f"prefetch_factor={prefetch_factor} persistent_workers={int(persistent_workers)} "
+        f"pin_memory={int(pin_memory)} "
         f"collate_backend={collate_backend} "
         f"collate_threads={collate_threads or 'auto'}"
         + f" split_mode={split_mode} model_architecture={model_architecture}"
@@ -1592,6 +1594,8 @@ def train_model(
             "preprocess_workers": preprocess_workers,
             "prefetch_factor": prefetch_factor,
             "persistent_workers": persistent_workers,
+            "h5_max_open_files": dataset.max_open_files,
+            "pin_memory": pin_memory,
             "collate_backend": collate_backend,
             "requested_collate_backend": requested_collate_backend,
             "collate_threads": collate_threads,
