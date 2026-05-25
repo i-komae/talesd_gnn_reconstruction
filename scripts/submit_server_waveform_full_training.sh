@@ -192,11 +192,28 @@ cat > "${SBATCH_FILE}" <<EOF
 #SBATCH --output=${SLURM_LOG_DIR}/%x_%j.out
 #SBATCH --error=${SLURM_LOG_DIR}/%x_%j.err
 
-set -euo pipefail
+set -Eeuo pipefail
 
 JOB_LOG_PATH="${LOG_DIR}/${RUN_NAME}.job.log"
+EARLY_LOG_PATH="${LOG_DIR}/${RUN_NAME}.early.log"
+
+{
+  echo "======================================================================"
+  echo "EARLY JOB START"
+  echo "date=\$(date)"
+  echo "hostname=\$(hostname 2>/dev/null || true)"
+  echo "slurm_job_id=\${SLURM_JOB_ID:-}"
+  echo "job_log=\${JOB_LOG_PATH}"
+  echo "early_log=\${EARLY_LOG_PATH}"
+  echo "slurm_stdout=${SLURM_LOG_DIR}/%x_%j.out"
+  echo "slurm_stderr=${SLURM_LOG_DIR}/%x_%j.err"
+  echo "======================================================================"
+} >> "\${EARLY_LOG_PATH}" 2>&1 || true
+
+trap 'status=\$?; line=\${LINENO}; command=\${BASH_COMMAND}; echo "ERROR status=\${status} line=\${line} command=\${command}" >&2; echo "ERROR status=\${status} line=\${line} command=\${command}" >> "\${EARLY_LOG_PATH}" 2>/dev/null || true' ERR
+
 mkdir -p "${LOG_DIR}" "${SUMMARY_DIR}" "${SLURM_LOG_DIR}"
-exec > >(tee -a "\${JOB_LOG_PATH}") 2>&1
+exec > >(tee -a "\${JOB_LOG_PATH}" "\${EARLY_LOG_PATH}") 2>&1
 
 module purge
 module load gcc/13.1.0 cmake/3.28 cuda/12.6.0 hdf5/2.0.0 mkl/latest tbb/latest
