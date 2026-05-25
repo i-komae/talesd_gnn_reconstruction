@@ -8,6 +8,7 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_re
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 
 PARTITION="${PARTITION:-b6000-al9_long}"
+NODELIST="${NODELIST:-}"
 RESOURCE_TAG="${RESOURCE_TAG:-${PARTITION%%-*}}"
 GPUS="${GPUS:-1}"
 CPUS_PER_GPU="${CPUS_PER_GPU:-8}"
@@ -108,6 +109,7 @@ LOCAL_GRAPH_CACHE_SCOPE="${LOCAL_GRAPH_CACHE_SCOPE:-shared}"
 LOCAL_GRAPH_CLEANUP="${LOCAL_GRAPH_CLEANUP:-1}"
 LOCAL_GRAPH_COPY_TOOL="${LOCAL_GRAPH_COPY_TOOL:-auto}"
 LOCAL_GRAPH_WAIT_TIMEOUT_SEC="${LOCAL_GRAPH_WAIT_TIMEOUT_SEC:-21600}"
+LOCAL_GRAPH_STALE_LOCK_SEC="${LOCAL_GRAPH_STALE_LOCK_SEC:-60}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-/dicos_ui_home/ikomae/work/uv-cache}"
 UV_LINK_MODE="${UV_LINK_MODE:-copy}"
 OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
@@ -149,6 +151,10 @@ if ! [[ "${LOCAL_GRAPH_WAIT_TIMEOUT_SEC}" =~ ^[0-9]+$ ]]; then
   echo "LOCAL_GRAPH_WAIT_TIMEOUT_SEC must be a non-negative integer: ${LOCAL_GRAPH_WAIT_TIMEOUT_SEC}" >&2
   exit 2
 fi
+if ! [[ "${LOCAL_GRAPH_STALE_LOCK_SEC}" =~ ^[0-9]+$ ]]; then
+  echo "LOCAL_GRAPH_STALE_LOCK_SEC must be a non-negative integer: ${LOCAL_GRAPH_STALE_LOCK_SEC}" >&2
+  exit 2
+fi
 
 if [[ "${PARTITION}" == a100* && "${ALLOW_A100:-0}" != "1" ]]; then
   cat >&2 <<EOF
@@ -180,11 +186,16 @@ LOG_DIR="${RUN_DIR}/logs"
 mkdir -p "${SBATCH_DIR}" "${SLURM_LOG_DIR}" "${SUMMARY_DIR}" "${LOG_DIR}"
 
 SBATCH_FILE="${SBATCH_DIR}/${RUN_NAME}.sbatch"
+SBATCH_NODELIST_LINE=""
+if [[ -n "${NODELIST}" ]]; then
+  SBATCH_NODELIST_LINE="#SBATCH --nodelist=${NODELIST}"
+fi
 
 cat > "${SBATCH_FILE}" <<EOF
 #!/usr/bin/env bash
 #SBATCH --job-name=${RUN_NAME}
 #SBATCH --partition=${PARTITION}
+${SBATCH_NODELIST_LINE}
 #SBATCH --gres=gpu:${GPUS}
 #SBATCH --cpus-per-task=${CPUS_PER_TASK}
 #SBATCH --mem=${MEM}
@@ -227,8 +238,54 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS}"
 GRAPH_INPUT_ORIGINAL="${GRAPH_INPUT}"
 LOCAL_GRAPH_JOB_DIR=""
 LOCAL_GRAPH_ROOT_SELECTED=""
+LOCAL_GRAPH_CACHE_DIR=""
+LOCAL_GRAPH_READY_FILE=""
+LOCAL_GRAPH_TMP_DIR=""
+LOCAL_GRAPH_CONTROL_LOCK_DIR=""
+LOCAL_GRAPH_CONTROL_LOCK_OWNED=0
+LOCAL_GRAPH_REF_FILE=""
 
 cleanup_local_graph_cache() {
+  local remaining_refs
+  local acquired_cleanup_lock
+  set +e
+
+  if [[ -n "\${LOCAL_GRAPH_REF_FILE}" && -n "\${LOCAL_GRAPH_CACHE_DIR}" && "${LOCAL_GRAPH_CLEANUP}" == "1" ]]; then
+    acquired_cleanup_lock=0
+    if [[ "\${LOCAL_GRAPH_CONTROL_LOCK_OWNED}" == "1" ]]; then
+      acquired_cleanup_lock=1
+    elif acquire_local_graph_control_lock "\${LOCAL_GRAPH_CONTROL_LOCK_DIR}" "cleanup"; then
+      acquired_cleanup_lock=1
+    fi
+
+    if [[ "\${acquired_cleanup_lock}" == "1" ]]; then
+      rm -f -- "\${LOCAL_GRAPH_REF_FILE}"
+      prune_stale_local_graph_refs_locked
+      remaining_refs=0
+      if [[ -d "\${LOCAL_GRAPH_CACHE_DIR}/.refs" ]]; then
+        remaining_refs="\$(find "\${LOCAL_GRAPH_CACHE_DIR}/.refs" -maxdepth 1 -type f 2>/dev/null | wc -l)"
+        remaining_refs="\${remaining_refs//[[:space:]]/}"
+      fi
+      echo "local_graph_ref_removed=\${LOCAL_GRAPH_REF_FILE}"
+      echo "local_graph_ref_remaining=\${remaining_refs}"
+      if [[ "\${remaining_refs}" == "0" ]]; then
+        echo "No remaining local graph references; deleting cache: \${LOCAL_GRAPH_CACHE_DIR}"
+        rm -rf -- "\${LOCAL_GRAPH_CACHE_DIR}"
+      fi
+      if [[ "\${LOCAL_GRAPH_CONTROL_LOCK_OWNED}" == "1" ]]; then
+        release_local_graph_control_lock
+      fi
+    else
+      echo "Could not acquire local graph control lock during cleanup: \${LOCAL_GRAPH_CONTROL_LOCK_DIR}" >&2
+    fi
+    LOCAL_GRAPH_REF_FILE=""
+  fi
+
+  if [[ "\${LOCAL_GRAPH_CONTROL_LOCK_OWNED}" == "1" ]]; then
+    [[ -n "\${LOCAL_GRAPH_TMP_DIR}" ]] && rm -rf -- "\${LOCAL_GRAPH_TMP_DIR}"
+    release_local_graph_control_lock
+  fi
+
   if [[ -n "\${LOCAL_GRAPH_JOB_DIR}" && -n "\${LOCAL_GRAPH_ROOT_SELECTED}" && "${LOCAL_GRAPH_CLEANUP}" == "1" ]]; then
     case "\${LOCAL_GRAPH_JOB_DIR}" in
       "\${LOCAL_GRAPH_ROOT_SELECTED%/}"/*)
@@ -242,6 +299,8 @@ cleanup_local_graph_cache() {
   fi
 }
 trap cleanup_local_graph_cache EXIT
+trap 'echo "Received SIGTERM; cleaning local graph cache before exit" >&2; exit 143' TERM
+trap 'echo "Received SIGINT; cleaning local graph cache before exit" >&2; exit 130' INT
 
 select_local_graph_root() {
   local root
@@ -269,6 +328,107 @@ select_local_graph_root() {
   return 1
 }
 
+local_graph_lock_is_stale() {
+  local lock_dir="\$1"
+  local owner_job_id=""
+  local now
+  local mtime
+  local age
+
+  [[ -d "\${lock_dir}" ]] || return 1
+
+  if [[ -f "\${lock_dir}/owner_job_id" ]]; then
+    owner_job_id="\$(cat "\${lock_dir}/owner_job_id" 2>/dev/null || true)"
+    if [[ -n "\${owner_job_id}" ]] && command -v squeue >/dev/null 2>&1; then
+      local squeue_output
+      if ! squeue_output="\$(squeue -h -j "\${owner_job_id}" 2>/dev/null)"; then
+        return 1
+      fi
+      if [[ -n "\${squeue_output}" ]]; then
+        return 1
+      fi
+      return 0
+    fi
+    return 1
+  fi
+
+  now="\$(date +%s)"
+  mtime="\$(stat -c %Y "\${lock_dir}" 2>/dev/null || printf '%s' "\${now}")"
+  age=\$((now - mtime))
+  (( age >= ${LOCAL_GRAPH_STALE_LOCK_SEC} ))
+}
+
+acquire_local_graph_control_lock() {
+  local lock_dir="\$1"
+  local purpose="\${2:-local_graph_cache}"
+  local waited=0
+  local sleep_sec=5
+
+  while ! mkdir "\${lock_dir}" 2>/dev/null; do
+    if local_graph_lock_is_stale "\${lock_dir}"; then
+      echo "Removing stale local graph lock: \${lock_dir}" >&2
+      rm -rf -- "\${lock_dir}"
+      continue
+    fi
+    if (( waited >= ${LOCAL_GRAPH_WAIT_TIMEOUT_SEC} )); then
+      echo "Timed out waiting for local graph lock after ${LOCAL_GRAPH_WAIT_TIMEOUT_SEC}s: \${lock_dir}" >&2
+      return 124
+    fi
+    sleep "\${sleep_sec}"
+    waited=\$((waited + sleep_sec))
+    echo "waiting for local graph lock: purpose=\${purpose} waited=\${waited}s lock=\${lock_dir}"
+  done
+
+  LOCAL_GRAPH_CONTROL_LOCK_OWNED=1
+  {
+    echo "purpose=\${purpose}"
+    echo "owner_job_id=\${SLURM_JOB_ID:-}"
+    echo "owner_run_name=${RUN_NAME}"
+    echo "owner_hostname=\$(hostname 2>/dev/null || true)"
+    echo "created_at=\$(date)"
+  } > "\${lock_dir}/owner" 2>/dev/null || true
+  printf '%s\n' "\${SLURM_JOB_ID:-}" > "\${lock_dir}/owner_job_id" 2>/dev/null || true
+}
+
+release_local_graph_control_lock() {
+  if [[ "\${LOCAL_GRAPH_CONTROL_LOCK_OWNED}" == "1" && -n "\${LOCAL_GRAPH_CONTROL_LOCK_DIR}" ]]; then
+    rm -f -- "\${LOCAL_GRAPH_CONTROL_LOCK_DIR}/owner" "\${LOCAL_GRAPH_CONTROL_LOCK_DIR}/owner_job_id" 2>/dev/null || true
+    rmdir "\${LOCAL_GRAPH_CONTROL_LOCK_DIR}" 2>/dev/null || true
+    LOCAL_GRAPH_CONTROL_LOCK_OWNED=0
+  fi
+}
+
+local_graph_ref_is_active() {
+  local ref_file="\$1"
+  local ref_job_id
+  local squeue_output
+
+  ref_job_id="\$(awk -F= '\$1 == "job_id" {print \$2; exit}' "\${ref_file}" 2>/dev/null || true)"
+  if [[ -z "\${ref_job_id}" || ! "\${ref_job_id}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  if ! command -v squeue >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! squeue_output="\$(squeue -h -j "\${ref_job_id}" 2>/dev/null)"; then
+    return 0
+  fi
+  [[ -n "\${squeue_output}" ]]
+}
+
+prune_stale_local_graph_refs_locked() {
+  local ref_file
+
+  [[ -d "\${LOCAL_GRAPH_CACHE_DIR}/.refs" ]] || return 0
+  for ref_file in "\${LOCAL_GRAPH_CACHE_DIR}/.refs"/*; do
+    [[ -f "\${ref_file}" ]] || continue
+    if ! local_graph_ref_is_active "\${ref_file}"; then
+      echo "Removing stale local graph ref: \${ref_file}" >&2
+      rm -f -- "\${ref_file}"
+    fi
+  done
+}
+
 local_graph_cache_key() {
   local src="\$1"
   local canonical
@@ -286,27 +446,6 @@ local_graph_cache_key() {
   fi
 
   printf '%s_%s\n' "\${safe_name}" "\${digest}"
-}
-
-wait_for_local_graph_cache() {
-  local ready_file="\$1"
-  local lock_dir="\$2"
-  local waited=0
-  local sleep_sec=30
-
-  while [[ ! -f "\${ready_file}" ]]; do
-    if [[ ! -d "\${lock_dir}" ]]; then
-      echo "Local graph cache lock disappeared before ready marker: \${lock_dir}" >&2
-      return 1
-    fi
-    if (( waited >= ${LOCAL_GRAPH_WAIT_TIMEOUT_SEC} )); then
-      echo "Timed out waiting for local graph cache after ${LOCAL_GRAPH_WAIT_TIMEOUT_SEC}s: \${ready_file}" >&2
-      return 124
-    fi
-    sleep "\${sleep_sec}"
-    waited=\$((waited + sleep_sec))
-    echo "waiting for local graph cache: waited=\${waited}s ready=\${ready_file}"
-  done
 }
 
 copy_graph_input_to_local() {
@@ -342,6 +481,104 @@ copy_graph_input_to_local() {
   fi
 }
 
+prepare_shared_local_graph_cache() {
+  local src="\$1"
+  local cache_parent="\$2"
+  local ref_count
+  local stale_tmp
+
+  LOCAL_GRAPH_CACHE_KEY="\$(local_graph_cache_key "\${src}")"
+  LOCAL_GRAPH_CACHE_DIR="\${cache_parent}/\${LOCAL_GRAPH_CACHE_KEY}"
+  LOCAL_GRAPH_CONTROL_LOCK_DIR="\${LOCAL_GRAPH_CACHE_DIR}.lock"
+  LOCAL_GRAPH_READY_FILE="\${LOCAL_GRAPH_CACHE_DIR}/.ready"
+  LOCAL_GRAPH_TMP_DIR="\${LOCAL_GRAPH_CACHE_DIR}.tmp.\${SLURM_JOB_ID:-manual_${RUN_ID}}"
+
+  mkdir -p "\${cache_parent}" || return 1
+
+  echo "======================================================================"
+  echo "COPY GRAPH INPUT TO SHARED LOCAL CACHE"
+  echo "date=\$(date)"
+  echo "local_graph_cache=${LOCAL_GRAPH_CACHE}"
+  echo "local_graph_cache_scope=${LOCAL_GRAPH_CACHE_SCOPE}"
+  echo "local_graph_root_requested=${LOCAL_GRAPH_ROOT}"
+  echo "local_graph_root_selected=\${LOCAL_GRAPH_ROOT_SELECTED}"
+  echo "graph_input_original=\${src}"
+  echo "local_graph_cache_dir=\${LOCAL_GRAPH_CACHE_DIR}"
+  du -sh "\${src}" 2>/dev/null || true
+  df -h "\${cache_parent}" || true
+
+  acquire_local_graph_control_lock "\${LOCAL_GRAPH_CONTROL_LOCK_DIR}" "prepare_shared_cache" || return \$?
+
+  for stale_tmp in "\${LOCAL_GRAPH_CACHE_DIR}".tmp.*; do
+    [[ "\${stale_tmp}" == "\${LOCAL_GRAPH_TMP_DIR}" ]] && continue
+    [[ -e "\${stale_tmp}" ]] || continue
+    case "\${stale_tmp}" in
+      "\${cache_parent}/\${LOCAL_GRAPH_CACHE_KEY}.tmp."*)
+        echo "Removing stale local graph temp cache: \${stale_tmp}" >&2
+        rm -rf -- "\${stale_tmp}"
+        ;;
+    esac
+  done
+
+  if [[ -f "\${LOCAL_GRAPH_READY_FILE}" ]]; then
+    echo "Using existing local graph cache: \${LOCAL_GRAPH_CACHE_DIR}"
+  else
+    rm -rf -- "\${LOCAL_GRAPH_TMP_DIR}"
+    mkdir -p "\${LOCAL_GRAPH_TMP_DIR}"
+    if copy_graph_input_to_local "\${src}" "\${LOCAL_GRAPH_TMP_DIR}"; then
+      printf '%s\n' "\${src}" > "\${LOCAL_GRAPH_TMP_DIR}/.source"
+      touch "\${LOCAL_GRAPH_TMP_DIR}/.ready"
+      if [[ -e "\${LOCAL_GRAPH_CACHE_DIR}" && ! -f "\${LOCAL_GRAPH_READY_FILE}" ]]; then
+        rm -rf -- "\${LOCAL_GRAPH_CACHE_DIR}"
+      fi
+      mv "\${LOCAL_GRAPH_TMP_DIR}" "\${LOCAL_GRAPH_CACHE_DIR}"
+    else
+      COPY_STATUS="\$?"
+      echo "Local graph copy failed with status \${COPY_STATUS}" >&2
+      rm -rf -- "\${LOCAL_GRAPH_TMP_DIR}"
+      release_local_graph_control_lock
+      return "\${COPY_STATUS}"
+    fi
+  fi
+
+  if [[ ! -f "\${LOCAL_GRAPH_READY_FILE}" ]]; then
+    echo "Local graph cache is not ready after preparation: \${LOCAL_GRAPH_CACHE_DIR}" >&2
+    release_local_graph_control_lock
+    return 2
+  fi
+
+  mkdir -p "\${LOCAL_GRAPH_CACHE_DIR}/.refs"
+  prune_stale_local_graph_refs_locked
+  LOCAL_GRAPH_REF_FILE="\${LOCAL_GRAPH_CACHE_DIR}/.refs/\${SLURM_JOB_ID:-manual_${RUN_ID}}_${RUN_NAME}"
+  {
+    echo "job_id=\${SLURM_JOB_ID:-}"
+    echo "run_name=${RUN_NAME}"
+    echo "hostname=\$(hostname 2>/dev/null || true)"
+    echo "pid=\$\$"
+    echo "created_at=\$(date)"
+    echo "graph_input_original=\${src}"
+  } > "\${LOCAL_GRAPH_REF_FILE}"
+
+  ref_count="\$(find "\${LOCAL_GRAPH_CACHE_DIR}/.refs" -maxdepth 1 -type f 2>/dev/null | wc -l)"
+  ref_count="\${ref_count//[[:space:]]/}"
+  echo "local_graph_ref_file=\${LOCAL_GRAPH_REF_FILE}"
+  echo "local_graph_ref_count=\${ref_count}"
+
+  release_local_graph_control_lock
+
+  if [[ -d "\${src}" ]]; then
+    GRAPH_INPUT="\${LOCAL_GRAPH_CACHE_DIR}"
+  else
+    GRAPH_INPUT="\${LOCAL_GRAPH_CACHE_DIR}/\$(basename "\${src}")"
+  fi
+
+  echo "graph_input_effective=\${GRAPH_INPUT}"
+  du -sh "\${GRAPH_INPUT}" 2>/dev/null || true
+  df -h "\${cache_parent}" || true
+  echo "date=\$(date)"
+  echo "======================================================================"
+}
+
 if [[ "${LOCAL_GRAPH_CACHE}" != "0" ]]; then
   LOCAL_GRAPH_AVAILABLE=1
   if ! LOCAL_GRAPH_ROOT_SELECTED="\$(select_local_graph_root)"; then
@@ -351,77 +588,14 @@ if [[ "${LOCAL_GRAPH_CACHE}" != "0" ]]; then
   if [[ "\${LOCAL_GRAPH_AVAILABLE}" == "1" ]]; then
     if [[ "${LOCAL_GRAPH_CACHE_SCOPE}" == "shared" ]]; then
       LOCAL_GRAPH_CACHE_PARENT="\${LOCAL_GRAPH_ROOT_SELECTED}/cache"
-      LOCAL_GRAPH_CACHE_KEY="\$(local_graph_cache_key "\${GRAPH_INPUT_ORIGINAL}")"
-      LOCAL_GRAPH_CACHE_DIR="\${LOCAL_GRAPH_CACHE_PARENT}/\${LOCAL_GRAPH_CACHE_KEY}"
-      LOCAL_GRAPH_LOCK_DIR="\${LOCAL_GRAPH_CACHE_DIR}.lock"
-      LOCAL_GRAPH_READY_FILE="\${LOCAL_GRAPH_CACHE_DIR}/.ready"
-      LOCAL_GRAPH_TMP_DIR="\${LOCAL_GRAPH_CACHE_DIR}.tmp.\${SLURM_JOB_ID:-manual_${RUN_ID}}"
-
-      if mkdir -p "\${LOCAL_GRAPH_CACHE_PARENT}"; then
-        echo "======================================================================"
-        echo "COPY GRAPH INPUT TO SHARED LOCAL CACHE"
-        echo "date=\$(date)"
-        echo "local_graph_cache=${LOCAL_GRAPH_CACHE}"
-        echo "local_graph_cache_scope=${LOCAL_GRAPH_CACHE_SCOPE}"
-        echo "local_graph_root_requested=${LOCAL_GRAPH_ROOT}"
-        echo "local_graph_root_selected=\${LOCAL_GRAPH_ROOT_SELECTED}"
-        echo "graph_input_original=\${GRAPH_INPUT_ORIGINAL}"
-        echo "local_graph_cache_dir=\${LOCAL_GRAPH_CACHE_DIR}"
-        du -sh "\${GRAPH_INPUT_ORIGINAL}" 2>/dev/null || true
-        df -h "\${LOCAL_GRAPH_CACHE_PARENT}" || true
-
-        if [[ -f "\${LOCAL_GRAPH_READY_FILE}" ]]; then
-          echo "Using existing local graph cache: \${LOCAL_GRAPH_CACHE_DIR}"
-        elif mkdir "\${LOCAL_GRAPH_LOCK_DIR}" 2>/dev/null; then
-          rm -rf -- "\${LOCAL_GRAPH_TMP_DIR}"
-          mkdir -p "\${LOCAL_GRAPH_TMP_DIR}"
-          if copy_graph_input_to_local "\${GRAPH_INPUT_ORIGINAL}" "\${LOCAL_GRAPH_TMP_DIR}"; then
-            printf '%s\n' "\${GRAPH_INPUT_ORIGINAL}" > "\${LOCAL_GRAPH_TMP_DIR}/.source"
-            touch "\${LOCAL_GRAPH_TMP_DIR}/.ready"
-            if [[ -e "\${LOCAL_GRAPH_CACHE_DIR}" && ! -f "\${LOCAL_GRAPH_READY_FILE}" ]]; then
-              rm -rf -- "\${LOCAL_GRAPH_CACHE_DIR}"
-            fi
-            mv "\${LOCAL_GRAPH_TMP_DIR}" "\${LOCAL_GRAPH_CACHE_DIR}"
-            rmdir "\${LOCAL_GRAPH_LOCK_DIR}" 2>/dev/null || true
-          else
-            COPY_STATUS="\$?"
-            echo "Local graph copy failed with status \${COPY_STATUS}" >&2
-            rm -rf -- "\${LOCAL_GRAPH_TMP_DIR}"
-            rmdir "\${LOCAL_GRAPH_LOCK_DIR}" 2>/dev/null || true
-            if [[ "${LOCAL_GRAPH_CACHE}" == "auto" ]]; then
-              echo "LOCAL_GRAPH_CACHE=auto: falling back to original GRAPH_INPUT." >&2
-              LOCAL_GRAPH_AVAILABLE=0
-            else
-              exit "\${COPY_STATUS}"
-            fi
-          fi
+      if ! prepare_shared_local_graph_cache "\${GRAPH_INPUT_ORIGINAL}" "\${LOCAL_GRAPH_CACHE_PARENT}"; then
+        COPY_STATUS="\$?"
+        if [[ "${LOCAL_GRAPH_CACHE}" == "auto" ]]; then
+          echo "LOCAL_GRAPH_CACHE=auto: falling back to original GRAPH_INPUT." >&2
+          LOCAL_GRAPH_AVAILABLE=0
         else
-          echo "Another job is filling local graph cache: \${LOCAL_GRAPH_CACHE_DIR}"
-          if ! wait_for_local_graph_cache "\${LOCAL_GRAPH_READY_FILE}" "\${LOCAL_GRAPH_LOCK_DIR}"; then
-            if [[ "${LOCAL_GRAPH_CACHE}" == "auto" ]]; then
-              echo "LOCAL_GRAPH_CACHE=auto: falling back to original GRAPH_INPUT." >&2
-              LOCAL_GRAPH_AVAILABLE=0
-            else
-              exit 2
-            fi
-          fi
+          exit "\${COPY_STATUS}"
         fi
-
-        if [[ "\${LOCAL_GRAPH_AVAILABLE}" == "1" ]]; then
-          if [[ -d "\${GRAPH_INPUT_ORIGINAL}" ]]; then
-            GRAPH_INPUT="\${LOCAL_GRAPH_CACHE_DIR}"
-          else
-            GRAPH_INPUT="\${LOCAL_GRAPH_CACHE_DIR}/\$(basename "\${GRAPH_INPUT_ORIGINAL}")"
-          fi
-          echo "graph_input_effective=\${GRAPH_INPUT}"
-          du -sh "\${GRAPH_INPUT}" 2>/dev/null || true
-          df -h "\${LOCAL_GRAPH_CACHE_PARENT}" || true
-        fi
-
-        echo "date=\$(date)"
-        echo "======================================================================"
-      else
-        LOCAL_GRAPH_AVAILABLE=0
       fi
     else
       LOCAL_GRAPH_JOB_DIR_CANDIDATE="\${LOCAL_GRAPH_ROOT_SELECTED}/\${SLURM_JOB_ID:-manual_${RUN_ID}}_${RUN_NAME}"
@@ -502,6 +676,7 @@ echo "date=\$(date)"
 echo "hostname=\$(hostname)"
 echo "slurm_job_id=\${SLURM_JOB_ID:-}"
 echo "partition=${PARTITION}"
+echo "nodelist=${NODELIST:-any}"
 echo "gpus=${GPUS}"
 echo "cpus_per_gpu=${CPUS_PER_GPU}"
 echo "cpus_per_task=${CPUS_PER_TASK}"
@@ -518,6 +693,7 @@ echo "local_graph_cache_scope=${LOCAL_GRAPH_CACHE_SCOPE}"
 echo "local_graph_cleanup=${LOCAL_GRAPH_CLEANUP}"
 echo "local_graph_copy_tool=${LOCAL_GRAPH_COPY_TOOL}"
 echo "local_graph_wait_timeout_sec=${LOCAL_GRAPH_WAIT_TIMEOUT_SEC}"
+echo "local_graph_stale_lock_sec=${LOCAL_GRAPH_STALE_LOCK_SEC}"
 echo "run_dir=${RUN_DIR}"
 echo "job_log=${LOG_DIR}/${RUN_NAME}.job.log"
 echo "epochs=${TRAIN_EPOCHS}"
@@ -662,8 +838,10 @@ local_graph_cache_scope=${LOCAL_GRAPH_CACHE_SCOPE}
 local_graph_cleanup=${LOCAL_GRAPH_CLEANUP}
 local_graph_copy_tool=${LOCAL_GRAPH_COPY_TOOL}
 local_graph_wait_timeout_sec=${LOCAL_GRAPH_WAIT_TIMEOUT_SEC}
+local_graph_stale_lock_sec=${LOCAL_GRAPH_STALE_LOCK_SEC}
 
 partition=${PARTITION}
+nodelist=${NODELIST:-any}
 time_limit=${TIME_LIMIT}
 gpus=${GPUS}
 cpus_per_task=${CPUS_PER_TASK}
