@@ -33,10 +33,13 @@ fi
 
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 DEFAULT_GRAPH_INPUT="${DEFAULT_GRAPH_INPUT:-/dicos_ui_home/ikomae/work/gnn/graphs/server_graph_export_energyflat200000_20260524_075508}"
+PARTITION_FOR_NAME="${PARTITION:-b6000-al9_long}"
+RESOURCE_TAG="${RESOURCE_TAG:-${PARTITION_FOR_NAME%%-*}}"
 
 export RUN_ID
+export RESOURCE_TAG
 export GRAPH_INPUT="${GRAPH_INPUT:-${DEFAULT_GRAPH_INPUT}}"
-export RUN_NAME="${RUN_NAME:-server_mass_waveform_direct_${TRAIN_EPOCHS}epoch_${RUN_ID}}"
+export RUN_NAME="${RUN_NAME:-server_mass_${RESOURCE_TAG}_${TRAIN_EPOCHS}epoch_${RUN_ID}}"
 export TRAIN_EPOCHS
 export TRAINING_TASK="mass"
 export MASS_CLASSIFICATION="1"

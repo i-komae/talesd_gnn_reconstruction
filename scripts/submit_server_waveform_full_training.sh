@@ -6,10 +6,9 @@ DEFAULT_GRAPH_INPUT="${DEFAULT_GRAPH_INPUT:-/dicos_ui_home/ikomae/work/gnn/graph
 GRAPH_INPUT="${GRAPH_INPUT:-${DEFAULT_GRAPH_INPUT}}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_reconstruction}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
-RUN_NAME="${RUN_NAME:-server_waveform_full_b6000_${RUN_ID}}"
-RUN_DIR="${RUN_DIR:-${OUTPUT_ROOT}/runs/${RUN_NAME}}"
 
 PARTITION="${PARTITION:-b6000-al9_long}"
+RESOURCE_TAG="${RESOURCE_TAG:-${PARTITION%%-*}}"
 GPUS="${GPUS:-1}"
 CPUS_PER_GPU="${CPUS_PER_GPU:-8}"
 MEM_PER_GPU_GB="${MEM_PER_GPU_GB:-256}"
@@ -33,6 +32,8 @@ if [[ -z "${TIME_LIMIT:-}" ]]; then
 fi
 
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}"
+RUN_NAME="${RUN_NAME:-server_reco_quality_${RESOURCE_TAG}_${TRAIN_EPOCHS}epoch_${RUN_ID}}"
+RUN_DIR="${RUN_DIR:-${OUTPUT_ROOT}/runs/${RUN_NAME}}"
 BATCH_SIZE="${BATCH_SIZE:-256}"
 TRAIN_WORKERS="${TRAIN_WORKERS:-6}"
 PREPROCESS_WORKERS="${PREPROCESS_WORKERS:-${CPUS_PER_TASK}}"

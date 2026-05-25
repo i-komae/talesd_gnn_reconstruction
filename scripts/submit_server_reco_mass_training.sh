@@ -24,11 +24,15 @@ if [[ $# -gt 0 ]]; then
 fi
 
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}"
 DEFAULT_GRAPH_INPUT="${DEFAULT_GRAPH_INPUT:-/dicos_ui_home/ikomae/work/gnn/graphs/server_graph_export_energyflat200000_20260524_075508}"
+PARTITION_FOR_NAME="${PARTITION:-b6000-al9_long}"
+RESOURCE_TAG="${RESOURCE_TAG:-${PARTITION_FOR_NAME%%-*}}"
 
 export RUN_ID
+export RESOURCE_TAG
 export GRAPH_INPUT="${GRAPH_INPUT:-${DEFAULT_GRAPH_INPUT}}"
-export RUN_NAME="${RUN_NAME:-server_reco_mass_quality_b6000_${RUN_ID}}"
+export RUN_NAME="${RUN_NAME:-server_reco_mass_quality_${RESOURCE_TAG}_${TRAIN_EPOCHS}epoch_${RUN_ID}}"
 export TRAINING_TASK="reconstruction"
 export MASS_CLASSIFICATION="1"
 export MASS_LOSS_WEIGHT="${MASS_LOSS_WEIGHT:-0.05}"
@@ -45,7 +49,7 @@ export WEIGHT_DECAY="${WEIGHT_DECAY:-3e-4}"
 export CLASSIFICATION_ARCH="${CLASSIFICATION_ARCH:-enhanced}"
 export WAVEFORM_ENCODER="${WAVEFORM_ENCODER:-cnn-gru}"
 
-export TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}"
+export TRAIN_EPOCHS
 export LR_SCHEDULER="${LR_SCHEDULER:-reduce-on-plateau}"
 export EARLY_STOPPING_PATIENCE="${EARLY_STOPPING_PATIENCE:-12}"
 export EARLY_STOPPING_MIN_EPOCHS="${EARLY_STOPPING_MIN_EPOCHS:-32}"
