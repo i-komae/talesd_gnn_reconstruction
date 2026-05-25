@@ -100,10 +100,39 @@ MAX_GRAPHS="${MAX_GRAPHS:-}"
 
 RUN_BUILD="${RUN_BUILD:-0}"
 SUMMARIZE_GRAPHS="${SUMMARIZE_GRAPHS:-0}"
+LOCAL_GRAPH_CACHE="${LOCAL_GRAPH_CACHE:-auto}"
+LOCAL_GRAPH_ROOT="${LOCAL_GRAPH_ROOT:-/ssd/ikomae/talesd_gnn}"
+LOCAL_GRAPH_CLEANUP="${LOCAL_GRAPH_CLEANUP:-1}"
+LOCAL_GRAPH_COPY_TOOL="${LOCAL_GRAPH_COPY_TOOL:-auto}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-/dicos_ui_home/ikomae/work/uv-cache}"
 UV_LINK_MODE="${UV_LINK_MODE:-copy}"
 OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 DRY_RUN="${DRY_RUN:-0}"
+
+case "${LOCAL_GRAPH_CACHE}" in
+  0|1|auto)
+    ;;
+  *)
+    echo "LOCAL_GRAPH_CACHE must be 0, 1, or auto: ${LOCAL_GRAPH_CACHE}" >&2
+    exit 2
+    ;;
+esac
+case "${LOCAL_GRAPH_CLEANUP}" in
+  0|1)
+    ;;
+  *)
+    echo "LOCAL_GRAPH_CLEANUP must be 0 or 1: ${LOCAL_GRAPH_CLEANUP}" >&2
+    exit 2
+    ;;
+esac
+case "${LOCAL_GRAPH_COPY_TOOL}" in
+  auto|rsync|cp)
+    ;;
+  *)
+    echo "LOCAL_GRAPH_COPY_TOOL must be auto, rsync, or cp: ${LOCAL_GRAPH_COPY_TOOL}" >&2
+    exit 2
+    ;;
+esac
 
 if [[ "${PARTITION}" == a100* && "${ALLOW_A100:-0}" != "1" ]]; then
   cat >&2 <<EOF
@@ -162,6 +191,116 @@ export UV_CACHE_DIR="${UV_CACHE_DIR}"
 export UV_LINK_MODE="${UV_LINK_MODE}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS}"
 
+GRAPH_INPUT_ORIGINAL="${GRAPH_INPUT}"
+LOCAL_GRAPH_JOB_DIR=""
+
+cleanup_local_graph_cache() {
+  if [[ -n "\${LOCAL_GRAPH_JOB_DIR}" && "${LOCAL_GRAPH_CLEANUP}" == "1" ]]; then
+    case "\${LOCAL_GRAPH_JOB_DIR}" in
+      "${LOCAL_GRAPH_ROOT%/}"/*)
+        echo "Cleaning local graph cache: \${LOCAL_GRAPH_JOB_DIR}"
+        rm -rf -- "\${LOCAL_GRAPH_JOB_DIR}"
+        ;;
+      *)
+        echo "Refusing to clean unexpected local graph cache path: \${LOCAL_GRAPH_JOB_DIR}" >&2
+        ;;
+    esac
+  fi
+}
+trap cleanup_local_graph_cache EXIT
+
+copy_graph_input_to_local() {
+  local src="\$1"
+  local dst="\$2"
+  local copy_tool="${LOCAL_GRAPH_COPY_TOOL}"
+
+  if [[ "\${copy_tool}" == "auto" ]]; then
+    if command -v rsync >/dev/null 2>&1; then
+      copy_tool="rsync"
+    else
+      copy_tool="cp"
+    fi
+  fi
+  echo "local_graph_copy_tool_effective=\${copy_tool}"
+
+  if [[ "\${copy_tool}" == "rsync" ]]; then
+    if ! command -v rsync >/dev/null 2>&1; then
+      echo "rsync requested but not found" >&2
+      return 127
+    fi
+    if [[ -d "\${src}" ]]; then
+      rsync -a --info=progress2 "\${src%/}/" "\${dst%/}/"
+    else
+      rsync -a --info=progress2 "\${src}" "\${dst%/}/"
+    fi
+  else
+    if [[ -d "\${src}" ]]; then
+      cp -a "\${src%/}/." "\${dst%/}/"
+    else
+      cp -a "\${src}" "\${dst%/}/"
+    fi
+  fi
+}
+
+if [[ "${LOCAL_GRAPH_CACHE}" != "0" ]]; then
+  LOCAL_GRAPH_AVAILABLE=1
+  if [[ "${LOCAL_GRAPH_ROOT}" == /ssd/* && ! -d /ssd ]]; then
+    LOCAL_GRAPH_AVAILABLE=0
+  fi
+
+  if [[ "\${LOCAL_GRAPH_AVAILABLE}" == "1" ]]; then
+    LOCAL_GRAPH_JOB_DIR="${LOCAL_GRAPH_ROOT%/}/\${SLURM_JOB_ID:-manual_${RUN_ID}}_${RUN_NAME}"
+    LOCAL_GRAPH_INPUT_DIR="\${LOCAL_GRAPH_JOB_DIR}/graphs"
+
+    if mkdir -p "\${LOCAL_GRAPH_INPUT_DIR}"; then
+      echo "======================================================================"
+      echo "COPY GRAPH INPUT TO LOCAL SSD"
+      echo "date=\$(date)"
+      echo "local_graph_cache=${LOCAL_GRAPH_CACHE}"
+      echo "graph_input_original=\${GRAPH_INPUT_ORIGINAL}"
+      echo "local_graph_input_dir=\${LOCAL_GRAPH_INPUT_DIR}"
+      du -sh "\${GRAPH_INPUT_ORIGINAL}" 2>/dev/null || true
+      df -h "\${LOCAL_GRAPH_JOB_DIR}" || true
+      if copy_graph_input_to_local "\${GRAPH_INPUT_ORIGINAL}" "\${LOCAL_GRAPH_INPUT_DIR}"; then
+        if [[ -d "\${GRAPH_INPUT_ORIGINAL}" ]]; then
+          GRAPH_INPUT="\${LOCAL_GRAPH_INPUT_DIR}"
+        else
+          GRAPH_INPUT="\${LOCAL_GRAPH_INPUT_DIR}/\$(basename "\${GRAPH_INPUT_ORIGINAL}")"
+        fi
+
+        echo "graph_input_effective=\${GRAPH_INPUT}"
+        du -sh "\${GRAPH_INPUT}" 2>/dev/null || true
+        df -h "\${LOCAL_GRAPH_JOB_DIR}" || true
+        echo "date=\$(date)"
+        echo "======================================================================"
+      else
+        COPY_STATUS="\$?"
+        echo "Local graph copy failed with status \${COPY_STATUS}" >&2
+        if [[ "${LOCAL_GRAPH_CACHE}" == "auto" ]]; then
+          echo "LOCAL_GRAPH_CACHE=auto: falling back to original GRAPH_INPUT." >&2
+          rm -rf -- "\${LOCAL_GRAPH_JOB_DIR}"
+          LOCAL_GRAPH_JOB_DIR=""
+          LOCAL_GRAPH_AVAILABLE=0
+        else
+          exit "\${COPY_STATUS}"
+        fi
+      fi
+    else
+      LOCAL_GRAPH_AVAILABLE=0
+    fi
+  fi
+
+  if [[ "\${LOCAL_GRAPH_AVAILABLE}" != "1" ]]; then
+    if [[ "${LOCAL_GRAPH_CACHE}" == "auto" ]]; then
+      echo "LOCAL_GRAPH_CACHE=auto: local graph cache is unavailable; using original GRAPH_INPUT."
+      LOCAL_GRAPH_JOB_DIR=""
+    else
+      echo "LOCAL_GRAPH_CACHE=1 but local graph cache is unavailable: ${LOCAL_GRAPH_ROOT}" >&2
+      exit 2
+    fi
+  fi
+fi
+
 for cmd in latex dvipng kpsewhich; do
   if ! command -v "\${cmd}" >/dev/null 2>&1; then
     echo "Missing \${cmd}. Diagnostics use matplotlib text.usetex=True, so install TeX Live before training." >&2
@@ -184,7 +323,12 @@ echo "cpus_per_gpu=${CPUS_PER_GPU}"
 echo "cpus_per_task=${CPUS_PER_TASK}"
 echo "mem_per_gpu_gb=${MEM_PER_GPU_GB}"
 echo "mem=${MEM}"
-echo "graph_input=${GRAPH_INPUT}"
+echo "graph_input_original=\${GRAPH_INPUT_ORIGINAL}"
+echo "graph_input_effective=\${GRAPH_INPUT}"
+echo "local_graph_cache=${LOCAL_GRAPH_CACHE}"
+echo "local_graph_root=${LOCAL_GRAPH_ROOT}"
+echo "local_graph_cleanup=${LOCAL_GRAPH_CLEANUP}"
+echo "local_graph_copy_tool=${LOCAL_GRAPH_COPY_TOOL}"
 echo "run_dir=${RUN_DIR}"
 echo "job_log=${LOG_DIR}/${RUN_NAME}.job.log"
 echo "epochs=${TRAIN_EPOCHS}"
@@ -224,7 +368,7 @@ if [[ "${SUMMARIZE_GRAPHS}" == "1" ]]; then
     echo "date=\$(date)"
     echo "summary_json=${SUMMARY_DIR}/graph_summary.json"
     echo "summary_log=${SUMMARY_DIR}/graph_summary.log"
-    .venv/bin/python scripts/summarize_graph_shards.py "${GRAPH_INPUT}" \\
+    .venv/bin/python scripts/summarize_graph_shards.py "\${GRAPH_INPUT}" \\
       --workers "${PREPROCESS_WORKERS}" \\
       -o "${SUMMARY_DIR}/graph_summary.json"
     echo "date=\$(date)"
@@ -238,7 +382,7 @@ env \\
   RUN_ID="${RUN_ID}" \\
   RUN_NAME="${RUN_NAME}" \\
   RUN_DIR="${RUN_DIR}" \\
-  GRAPH_INPUT="${GRAPH_INPUT}" \\
+  GRAPH_INPUT="\${GRAPH_INPUT}" \\
   MODEL_ARCHITECTURE="${MODEL_ARCHITECTURE}" \\
   HIDDEN_DIM="${HIDDEN_DIM}" \\
   LAYERS="${LAYERS}" \\
@@ -318,8 +462,13 @@ run_dir:
 job_log:
   ${LOG_DIR}/${RUN_NAME}.job.log
 
-graph_input:
+graph_input_original:
   ${GRAPH_INPUT}
+
+local_graph_cache=${LOCAL_GRAPH_CACHE}
+local_graph_root=${LOCAL_GRAPH_ROOT}
+local_graph_cleanup=${LOCAL_GRAPH_CLEANUP}
+local_graph_copy_tool=${LOCAL_GRAPH_COPY_TOOL}
 
 partition=${PARTITION}
 time_limit=${TIME_LIMIT}
