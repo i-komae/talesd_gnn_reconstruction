@@ -74,6 +74,7 @@ def main() -> None:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--num-workers", type=int, default=-1)
     parser.add_argument("--prefetch-factor", type=int, default=2)
+    parser.add_argument("--persistent-workers", action="store_true", help="DataLoader workersをepoch間で保持する")
     parser.add_argument("--collate-backend", choices=["auto", "cpp", "python"], default="cpp")
     parser.add_argument("--collate-threads", type=int, default=0)
     parser.add_argument("--diagnostic-energy-bin-width", type=float, default=0.1)
@@ -142,7 +143,7 @@ def main() -> None:
             prefetch_factor=args.prefetch_factor,
             seed=12345 + _base_epoch(list(ckpt.get("history", []))),
             pin_memory=pin_memory,
-            persistent_workers=True,
+            persistent_workers=bool(args.persistent_workers),
             collate_backend=collate_backend,
             collate_threads=collate_threads,
         )
@@ -157,7 +158,7 @@ def main() -> None:
             prefetch_factor=args.prefetch_factor,
             seed=12345,
             pin_memory=pin_memory,
-            persistent_workers=True,
+            persistent_workers=bool(args.persistent_workers),
             collate_backend=collate_backend,
             collate_threads=collate_threads,
         )
@@ -180,6 +181,7 @@ def main() -> None:
         print(
             f"graphs={len(dataset)} train={len(train_indices)} val={len(val_indices)} test={len(test_indices)} "
             f"device={device} workers={num_workers} batch_size={args.batch_size} "
+            f"prefetch_factor={args.prefetch_factor} persistent_workers={int(bool(args.persistent_workers))} "
             f"collate_backend={collate_backend} collate_threads={collate_threads or 'auto'} "
             f"additional_epochs={args.additional_epochs} lr={args.lr} "
             f"target_weights={target_weights_np.tolist()}",
@@ -353,6 +355,7 @@ def main() -> None:
                 "device": device,
                 "num_workers": num_workers,
                 "prefetch_factor": args.prefetch_factor,
+                "persistent_workers": bool(args.persistent_workers),
                 "collate_backend": collate_backend,
                 "collate_threads": collate_threads,
                 "learning_rate": float(args.lr),
