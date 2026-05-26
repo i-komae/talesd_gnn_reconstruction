@@ -13,9 +13,13 @@ Main environment overrides:
   RUN_NAME=small_energyflat2000_YYYYMMDD_HHMMSS
   GRAPH_OUTPUT=/path/to/output.h5
   PER_BIN=2000
+  EXTRA_PER_BINS=500,200
   MAX_TOTAL=50000
   PARTICLE_FILTER=all|proton|iron
   SCAN_WORKERS=auto
+  WRITE_WORKERS=auto
+  OUTPUT_SHARDS=auto
+  TARGET_EVENTS_PER_SHARD=20000
   PROGRESS_INTERVAL=30
   PARTITION=auto
   CPUS_PER_TASK=auto
@@ -221,6 +225,7 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_re
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 
 PER_BIN="${PER_BIN:-2000}"
+EXTRA_PER_BINS="${EXTRA_PER_BINS:-}"
 MAX_TOTAL="${MAX_TOTAL:-}"
 ENERGY_BIN_WIDTH="${ENERGY_BIN_WIDTH:-0.1}"
 STRATIFY_PARTICLE="${STRATIFY_PARTICLE:-1}"
@@ -237,6 +242,9 @@ PARTITION="${PARTITION:-auto}"
 NODELIST="${NODELIST:-}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-auto}"
 SCAN_WORKERS="${SCAN_WORKERS:-auto}"
+WRITE_WORKERS="${WRITE_WORKERS:-auto}"
+OUTPUT_SHARDS="${OUTPUT_SHARDS:-auto}"
+TARGET_EVENTS_PER_SHARD="${TARGET_EVENTS_PER_SHARD:-20000}"
 MEM="${MEM:-auto}"
 TIME_LIMIT="${TIME_LIMIT:-1-00:00:00}"
 RUN_NAME="${RUN_NAME:-small_graph_energyflat${PER_BIN}_${RUN_ID}}"
@@ -290,6 +298,18 @@ if ! [[ "${PER_BIN}" =~ ^[1-9][0-9]*$ ]]; then
   echo "PER_BIN must be a positive integer: ${PER_BIN}" >&2
   exit 2
 fi
+if [[ -n "${EXTRA_PER_BINS}" ]]; then
+  for extra_per_bin in $(split_csv "${EXTRA_PER_BINS}"); do
+    if ! [[ "${extra_per_bin}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "EXTRA_PER_BINS must be a comma-separated list of positive integers: ${EXTRA_PER_BINS}" >&2
+      exit 2
+    fi
+    if (( extra_per_bin >= PER_BIN )); then
+      echo "EXTRA_PER_BINS values must be smaller than PER_BIN (${extra_per_bin} >= ${PER_BIN})" >&2
+      exit 2
+    fi
+  done
+fi
 case "${AUTO_RESOURCES}" in
   0|1) ;;
   *)
@@ -313,6 +333,10 @@ for auto_value_name in AUTO_MEM_RESERVE_MB AUTO_MAX_CPUS AUTO_CPU_FRACTION_PERCE
 done
 if [[ -n "${MAX_TOTAL}" ]] && ! [[ "${MAX_TOTAL}" =~ ^[1-9][0-9]*$ ]]; then
   echo "MAX_TOTAL must be empty or a positive integer: ${MAX_TOTAL}" >&2
+  exit 2
+fi
+if ! [[ "${TARGET_EVENTS_PER_SHARD}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "TARGET_EVENTS_PER_SHARD must be a positive integer: ${TARGET_EVENTS_PER_SHARD}" >&2
   exit 2
 fi
 if [[ ! -d "${REPO}" ]]; then
@@ -390,6 +414,24 @@ if (( SCAN_WORKERS > CPUS_PER_TASK )); then
   echo "SCAN_WORKERS must be <= CPUS_PER_TASK (${SCAN_WORKERS} > ${CPUS_PER_TASK})" >&2
   exit 2
 fi
+if [[ "${WRITE_WORKERS}" == "auto" ]]; then
+  WRITE_WORKERS="${SCAN_WORKERS}"
+elif ! [[ "${WRITE_WORKERS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "WRITE_WORKERS must be auto or a positive integer: ${WRITE_WORKERS}" >&2
+  exit 2
+fi
+if (( WRITE_WORKERS > CPUS_PER_TASK )); then
+  echo "WRITE_WORKERS must be <= CPUS_PER_TASK (${WRITE_WORKERS} > ${CPUS_PER_TASK})" >&2
+  exit 2
+fi
+if [[ "${OUTPUT_SHARDS}" == "auto" ]]; then
+  OUTPUT_SHARDS_ARG=0
+elif ! [[ "${OUTPUT_SHARDS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "OUTPUT_SHARDS must be auto or a positive integer: ${OUTPUT_SHARDS}" >&2
+  exit 2
+else
+  OUTPUT_SHARDS_ARG="${OUTPUT_SHARDS}"
+fi
 
 SBATCH_FILE="${SBATCH_DIR}/${RUN_NAME}.sbatch"
 SBATCH_NODELIST_LINE=""
@@ -402,6 +444,7 @@ REPO=${REPO}
 GRAPH_INPUT=${GRAPH_INPUT}
 GRAPH_OUTPUT=${GRAPH_OUTPUT}
 PER_BIN=${PER_BIN}
+EXTRA_PER_BINS=${EXTRA_PER_BINS}
 MAX_TOTAL=${MAX_TOTAL}
 ENERGY_BIN_WIDTH=${ENERGY_BIN_WIDTH}
 STRATIFY_PARTICLE=${STRATIFY_PARTICLE}
@@ -410,6 +453,10 @@ SEED=${SEED}
 SHOW_PROGRESS=${SHOW_PROGRESS}
 PROGRESS_INTERVAL=${PROGRESS_INTERVAL}
 SCAN_WORKERS=${SCAN_WORKERS}
+WRITE_WORKERS=${WRITE_WORKERS}
+OUTPUT_SHARDS=${OUTPUT_SHARDS}
+OUTPUT_SHARDS_ARG=${OUTPUT_SHARDS_ARG}
+TARGET_EVENTS_PER_SHARD=${TARGET_EVENTS_PER_SHARD}
 INPUT_SHARD_COUNT=${INPUT_SHARD_COUNT}
 AUTO_RESOURCES=${AUTO_RESOURCES}
 AUTO_MAX_CPUS_EFFECTIVE=${AUTO_MAX_CPUS_EFFECTIVE}
@@ -440,6 +487,7 @@ REPO=$(q "${REPO}")
 GRAPH_INPUT=$(q "${GRAPH_INPUT}")
 GRAPH_OUTPUT=$(q "${GRAPH_OUTPUT}")
 PER_BIN=$(q "${PER_BIN}")
+EXTRA_PER_BINS=$(q "${EXTRA_PER_BINS}")
 MAX_TOTAL=$(q "${MAX_TOTAL}")
 ENERGY_BIN_WIDTH=$(q "${ENERGY_BIN_WIDTH}")
 STRATIFY_PARTICLE=$(q "${STRATIFY_PARTICLE}")
@@ -449,6 +497,10 @@ OVERWRITE=$(q "${OVERWRITE}")
 SHOW_PROGRESS=$(q "${SHOW_PROGRESS}")
 PROGRESS_INTERVAL=$(q "${PROGRESS_INTERVAL}")
 SCAN_WORKERS=$(q "${SCAN_WORKERS}")
+WRITE_WORKERS=$(q "${WRITE_WORKERS}")
+OUTPUT_SHARDS=$(q "${OUTPUT_SHARDS}")
+OUTPUT_SHARDS_ARG=$(q "${OUTPUT_SHARDS_ARG}")
+TARGET_EVENTS_PER_SHARD=$(q "${TARGET_EVENTS_PER_SHARD}")
 RUN_NAME=$(q "${RUN_NAME}")
 RUN_DIR=$(q "${RUN_DIR}")
 LOG_DIR=$(q "${LOG_DIR}")
@@ -472,6 +524,7 @@ JOB_LOG_PATH="\${LOG_DIR}/\${RUN_NAME}.job.log"
   echo "graph_input=\${GRAPH_INPUT}"
   echo "graph_output=\${GRAPH_OUTPUT}"
   echo "per_bin=\${PER_BIN}"
+  echo "extra_per_bins=\${EXTRA_PER_BINS}"
   echo "max_total=\${MAX_TOTAL}"
   echo "energy_bin_width=\${ENERGY_BIN_WIDTH}"
   echo "stratify_particle=\${STRATIFY_PARTICLE}"
@@ -480,6 +533,9 @@ JOB_LOG_PATH="\${LOG_DIR}/\${RUN_NAME}.job.log"
   echo "show_progress=\${SHOW_PROGRESS}"
   echo "progress_interval_sec=\${PROGRESS_INTERVAL}"
   echo "scan_workers=\${SCAN_WORKERS}"
+  echo "write_workers=\${WRITE_WORKERS}"
+  echo "output_shards=\${OUTPUT_SHARDS}"
+  echo "target_events_per_shard=\${TARGET_EVENTS_PER_SHARD}"
   echo "input_shard_count=${INPUT_SHARD_COUNT}"
   echo "auto_resources=${AUTO_RESOURCES}"
   echo "auto_max_cpus_effective=${AUTO_MAX_CPUS_EFFECTIVE}"
@@ -497,7 +553,14 @@ cmd=(.venv/bin/python scripts/make_small_graph_dataset.py
   --particle-filter "\${PARTICLE_FILTER}"
   --seed "\${SEED}"
   --scan-workers "\${SCAN_WORKERS}"
+  --write-workers "\${WRITE_WORKERS}"
+  --output-shards "\${OUTPUT_SHARDS_ARG}"
+  --target-events-per-shard "\${TARGET_EVENTS_PER_SHARD}"
 )
+if [[ -n "\${EXTRA_PER_BINS}" ]]; then
+  IFS=',' read -r -a extra_per_bin_values <<< "\${EXTRA_PER_BINS}"
+  cmd+=(--also-per-bin "\${extra_per_bin_values[@]}")
+fi
 if [[ -n "\${MAX_TOTAL}" ]]; then
   cmd+=(--max-total "\${MAX_TOTAL}")
 fi
@@ -559,12 +622,16 @@ nodelist=${NODELIST:-}
 time_limit=${TIME_LIMIT}
 cpus_per_task=${CPUS_PER_TASK}
 scan_workers=${SCAN_WORKERS}
+write_workers=${WRITE_WORKERS}
+output_shards=${OUTPUT_SHARDS}
+target_events_per_shard=${TARGET_EVENTS_PER_SHARD}
 input_shard_count=${INPUT_SHARD_COUNT}
 auto_resources=${AUTO_RESOURCES}
 auto_max_cpus_effective=${AUTO_MAX_CPUS_EFFECTIVE}
 resource_sizing_node=${RESOURCE_SIZING_NODE:-}
 mem=${MEM}
 per_bin=${PER_BIN}
+extra_per_bins=${EXTRA_PER_BINS}
 max_total=${MAX_TOTAL}
 particle_filter=${PARTICLE_FILTER}
 progress_interval_sec=${PROGRESS_INTERVAL}
