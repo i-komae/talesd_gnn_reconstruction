@@ -6,7 +6,9 @@ import hashlib
 import heapq
 import json
 import math
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import os
+import time
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -126,11 +128,23 @@ def _dense_or_sorted_keys(events: h5py.Group) -> list[str]:
     return keys
 
 
-def _count_events(paths: list[Path]) -> list[int]:
+def _progress_interval_seconds() -> float:
+    try:
+        return max(float(os.environ.get("TALESD_GNN_PROGRESS_INTERVAL", "30")), 1.0)
+    except ValueError:
+        return 30.0
+
+
+def _count_events(paths: list[Path], *, show_progress: bool) -> list[int]:
     counts = []
-    for path in paths:
-        with h5py.File(path, "r") as h5:
-            counts.append(int(len(h5["events"])))
+    bar = progress_bar("count graph events", len(paths), enabled=show_progress)
+    try:
+        for path in paths:
+            with h5py.File(path, "r") as h5:
+                counts.append(int(len(h5["events"])))
+            bar.update(1)
+    finally:
+        bar.close()
     return counts
 
 
@@ -280,13 +294,14 @@ def _scan_selected(
     scan_workers: int,
     show_progress: bool,
 ) -> tuple[list[SelectedEvent], dict[str, Any]]:
-    counts = _count_events(paths)
+    counts = _count_events(paths, show_progress=show_progress)
     total_events = int(sum(counts))
     reservoirs: dict[tuple[Any, int], list[tuple[float, int, int, SelectedEvent]]] = {}
     stats = _new_stats()
     workers = max(min(int(scan_workers), len(paths)), 1)
     workers_used = workers
     items = [(path_index, str(path)) for path_index, path in enumerate(paths)]
+    progress_write(f"scan setup: input_files={len(paths)} input_events={total_events} scan_workers={workers}")
     bar = progress_bar("scan small candidates", total_events, enabled=show_progress)
     try:
         def scan_serial() -> None:
@@ -321,11 +336,39 @@ def _scan_selected(
                         )
                         for chunk in chunks
                     ]
-                    for future in as_completed(futures):
-                        part_reservoirs, part_stats = future.result()
-                        _merge_reservoirs(reservoirs, part_reservoirs, per_bin=per_bin)
-                        _merge_stats(stats, part_stats)
-                        bar.update(int(part_stats["input_events"]))
+                    pending = set(futures)
+                    completed_chunks = 0
+                    last_wait_report = time.perf_counter()
+                    while pending:
+                        done, pending = wait(
+                            pending,
+                            timeout=_progress_interval_seconds(),
+                            return_when=FIRST_COMPLETED,
+                        )
+                        if not done:
+                            progress_write(
+                                "scan small candidates: "
+                                f"completed_chunks={completed_chunks}/{len(futures)} "
+                                f"events={bar.count}/{total_events} "
+                                f"pending_chunks={len(pending)}"
+                            )
+                            last_wait_report = time.perf_counter()
+                            continue
+                        for future in done:
+                            part_reservoirs, part_stats = future.result()
+                            _merge_reservoirs(reservoirs, part_reservoirs, per_bin=per_bin)
+                            _merge_stats(stats, part_stats)
+                            bar.update(int(part_stats["input_events"]))
+                            completed_chunks += 1
+                        now = time.perf_counter()
+                        if now - last_wait_report >= _progress_interval_seconds():
+                            progress_write(
+                                "scan small candidates: "
+                                f"completed_chunks={completed_chunks}/{len(futures)} "
+                                f"events={bar.count}/{total_events} "
+                                f"pending_chunks={len(pending)}"
+                            )
+                            last_wait_report = now
             except PermissionError as exc:
                 progress_write(f"scan workers unavailable ({exc}); falling back to scan_workers=1")
                 workers_used = 1
