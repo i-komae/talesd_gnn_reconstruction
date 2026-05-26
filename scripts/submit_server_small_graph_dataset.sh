@@ -14,6 +14,7 @@ Main environment overrides:
   GRAPH_OUTPUT=/path/to/output.h5
   PER_BIN=2000
   EXTRA_PER_BINS=500,200
+  DERIVE_ONLY=1
   MAX_TOTAL=50000
   PARTICLE_FILTER=all|proton|iron
   SCAN_WORKERS=auto
@@ -225,7 +226,8 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_re
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 
 PER_BIN="${PER_BIN:-2000}"
-EXTRA_PER_BINS="${EXTRA_PER_BINS:-}"
+EXTRA_PER_BINS="${EXTRA_PER_BINS:-500,200}"
+DERIVE_ONLY="${DERIVE_ONLY:-0}"
 MAX_TOTAL="${MAX_TOTAL:-}"
 ENERGY_BIN_WIDTH="${ENERGY_BIN_WIDTH:-0.1}"
 STRATIFY_PARTICLE="${STRATIFY_PARTICLE:-1}"
@@ -280,6 +282,13 @@ case "${SHOW_PROGRESS}" in
   0|1) ;;
   *)
     echo "SHOW_PROGRESS must be 0 or 1: ${SHOW_PROGRESS}" >&2
+    exit 2
+    ;;
+esac
+case "${DERIVE_ONLY}" in
+  0|1) ;;
+  *)
+    echo "DERIVE_ONLY must be 0 or 1: ${DERIVE_ONLY}" >&2
     exit 2
     ;;
 esac
@@ -348,7 +357,7 @@ if [[ ! -e "${GRAPH_INPUT}" ]]; then
   echo "Set GRAPH_INPUT=/path/to/large_graph_dir_or_h5 to override the default." >&2
   exit 2
 fi
-if [[ -e "${GRAPH_OUTPUT}" && "${OVERWRITE}" != "1" ]]; then
+if [[ "${DERIVE_ONLY}" != "1" && -e "${GRAPH_OUTPUT}" && "${OVERWRITE}" != "1" ]]; then
   echo "graph output already exists: ${GRAPH_OUTPUT}" >&2
   echo "Set OVERWRITE=1 or choose a different RUN_NAME/GRAPH_OUTPUT." >&2
   exit 2
@@ -445,6 +454,7 @@ GRAPH_INPUT=${GRAPH_INPUT}
 GRAPH_OUTPUT=${GRAPH_OUTPUT}
 PER_BIN=${PER_BIN}
 EXTRA_PER_BINS=${EXTRA_PER_BINS}
+DERIVE_ONLY=${DERIVE_ONLY}
 MAX_TOTAL=${MAX_TOTAL}
 ENERGY_BIN_WIDTH=${ENERGY_BIN_WIDTH}
 STRATIFY_PARTICLE=${STRATIFY_PARTICLE}
@@ -488,6 +498,7 @@ GRAPH_INPUT=$(q "${GRAPH_INPUT}")
 GRAPH_OUTPUT=$(q "${GRAPH_OUTPUT}")
 PER_BIN=$(q "${PER_BIN}")
 EXTRA_PER_BINS=$(q "${EXTRA_PER_BINS}")
+DERIVE_ONLY=$(q "${DERIVE_ONLY}")
 MAX_TOTAL=$(q "${MAX_TOTAL}")
 ENERGY_BIN_WIDTH=$(q "${ENERGY_BIN_WIDTH}")
 STRATIFY_PARTICLE=$(q "${STRATIFY_PARTICLE}")
@@ -525,6 +536,7 @@ JOB_LOG_PATH="\${LOG_DIR}/\${RUN_NAME}.job.log"
   echo "graph_output=\${GRAPH_OUTPUT}"
   echo "per_bin=\${PER_BIN}"
   echo "extra_per_bins=\${EXTRA_PER_BINS}"
+  echo "derive_only=\${DERIVE_ONLY}"
   echo "max_total=\${MAX_TOTAL}"
   echo "energy_bin_width=\${ENERGY_BIN_WIDTH}"
   echo "stratify_particle=\${STRATIFY_PARTICLE}"
@@ -561,6 +573,9 @@ if [[ -n "\${EXTRA_PER_BINS}" ]]; then
   IFS=',' read -r -a extra_per_bin_values <<< "\${EXTRA_PER_BINS}"
   cmd+=(--also-per-bin "\${extra_per_bin_values[@]}")
 fi
+if [[ "\${DERIVE_ONLY}" == "1" ]]; then
+  cmd+=(--derive-only)
+fi
 if [[ -n "\${MAX_TOTAL}" ]]; then
   cmd+=(--max-total "\${MAX_TOTAL}")
 fi
@@ -582,19 +597,42 @@ printf "\\n" | tee -a "\${JOB_LOG_PATH}"
 
 "\${cmd[@]}" 2>&1 | tee -a "\${JOB_LOG_PATH}"
 
-SUMMARY_JSON="\${SUMMARY_DIR}/\${RUN_NAME}.graph_summary.json"
-.venv/bin/python scripts/summarize_graph_shards.py "\${GRAPH_OUTPUT}" -o "\${SUMMARY_JSON}" 2>&1 | tee -a "\${JOB_LOG_PATH}"
-printf "%s\\n" "\${GRAPH_OUTPUT}" > "\${CONFIG_DIR}/graph_input.txt"
+GRAPH_INPUTS_LIST="\${CONFIG_DIR}/graph_inputs.txt"
+: > "\${GRAPH_INPUTS_LIST}"
+if [[ "\${DERIVE_ONLY}" != "1" ]]; then
+  SUMMARY_JSON="\${SUMMARY_DIR}/\${RUN_NAME}.graph_summary.json"
+  .venv/bin/python scripts/summarize_graph_shards.py "\${GRAPH_OUTPUT}" -o "\${SUMMARY_JSON}" 2>&1 | tee -a "\${JOB_LOG_PATH}"
+  printf "%s\\n" "\${GRAPH_OUTPUT}" >> "\${GRAPH_INPUTS_LIST}"
+  printf "%s\\n" "\${GRAPH_OUTPUT}" > "\${CONFIG_DIR}/graph_input.txt"
+else
+  SUMMARY_JSON=""
+fi
+
+if [[ -n "\${EXTRA_PER_BINS}" ]]; then
+  graph_dir=\$(dirname "\${GRAPH_OUTPUT}")
+  graph_file=\$(basename "\${GRAPH_OUTPUT}")
+  graph_stem="\${graph_file%.h5}"
+  IFS=',' read -r -a extra_per_bin_values <<< "\${EXTRA_PER_BINS}"
+  for extra_per_bin in "\${extra_per_bin_values[@]}"; do
+    extra_output="\${graph_dir}/\${graph_stem}-perbin\${extra_per_bin}.h5"
+    extra_summary="\${SUMMARY_DIR}/\${RUN_NAME}-perbin\${extra_per_bin}.graph_summary.json"
+    .venv/bin/python scripts/summarize_graph_shards.py "\${extra_output}" -o "\${extra_summary}" 2>&1 | tee -a "\${JOB_LOG_PATH}"
+    printf "%s\\n" "\${extra_output}" >> "\${GRAPH_INPUTS_LIST}"
+  done
+  if [[ "\${DERIVE_ONLY}" == "1" ]]; then
+    cp "\${GRAPH_INPUTS_LIST}" "\${CONFIG_DIR}/graph_input.txt"
+  fi
+fi
 
 {
   echo "======================================================================"
   echo "SMALL GRAPH DATASET COMPLETE"
   echo
-  echo "Use this HDF5 graph for small tuning:"
-  echo "  \${GRAPH_OUTPUT}"
+  echo "Use these HDF5 graphs for small tuning:"
+  sed 's/^/  /' "\${GRAPH_INPUTS_LIST}"
   echo
-  echo "summary:"
-  echo "  \${SUMMARY_JSON}"
+  echo "summaries:"
+  ls -1 "\${SUMMARY_DIR}"/\${RUN_NAME}*.graph_summary.json 2>/dev/null | sed 's/^/  /' || true
   echo
   echo "date=\$(date)"
   echo "======================================================================"
@@ -632,6 +670,7 @@ resource_sizing_node=${RESOURCE_SIZING_NODE:-}
 mem=${MEM}
 per_bin=${PER_BIN}
 extra_per_bins=${EXTRA_PER_BINS}
+derive_only=${DERIVE_ONLY}
 max_total=${MAX_TOTAL}
 particle_filter=${PARTICLE_FILTER}
 progress_interval_sec=${PROGRESS_INTERVAL}

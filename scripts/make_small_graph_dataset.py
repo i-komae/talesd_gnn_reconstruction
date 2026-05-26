@@ -701,6 +701,11 @@ def main() -> None:
         default=[],
         help="also write smaller datasets with these per-bin limits from the same scan",
     )
+    parser.add_argument(
+        "--derive-only",
+        action="store_true",
+        help="read an existing small dataset and write only --also-per-bin derived datasets",
+    )
     parser.add_argument("--max-total", type=int, default=None, help="optional total cap after per-bin sampling")
     parser.add_argument("--energy-bin-width", type=float, default=0.1, help="true log10(E/eV) bin width")
     parser.add_argument("--stratify-particle", dest="stratify_particle", action="store_true", default=True)
@@ -722,6 +727,8 @@ def main() -> None:
         raise SystemExit("--also-per-bin values must be positive")
     if any(value >= args.per_bin for value in extra_per_bins):
         raise SystemExit("--also-per-bin values must be smaller than --per-bin")
+    if args.derive_only and not extra_per_bins:
+        raise SystemExit("--derive-only requires --also-per-bin")
     if args.energy_bin_width <= 0:
         raise SystemExit("--energy-bin-width must be positive")
     if args.scan_workers <= 0:
@@ -744,16 +751,23 @@ def main() -> None:
     output_jobs = [(args.per_bin, output)]
     output_jobs.extend((per_bin, _extra_output_path(output, per_bin)) for per_bin in extra_per_bins)
     existing_outputs: list[Path] = []
-    for _per_bin, job_output in output_jobs:
+    checked_output_jobs = output_jobs[1:] if args.derive_only else output_jobs
+    for _per_bin, job_output in checked_output_jobs:
         existing_outputs.extend(_existing_output_paths(job_output))
     if existing_outputs and not args.overwrite:
         raise SystemExit(f"output already exists; pass --overwrite to replace: {existing_outputs[0]}")
+    if args.derive_only:
+        derived_existing = {path for _per_bin, job_output in output_jobs[1:] for path in _existing_output_paths(job_output)}
+        paths = [path for path in paths if path not in derived_existing]
+        if not paths:
+            raise SystemExit("no input graph HDF5 files remain after excluding derived output files")
 
     config = {
         "input_graphs": [str(path) for path in paths],
         "output": str(output),
         "per_bin": args.per_bin,
         "also_per_bin": extra_per_bins,
+        "derive_only": args.derive_only,
         "max_total": args.max_total,
         "energy_bin_width": args.energy_bin_width,
         "stratify_particle": args.stratify_particle,
@@ -780,35 +794,42 @@ def main() -> None:
     if existing_outputs:
         for path in existing_outputs:
             path.unlink()
-    if args.output_shards > 0:
-        main_output_shards = min(args.output_shards, len(selected))
+    if args.derive_only:
+        derived_paths = paths
+        derived_selected = selected
+        print(f"derive_input: {args.graphs}")
+        print(f"derive_selected_events: {stats['selected_events']}")
     else:
-        main_output_shards = min(args.write_workers, len(selected))
-    main_write_workers = min(args.write_workers, main_output_shards)
-    stats["write_workers"] = main_write_workers
-    stats["output_shards"] = main_output_shards
-    main_output_paths, main_chunks = _write_selected(
-        paths,
-        selected,
-        output,
-        config=config,
-        show_progress=not args.no_progress,
-        write_workers=main_write_workers,
-        output_shards=main_output_shards,
-        group_by_source=True,
-    )
-    summary = {"config": config, "stats": stats}
-    summary_path = output.with_suffix(output.suffix + ".summary.json")
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
-    print(f"output: {output}")
-    if main_output_shards > 1:
-        print(f"output_shards: {main_output_shards}")
-    print(f"summary: {summary_path}")
-    print(f"selected_events: {stats['selected_events']}")
+        if args.output_shards > 0:
+            main_output_shards = min(args.output_shards, len(selected))
+        else:
+            main_output_shards = min(args.write_workers, len(selected))
+        main_write_workers = min(args.write_workers, main_output_shards)
+        stats["write_workers"] = main_write_workers
+        stats["output_shards"] = main_output_shards
+        main_output_paths, main_chunks = _write_selected(
+            paths,
+            selected,
+            output,
+            config=config,
+            show_progress=not args.no_progress,
+            write_workers=main_write_workers,
+            output_shards=main_output_shards,
+            group_by_source=True,
+        )
+        summary = {"config": config, "stats": stats}
+        summary_path = output.with_suffix(output.suffix + ".summary.json")
+        summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+        print(f"output: {output}")
+        if main_output_shards > 1:
+            print(f"output_shards: {main_output_shards}")
+        print(f"summary: {summary_path}")
+        print(f"selected_events: {stats['selected_events']}")
 
     if extra_per_bins:
-        derived_paths = [Path(path) for path in main_output_paths]
-        derived_selected = _remap_selected_to_output_shards(main_chunks)
+        if not args.derive_only:
+            derived_paths = [Path(path) for path in main_output_paths]
+            derived_selected = _remap_selected_to_output_shards(main_chunks)
         for output_per_bin, job_output in output_jobs[1:]:
             output_selected = _subset_selected_per_bin(
                 derived_selected,

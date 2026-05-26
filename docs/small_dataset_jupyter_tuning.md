@@ -66,9 +66,8 @@ energy bin と粒子種で層化するので、少数サンプルでも proton/i
 大規模 HDF5 を全 scan するため、この処理は Jupyter や login shell ではなく Slurm に投げます。
 
 ```
-RUN_NAME=small_energyflat2000_20260526 \
+RUN_NAME=small_graph_energyflat2000_20260526_141104 \
 PER_BIN=2000 \
-EXTRA_PER_BINS=500,200 \
 GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/server_graph_export_energyflat200000_20260524_075508 \
 scripts/submit_server_small_graph_dataset.sh
 ```
@@ -76,15 +75,26 @@ scripts/submit_server_small_graph_dataset.sh
 出力:
 
 ```
-/dicos_ui_home/ikomae/work/gnn/graphs/small_energyflat2000_20260526/small_energyflat2000_20260526.h5
-/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_reconstruction/runs/small_energyflat2000_20260526/
+/dicos_ui_home/ikomae/work/gnn/graphs/small_graph_energyflat2000_20260526_141104/small_graph_energyflat2000_20260526_141104.h5
+/dicos_ui_home/ikomae/work/gnn/graphs/small_graph_energyflat2000_20260526_141104/small_graph_energyflat2000_20260526_141104-perbin500.h5
+/dicos_ui_home/ikomae/work/gnn/graphs/small_graph_energyflat2000_20260526_141104/small_graph_energyflat2000_20260526_141104-perbin200.h5
+/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_reconstruction/runs/small_graph_energyflat2000_20260526_141104/
 ```
 
 `--per-bin 2000 --stratify-particle` は、proton/iron それぞれの log10(E/eV) 0.1 bin ごとに最大 2000 event を残します。
-`EXTRA_PER_BINS=500,200` を指定すると、同じ scan 結果から `*-perbin500.h5` と `*-perbin200.h5` の shard も同時に作ります。
+既定で `EXTRA_PER_BINS=500,200` が使われるため、同じ scan 結果から `*-perbin500.h5` と `*-perbin200.h5` の shard も同時に作ります。
+既に `PER_BIN=2000` の small がある場合は、2000 を作り直さずに派生サイズだけ作れます。
+
+```
+RUN_NAME=small_graph_energyflat2000_20260526_141104 \
+DERIVE_ONLY=1 \
+GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/small_graph_energyflat2000_20260526_141104 \
+scripts/submit_server_small_graph_dataset.sh
+```
+
 `OUTPUT_SHARDS=auto` では、最大サイズの出力は元の巨大HDF5を並列に読むため入力shard単位で分割し、小さい派生データは event 数から分割数を決めます。既定の `TARGET_EVENTS_PER_SHARD=20000` なら、`PER_BIN=500` や `200` は1個または少数shardにまとまります。
 より軽くしたい場合は `PER_BIN=200` や `MAX_TOTAL=50000` を使います。
-作成された HDF5 path は run directory の `config/graph_input.txt` にも保存されます。
+作成された HDF5 path は run directory の `config/graph_inputs.txt` にも保存されます。
 既定では 30 秒ごとに `scan small graph files` と `write small graph shards` の進捗が出ます。
 間隔を変える場合は `PROGRESS_INTERVAL=10` のように指定します。
 scan は HDF5 shard 単位で並列化されます。

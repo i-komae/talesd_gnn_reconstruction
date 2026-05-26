@@ -1,13 +1,13 @@
 {
   "small_dataset": {
     "source_graphs": "/dicos_ui_home/ikomae/work/gnn/graphs/server_graph_export_energyflat200000_20260524_075508",
-    "output": "/dicos_ui_home/ikomae/work/gnn/graphs/small_energyflat2000_20260526/small_energyflat2000_20260526.h5",
+    "output": "/dicos_ui_home/ikomae/work/gnn/graphs/small_graph_energyflat2000_20260526_141104",
     "per_bin": 2000,
     "energy_bin_width": 0.1,
     "stratify_particle": true,
     "seed": 12345
   },
-  "graphs": "/dicos_ui_home/ikomae/work/gnn/graphs/small_energyflat2000_20260526/small_energyflat2000_20260526.h5",
+  "graphs": "/dicos_ui_home/ikomae/work/gnn/graphs/small_graph_energyflat2000_20260526_141104",
   "output_root": "/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_reconstruction",
   "run_name": "small_reco_quality_tuning",
   "config_name": "small_reco_quality_physics_wfcnn-gru_h128_l4_physics_16epoch",
