@@ -155,3 +155,4 @@ uv run talesd-gnn visualize \
 グラフ条件は `coincidence_analysis` の Ising filter に揃えています。ノードはpulse候補、edgeは `dr <= 1.5 km` かつ `|dt| <= 8 us` のpulse候補間で、Ising support weightも同じ式を使います。これらはコマンドラインで調整しません。
 
 詳しい使い方と出力列は [docs/usage_ja.md](docs/usage_ja.md) を参照してください。
+小規模HDF5を使ったJupyter/script共通のチューニング手順は [docs/small_dataset_jupyter_tuning.md](docs/small_dataset_jupyter_tuning.md) を参照してください。
