@@ -63,26 +63,27 @@ Jupyter からも script からも、この同じ `.venv` を使います。
 
 DST を読み直さず、作成済み graph HDF5 から event group をコピーします。
 energy bin と粒子種で層化するので、少数サンプルでも proton/iron と energy の偏りを抑えられます。
+大規模 HDF5 を全 scan するため、この処理は Jupyter や login shell ではなく Slurm に投げます。
 
 ```
-.venv/bin/python scripts/make_small_graph_dataset.py \
-  --graphs /dicos_ui_home/ikomae/work/gnn/graphs/server_graph_export_energyflat200000_20260524_075508 \
-  -o /dicos_ui_home/ikomae/work/gnn/graphs/small_energyflat2000_20260526/small_energyflat2000_20260526.h5 \
-  --per-bin 2000 \
-  --energy-bin-width 0.1 \
-  --stratify-particle \
-  --seed 12345
+RUN_NAME=small_energyflat2000_20260526 \
+PER_BIN=2000 \
+GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/server_graph_export_energyflat200000_20260524_075508 \
+scripts/submit_server_small_graph_dataset.sh
 ```
 
 出力:
 
 ```
 /dicos_ui_home/ikomae/work/gnn/graphs/small_energyflat2000_20260526/small_energyflat2000_20260526.h5
-/dicos_ui_home/ikomae/work/gnn/graphs/small_energyflat2000_20260526/small_energyflat2000_20260526.h5.summary.json
+/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_reconstruction/runs/small_energyflat2000_20260526/
 ```
 
 `--per-bin 2000 --stratify-particle` は、proton/iron それぞれの log10(E/eV) 0.1 bin ごとに最大 2000 event を残します。
-より軽くしたい場合は `--per-bin 200` や `--max-total 50000` を使います。
+より軽くしたい場合は `PER_BIN=200` や `MAX_TOTAL=50000` を使います。
+作成された HDF5 path は run directory の `config/graph_input.txt` にも保存されます。
+既定では 30 秒ごとに `scan small candidates` と `write small graphs` の進捗が出ます。
+間隔を変える場合は `PROGRESS_INTERVAL=10` のように指定します。
 
 ## Script として実行
 
