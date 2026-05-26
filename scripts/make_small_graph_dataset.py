@@ -7,6 +7,7 @@ import heapq
 import json
 import math
 import os
+import re
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from collections import OrderedDict
@@ -323,7 +324,11 @@ def _existing_output_paths(output: Path) -> list[Path]:
 def _extra_output_path(output: Path, per_bin: int) -> Path:
     suffix = output.suffix if output.suffix else ".h5"
     stem = output.stem if output.suffix else output.name
-    return output.with_name(f"{stem}-perbin{per_bin}{suffix}")
+    extra_stem = re.sub(r"energyflat\d+", f"energyflat{per_bin}", stem, count=1)
+    if extra_stem == stem:
+        extra_stem = f"{stem}_perbin{per_bin}"
+    root = output.parent.parent if output.parent.name == stem else output.parent
+    return root / extra_stem / f"{extra_stem}{suffix}"
 
 
 def _stratum_key(event: SelectedEvent, *, stratify_particle: bool) -> tuple[Any, int]:

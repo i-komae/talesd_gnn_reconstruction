@@ -525,6 +525,24 @@ export TALESD_GNN_PROGRESS_INTERVAL="\${PROGRESS_INTERVAL}"
 
 JOB_LOG_PATH="\${LOG_DIR}/\${RUN_NAME}.job.log"
 
+extra_graph_output() {
+  local per_bin="\$1"
+  local graph_dir graph_file graph_stem extra_stem root_dir
+  graph_dir=\$(dirname "\${GRAPH_OUTPUT}")
+  graph_file=\$(basename "\${GRAPH_OUTPUT}")
+  graph_stem="\${graph_file%.h5}"
+  extra_stem=\$(printf "%s" "\${graph_stem}" | sed -E "s/energyflat[0-9]+/energyflat\${per_bin}/")
+  if [[ "\${extra_stem}" == "\${graph_stem}" ]]; then
+    extra_stem="\${graph_stem}_perbin\${per_bin}"
+  fi
+  if [[ "\$(basename "\${graph_dir}")" == "\${graph_stem}" ]]; then
+    root_dir=\$(dirname "\${graph_dir}")
+  else
+    root_dir="\${graph_dir}"
+  fi
+  printf "%s/%s/%s.h5" "\${root_dir}" "\${extra_stem}" "\${extra_stem}"
+}
+
 {
   echo "======================================================================"
   echo "SMALL GRAPH DATASET JOB START"
@@ -609,12 +627,9 @@ else
 fi
 
 if [[ -n "\${EXTRA_PER_BINS}" ]]; then
-  graph_dir=\$(dirname "\${GRAPH_OUTPUT}")
-  graph_file=\$(basename "\${GRAPH_OUTPUT}")
-  graph_stem="\${graph_file%.h5}"
   IFS=',' read -r -a extra_per_bin_values <<< "\${EXTRA_PER_BINS}"
   for extra_per_bin in "\${extra_per_bin_values[@]}"; do
-    extra_output="\${graph_dir}/\${graph_stem}-perbin\${extra_per_bin}.h5"
+    extra_output=\$(extra_graph_output "\${extra_per_bin}")
     extra_summary="\${SUMMARY_DIR}/\${RUN_NAME}-perbin\${extra_per_bin}.graph_summary.json"
     .venv/bin/python scripts/summarize_graph_shards.py "\${extra_output}" -o "\${extra_summary}" 2>&1 | tee -a "\${JOB_LOG_PATH}"
     printf "%s\\n" "\${extra_output}" >> "\${GRAPH_INPUTS_LIST}"

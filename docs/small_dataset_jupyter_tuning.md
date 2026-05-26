@@ -76,13 +76,13 @@ scripts/submit_server_small_graph_dataset.sh
 
 ```
 /dicos_ui_home/ikomae/work/gnn/graphs/small_graph_energyflat2000_20260526_141104/small_graph_energyflat2000_20260526_141104.h5
-/dicos_ui_home/ikomae/work/gnn/graphs/small_graph_energyflat2000_20260526_141104/small_graph_energyflat2000_20260526_141104-perbin500.h5
-/dicos_ui_home/ikomae/work/gnn/graphs/small_graph_energyflat2000_20260526_141104/small_graph_energyflat2000_20260526_141104-perbin200.h5
+/dicos_ui_home/ikomae/work/gnn/graphs/small_graph_energyflat500_20260526_141104/small_graph_energyflat500_20260526_141104.h5
+/dicos_ui_home/ikomae/work/gnn/graphs/small_graph_energyflat200_20260526_141104/small_graph_energyflat200_20260526_141104.h5
 /dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_reconstruction/runs/small_graph_energyflat2000_20260526_141104/
 ```
 
 `--per-bin 2000 --stratify-particle` は、proton/iron それぞれの log10(E/eV) 0.1 bin ごとに最大 2000 event を残します。
-既定で `EXTRA_PER_BINS=500,200` が使われるため、同じ scan 結果から `*-perbin500.h5` と `*-perbin200.h5` の shard も同時に作ります。
+既定で `EXTRA_PER_BINS=500,200` が使われるため、同じ scan 結果から `small_graph_energyflat500_...` と `small_graph_energyflat200_...` も別ディレクトリに作ります。
 既に `PER_BIN=2000` の small がある場合は、2000 を作り直さずに派生サイズだけ作れます。
 
 ```
