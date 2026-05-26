@@ -84,6 +84,9 @@ scripts/submit_server_small_graph_dataset.sh
 作成された HDF5 path は run directory の `config/graph_input.txt` にも保存されます。
 既定では 30 秒ごとに `scan small candidates` と `write small graphs` の進捗が出ます。
 間隔を変える場合は `PROGRESS_INTERVAL=10` のように指定します。
+scan は HDF5 shard 単位で並列化されます。
+CPU 要求数は既存の DST export と同じ `AUTO_RESOURCES=1` の資源選択で決めます。
+`SCAN_WORKERS=auto` では、選ばれた CPU 数と入力 HDF5 shard 数から worker 数を決めます。
 
 ## Script として実行
 

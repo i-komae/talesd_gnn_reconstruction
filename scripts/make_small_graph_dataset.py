@@ -6,6 +6,7 @@ import hashlib
 import heapq
 import json
 import math
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +16,7 @@ import h5py
 import numpy as np
 
 from talesd_gnn_reconstruction.cli import _expand_h5_graph_paths
-from talesd_gnn_reconstruction.progress import progress_bar
+from talesd_gnn_reconstruction.progress import progress_bar, write as progress_write
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,140 @@ def _count_events(paths: list[Path]) -> list[int]:
     return counts
 
 
+def _new_stats() -> dict[str, Any]:
+    return {
+        "input_files": 0,
+        "input_events": 0,
+        "missing_target": 0,
+        "missing_particle_label": 0,
+        "filtered_particle": 0,
+        "nonfinite_energy": 0,
+        "candidate_events": 0,
+    }
+
+
+def _merge_stats(total: dict[str, Any], part: dict[str, Any]) -> None:
+    for key, value in part.items():
+        if isinstance(value, (int, np.integer)):
+            total[key] = int(total.get(key, 0)) + int(value)
+
+
+def _merge_reservoirs(
+    total: dict[tuple[Any, int], list[tuple[float, int, int, SelectedEvent]]],
+    part: dict[tuple[Any, int], list[tuple[float, int, int, SelectedEvent]]],
+    *,
+    per_bin: int,
+) -> None:
+    for stratum, heap in part.items():
+        target = total.setdefault(stratum, [])
+        for item in heap:
+            if len(target) < per_bin:
+                heapq.heappush(target, item)
+            elif item[0] > target[0][0]:
+                heapq.heapreplace(target, item)
+
+
+def _scan_path_selected(
+    path: str,
+    path_index: int,
+    *,
+    per_bin: int,
+    energy_bin_width: float,
+    stratify_particle: bool,
+    particle_filter: str,
+    seed: int,
+) -> tuple[dict[tuple[Any, int], list[tuple[float, int, int, SelectedEvent]]], dict[str, Any]]:
+    reservoirs: dict[tuple[Any, int], list[tuple[float, int, int, SelectedEvent]]] = {}
+    stats = _new_stats()
+    stats["input_files"] = 1
+    with h5py.File(path, "r") as h5:
+        events = h5["events"]
+        metadata = h5.get("metadata")
+        stats["input_events"] = int(len(events))
+        for local_index, event_key in enumerate(_dense_or_sorted_keys(events)):
+            group = events[event_key]
+            if "target" not in group:
+                stats["missing_target"] += 1
+                continue
+            target = np.asarray(group["target"][()], dtype=np.float64).reshape(-1)
+            if target.size == 0 or not np.isfinite(target[0]):
+                stats["nonfinite_energy"] += 1
+                continue
+            label = _particle_label(metadata, group, local_index)
+            if label is None:
+                stats["missing_particle_label"] += 1
+                continue
+            if not _particle_allowed(label, particle_filter):
+                stats["filtered_particle"] += 1
+                continue
+            event_id, source_path, source_index, parttype = _event_metadata(
+                metadata,
+                group,
+                local_index,
+                event_key,
+            )
+            log_energy = float(target[0])
+            energy_bin = int(math.floor(log_energy / energy_bin_width))
+            particle_key = int(label >= 0.5) if stratify_particle else "all"
+            stratum = (particle_key, energy_bin)
+            rank = _rank(seed, path_index, local_index, event_id)
+            event = SelectedEvent(
+                rank=rank,
+                path_index=path_index,
+                local_index=local_index,
+                event_key=event_key,
+                log_energy=log_energy,
+                energy_bin=energy_bin,
+                particle_label=float(label),
+                event_id=event_id,
+                source_path=source_path,
+                source_index=source_index,
+                parttype=parttype,
+            )
+            heap = reservoirs.setdefault(stratum, [])
+            item = (-rank, path_index, local_index, event)
+            if len(heap) < per_bin:
+                heapq.heappush(heap, item)
+            elif item[0] > heap[0][0]:
+                heapq.heapreplace(heap, item)
+            stats["candidate_events"] += 1
+    return reservoirs, stats
+
+
+def _scan_paths_selected(
+    items: list[tuple[int, str]],
+    *,
+    per_bin: int,
+    energy_bin_width: float,
+    stratify_particle: bool,
+    particle_filter: str,
+    seed: int,
+) -> tuple[dict[tuple[Any, int], list[tuple[float, int, int, SelectedEvent]]], dict[str, Any]]:
+    reservoirs: dict[tuple[Any, int], list[tuple[float, int, int, SelectedEvent]]] = {}
+    stats = _new_stats()
+    for path_index, path in items:
+        part_reservoirs, part_stats = _scan_path_selected(
+            path,
+            path_index,
+            per_bin=per_bin,
+            energy_bin_width=energy_bin_width,
+            stratify_particle=stratify_particle,
+            particle_filter=particle_filter,
+            seed=seed,
+        )
+        _merge_reservoirs(reservoirs, part_reservoirs, per_bin=per_bin)
+        _merge_stats(stats, part_stats)
+    return reservoirs, stats
+
+
+def _chunk_items(items: list[tuple[int, str]], chunk_count: int) -> list[list[tuple[int, str]]]:
+    if not items:
+        return []
+    chunk_count = max(min(chunk_count, len(items)), 1)
+    chunk_size = int(math.ceil(len(items) / chunk_count))
+    return [items[index : index + chunk_size] for index in range(0, len(items), chunk_size)]
+
+
 def _scan_selected(
     paths: list[Path],
     *,
@@ -142,78 +277,62 @@ def _scan_selected(
     stratify_particle: bool,
     particle_filter: str,
     seed: int,
+    scan_workers: int,
     show_progress: bool,
 ) -> tuple[list[SelectedEvent], dict[str, Any]]:
     counts = _count_events(paths)
     total_events = int(sum(counts))
     reservoirs: dict[tuple[Any, int], list[tuple[float, int, int, SelectedEvent]]] = {}
-    stats: dict[str, Any] = {
-        "input_files": len(paths),
-        "input_events": total_events,
-        "missing_target": 0,
-        "missing_particle_label": 0,
-        "filtered_particle": 0,
-        "nonfinite_energy": 0,
-        "candidate_events": 0,
-    }
+    stats = _new_stats()
+    workers = max(min(int(scan_workers), len(paths)), 1)
+    workers_used = workers
+    items = [(path_index, str(path)) for path_index, path in enumerate(paths)]
     bar = progress_bar("scan small candidates", total_events, enabled=show_progress)
     try:
-        for path_index, path in enumerate(paths):
-            with h5py.File(path, "r") as h5:
-                events = h5["events"]
-                metadata = h5.get("metadata")
-                for local_index, event_key in enumerate(_dense_or_sorted_keys(events)):
-                    group = events[event_key]
-                    if "target" not in group:
-                        stats["missing_target"] += 1
-                        bar.update(1)
-                        continue
-                    target = np.asarray(group["target"][()], dtype=np.float64).reshape(-1)
-                    if target.size == 0 or not np.isfinite(target[0]):
-                        stats["nonfinite_energy"] += 1
-                        bar.update(1)
-                        continue
-                    label = _particle_label(metadata, group, local_index)
-                    if label is None:
-                        stats["missing_particle_label"] += 1
-                        bar.update(1)
-                        continue
-                    if not _particle_allowed(label, particle_filter):
-                        stats["filtered_particle"] += 1
-                        bar.update(1)
-                        continue
-                    event_id, source_path, source_index, parttype = _event_metadata(
-                        metadata,
-                        group,
-                        local_index,
-                        event_key,
-                    )
-                    log_energy = float(target[0])
-                    energy_bin = int(math.floor(log_energy / energy_bin_width))
-                    particle_key = int(label >= 0.5) if stratify_particle else "all"
-                    stratum = (particle_key, energy_bin)
-                    rank = _rank(seed, path_index, local_index, event_id)
-                    event = SelectedEvent(
-                        rank=rank,
-                        path_index=path_index,
-                        local_index=local_index,
-                        event_key=event_key,
-                        log_energy=log_energy,
-                        energy_bin=energy_bin,
-                        particle_label=float(label),
-                        event_id=event_id,
-                        source_path=source_path,
-                        source_index=source_index,
-                        parttype=parttype,
-                    )
-                    heap = reservoirs.setdefault(stratum, [])
-                    item = (-rank, path_index, local_index, event)
-                    if len(heap) < per_bin:
-                        heapq.heappush(heap, item)
-                    elif item[0] > heap[0][0]:
-                        heapq.heapreplace(heap, item)
-                    stats["candidate_events"] += 1
-                    bar.update(1)
+        def scan_serial() -> None:
+            for item in items:
+                part_reservoirs, part_stats = _scan_paths_selected(
+                    [item],
+                    per_bin=per_bin,
+                    energy_bin_width=energy_bin_width,
+                    stratify_particle=stratify_particle,
+                    particle_filter=particle_filter,
+                    seed=seed,
+                )
+                _merge_reservoirs(reservoirs, part_reservoirs, per_bin=per_bin)
+                _merge_stats(stats, part_stats)
+                bar.update(int(part_stats["input_events"]))
+
+        if workers == 1:
+            scan_serial()
+        else:
+            try:
+                with ProcessPoolExecutor(max_workers=workers) as executor:
+                    chunks = _chunk_items(items, chunk_count=workers * 4)
+                    futures = [
+                        executor.submit(
+                            _scan_paths_selected,
+                            chunk,
+                            per_bin=per_bin,
+                            energy_bin_width=energy_bin_width,
+                            stratify_particle=stratify_particle,
+                            particle_filter=particle_filter,
+                            seed=seed,
+                        )
+                        for chunk in chunks
+                    ]
+                    for future in as_completed(futures):
+                        part_reservoirs, part_stats = future.result()
+                        _merge_reservoirs(reservoirs, part_reservoirs, per_bin=per_bin)
+                        _merge_stats(stats, part_stats)
+                        bar.update(int(part_stats["input_events"]))
+            except PermissionError as exc:
+                progress_write(f"scan workers unavailable ({exc}); falling back to scan_workers=1")
+                workers_used = 1
+                reservoirs.clear()
+                stats.clear()
+                stats.update(_new_stats())
+                scan_serial()
     finally:
         bar.close()
 
@@ -222,6 +341,7 @@ def _scan_selected(
     if max_total is not None and max_total > 0:
         selected = selected[: int(max_total)]
     stats["selected_events"] = len(selected)
+    stats["scan_workers"] = workers_used
     stats["strata"] = {
         f"{stratum[0]}:{stratum[1]}": len(heap)
         for stratum, heap in sorted(reservoirs.items(), key=lambda item: (str(item[0][0]), item[0][1]))
@@ -304,6 +424,7 @@ def main() -> None:
     parser.add_argument("--no-stratify-particle", dest="stratify_particle", action="store_false")
     parser.add_argument("--particle-filter", choices=["all", "proton", "iron"], default="all")
     parser.add_argument("--seed", type=int, default=12345)
+    parser.add_argument("--scan-workers", type=int, default=1, help="parallel file scan workers")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args()
@@ -312,6 +433,8 @@ def main() -> None:
         raise SystemExit("--per-bin must be positive")
     if args.energy_bin_width <= 0:
         raise SystemExit("--energy-bin-width must be positive")
+    if args.scan_workers <= 0:
+        raise SystemExit("--scan-workers must be positive")
 
     paths = [Path(path).expanduser() for path in _expand_h5_graph_paths(args.graphs)]
     if not paths:
@@ -333,6 +456,7 @@ def main() -> None:
         "stratify_particle": args.stratify_particle,
         "particle_filter": args.particle_filter,
         "seed": args.seed,
+        "scan_workers": args.scan_workers,
     }
     selected, stats = _scan_selected(
         paths,
@@ -342,6 +466,7 @@ def main() -> None:
         stratify_particle=args.stratify_particle,
         particle_filter=args.particle_filter,
         seed=args.seed,
+        scan_workers=args.scan_workers,
         show_progress=not args.no_progress,
     )
     if not selected:
