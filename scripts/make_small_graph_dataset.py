@@ -763,7 +763,11 @@ def main() -> None:
         raise SystemExit(f"output already exists; pass --overwrite to replace: {existing_outputs[0]}")
     if args.derive_only:
         derived_existing = {path for _per_bin, job_output in output_jobs[1:] for path in _existing_output_paths(job_output)}
-        paths = [path for path in paths if path not in derived_existing]
+        paths = [
+            path
+            for path in paths
+            if path not in derived_existing and re.search(r"[-_]perbin\d+", path.stem) is None
+        ]
         if not paths:
             raise SystemExit("no input graph HDF5 files remain after excluding derived output files")
 
