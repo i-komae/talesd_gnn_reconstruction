@@ -113,6 +113,11 @@ class EventGraphWaveformTest(unittest.TestCase):
             self.assertEqual(list(dataset._handles), [1])
             self.assertFalse(bool(first_handle.id.valid))
             dataset.close()
+            dataset[0]
+            self.assertEqual(list(dataset._handles), [0])
+            dataset[1]
+            self.assertEqual(list(dataset._handles), [1])
+            dataset.close()
 
 
 if __name__ == "__main__":

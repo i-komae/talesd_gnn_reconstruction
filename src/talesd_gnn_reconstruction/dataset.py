@@ -260,7 +260,7 @@ class H5GraphDataset:
     def close(self) -> None:
         for handle in self._handles.values():
             handle.close()
-        self._handles = {}
+        self._handles = OrderedDict()
         self._cache.clear()
 
     @staticmethod
