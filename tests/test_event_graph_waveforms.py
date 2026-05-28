@@ -119,6 +119,59 @@ class EventGraphWaveformTest(unittest.TestCase):
             self.assertEqual(list(dataset._handles), [1])
             dataset.close()
 
+    def test_disabled_node_feature_columns_are_dropped_when_reading_old_hdf5(self) -> None:
+        columns = {
+            "node_features": [
+                "x_km",
+                "y_km",
+                "z_km",
+                "nearest_detector_distance_km",
+                "mean3_detector_distance_km",
+                "neighbor_count_1p5km",
+                "local_detector_density_1p5km2",
+                "dx_from_bary_km",
+                "dy_from_bary_km",
+                "dz_from_bary_km",
+                "r_from_bary_km",
+                "first_arrival_usec_rel",
+                "trig_usec_rel",
+                "log10_first_rho",
+                "sqrt_first_rho",
+                "log10_total_rho",
+                "sqrt_total_rho",
+                "log10_max_rho",
+                "n_pulses",
+                "pulse_time_span_usec",
+                "n_wf_segments",
+                "wf_length_usec",
+                "log10_fadc_peak",
+                "upper_ped",
+                "lower_ped",
+                "upper_ped_sigma",
+                "lower_ped_sigma",
+                "detector_pulse_order",
+                "is_first_detector_pulse",
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "old_node_features.h5"
+            with h5py.File(path, "w") as handle:
+                handle.attrs["columns_json"] = json.dumps(columns)
+                event = handle.create_group("events").create_group("00000000")
+                event.create_dataset("node_features", data=np.arange(29, dtype=np.float32).reshape(1, 29))
+                event.create_dataset("edge_index", data=np.zeros((2, 0), dtype=np.int64))
+                event.create_dataset("edge_features", data=np.zeros((0, 1), dtype=np.float32))
+                event.create_dataset("pulse_features", data=np.zeros((0, 1), dtype=np.float32))
+                event.create_dataset("waveform_features", data=np.zeros((1, 0, 0), dtype=np.float32))
+
+            dataset = H5GraphDataset(path, load_attrs=False, load_node_positions=False)
+            sample = dataset[0]
+            self.assertEqual(sample["node_features"].shape, (1, 27))
+            self.assertNotIn("log10_total_rho", dataset.columns_json)
+            self.assertNotIn("sqrt_total_rho", dataset.columns_json)
+            np.testing.assert_array_equal(sample["node_features"][0, 15:17], np.array([17.0, 18.0], dtype=np.float32))
+            dataset.close()
+
 
 if __name__ == "__main__":
     unittest.main()

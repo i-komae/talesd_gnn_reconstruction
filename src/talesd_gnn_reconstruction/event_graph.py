@@ -562,8 +562,6 @@ def _build_node_features(
                 float(node["trig_usec_rel"]),
                 math.log10(rho_i),
                 math.sqrt(rho_i),
-                math.log10(rho_i),
-                math.sqrt(rho_i),
                 math.log10(max_rho_i),
                 float(node["detector_num_pulses"]),
                 float(node["detector_pulse_time_span_usec"]),

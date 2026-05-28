@@ -86,7 +86,11 @@ PARTICLE_FILTER="${PARTICLE_FILTER:-all}"
 DEVICE="${DEVICE:-cpu}"
 DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT:-1000}"
 PRECISION_MIN_BIN_COUNT="${PRECISION_MIN_BIN_COUNT:-1000}"
+EPOCH_LEARNING_CURVE="${EPOCH_LEARNING_CURVE:-1}"
+BEST_DIAGNOSTICS="${BEST_DIAGNOSTICS:-1}"
+BEST_DIAGNOSTIC_MAX_GRAPHS="${BEST_DIAGNOSTIC_MAX_GRAPHS:-20000}"
 MAX_GRAPHS="${MAX_GRAPHS:-}"
+PYTHON_BIN="${PYTHON_BIN:-.venv/bin/python}"
 
 if [[ "${TRAINING_TASK}" != "mass" && ( "${LOSS_MODE}" == "physics-nll" || "${LOSS_MODE}" == "nll" ) ]]; then
   ERROR_PREDICTION=1
@@ -181,6 +185,9 @@ SPLIT_MODE=${SPLIT_MODE}
 PARTICLE_FILTER=${PARTICLE_FILTER}
 DEVICE=${DEVICE}
 DIAGNOSTIC_MIN_BIN_COUNT=${DIAGNOSTIC_MIN_BIN_COUNT}
+EPOCH_LEARNING_CURVE=${EPOCH_LEARNING_CURVE}
+BEST_DIAGNOSTICS=${BEST_DIAGNOSTICS}
+BEST_DIAGNOSTIC_MAX_GRAPHS=${BEST_DIAGNOSTIC_MAX_GRAPHS}
 MAX_GRAPHS=${MAX_GRAPHS}
 EOF
 
@@ -222,7 +229,7 @@ fi
   echo "This job does not read DST files."
   date
 
-  cmd=(.venv/bin/talesd-gnn train \
+  cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli train \
     --graphs "${GRAPH_INPUT}" \
     -o "${CHECKPOINT}" \
     --epochs "${TRAIN_EPOCHS}" \
@@ -276,10 +283,17 @@ fi
     --test-fraction "${TEST_FRACTION}" \
     --val-fraction "${VAL_FRACTION}" \
     --diagnostic-energy-bin-width 0.1 \
-    --diagnostic-min-bin-count "${DIAGNOSTIC_MIN_BIN_COUNT}")
+    --diagnostic-min-bin-count "${DIAGNOSTIC_MIN_BIN_COUNT}" \
+    --best-diagnostic-max-graphs "${BEST_DIAGNOSTIC_MAX_GRAPHS}")
 
   if [[ -n "${MAX_GRAPHS}" ]]; then
     cmd+=(--max-graphs "${MAX_GRAPHS}")
+  fi
+  if [[ "${EPOCH_LEARNING_CURVE}" == "0" ]]; then
+    cmd+=(--no-epoch-learning-curve)
+  fi
+  if [[ "${BEST_DIAGNOSTICS}" == "0" ]]; then
+    cmd+=(--no-best-diagnostics)
   fi
   if [[ "${PERSISTENT_WORKERS}" == "1" ]]; then
     cmd+=(--persistent-workers)
@@ -315,7 +329,7 @@ fi
   date
 } 2>&1 | tee "${LOG_PATH}"
 
-.venv/bin/python scripts/summarize_metrics.py "${METRICS_PATH}" -o "${SUMMARY_DIR}/metrics_summary.csv"
+"${PYTHON_BIN}" scripts/summarize_metrics.py "${METRICS_PATH}" -o "${SUMMARY_DIR}/metrics_summary.csv"
 if [[ "${TRAINING_TASK}" == "mass" ]]; then
   precision_status="N/A"
   cat > "${PRECISION_REPORT}" <<EOF
@@ -333,7 +347,7 @@ Use:
   checkpoints/${CONFIG_NAME}.pt.diagnostics/test/mass_accuracy_by_true_energy.pdf
 EOF
 else
-  if .venv/bin/python scripts/check_precision_targets.py "${METRICS_PATH}" --min-bin-count "${PRECISION_MIN_BIN_COUNT}" -o "${PRECISION_REPORT}"; then
+  if "${PYTHON_BIN}" scripts/check_precision_targets.py "${METRICS_PATH}" --min-bin-count "${PRECISION_MIN_BIN_COUNT}" -o "${PRECISION_REPORT}"; then
     precision_status="PASS"
   else
     precision_status="FAIL"

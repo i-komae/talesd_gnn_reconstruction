@@ -1180,6 +1180,88 @@ def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Pa
     return path
 
 
+def save_learning_progress(output_path: str | Path, history: list[dict[str, Any]]) -> dict[str, str]:
+    output = Path(output_path).expanduser()
+    diagnostics_dir = _diagnostics_root(output)
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    learning_curve = _save_learning_curve(output, history)
+    history_json = diagnostics_dir / "history.json"
+    history_json.write_text(json.dumps(history, indent=2, sort_keys=True))
+    return {
+        "learning_curve_pdf": str(learning_curve),
+        "history_json": str(history_json),
+    }
+
+
+def save_best_validation_diagnostics(
+    output_path: str | Path,
+    *,
+    epoch: int,
+    history: list[dict[str, Any]],
+    validation: tuple[np.ndarray, np.ndarray],
+    validation_mass: tuple[np.ndarray, np.ndarray] | None = None,
+    validation_particle_labels: np.ndarray | None = None,
+    validation_quality: np.ndarray | None = None,
+    validation_predicted_errors: np.ndarray | None = None,
+    energy_bin_width: float = 0.1,
+    min_bin_count: int = 20,
+    save_reconstruction: bool = True,
+) -> dict[str, Any]:
+    output = Path(output_path).expanduser()
+    diagnostics_dir = _diagnostics_root(output)
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    progress_paths = save_learning_progress(output, history)
+    split_name = f"best_validation_epoch_{int(epoch):04d}"
+    diagnostics: dict[str, Any] = {
+        "directory": str(diagnostics_dir),
+        **progress_paths,
+        "epoch": int(epoch),
+        "split": split_name,
+    }
+    if save_reconstruction:
+        _pdf, summary = _save_reconstruction_pdf(
+            output,
+            split_name,
+            pred=validation[0],
+            target=validation[1],
+            energy_bin_width=energy_bin_width,
+            min_bin_count=min_bin_count,
+            quality=validation_quality,
+            predicted_errors=validation_predicted_errors,
+        )
+        diagnostics["validation"] = summary
+    if validation_mass is not None:
+        tuned_threshold = balanced_accuracy_threshold(validation_mass[0], validation_mass[1])
+        target_for_mass = validation[1]
+        _pdf, mass_summary = _save_mass_pdf(
+            output,
+            split_name,
+            logits=validation_mass[0],
+            labels=validation_mass[1],
+            target=target_for_mass,
+            energy_bin_width=energy_bin_width,
+            min_bin_count=min_bin_count,
+            threshold=0.5,
+            tuned_threshold=tuned_threshold,
+        )
+        diagnostics["validation_mass"] = mass_summary
+    if validation_particle_labels is not None and save_reconstruction:
+        summary = _save_species_reconstruction_outputs(
+            output,
+            split_name,
+            pred=validation[0],
+            target=validation[1],
+            labels=validation_particle_labels,
+            energy_bin_width=energy_bin_width,
+            min_bin_count=min_bin_count,
+        )
+        diagnostics["validation_species"] = summary
+    summary_json = diagnostics_dir / "best_validation_latest.json"
+    summary_json.write_text(json.dumps(diagnostics, indent=2, sort_keys=True))
+    diagnostics["summary_json"] = str(summary_json)
+    return diagnostics
+
+
 def _sigmoid(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values, dtype=np.float64)
     out = np.empty_like(values)
@@ -2399,7 +2481,7 @@ def save_training_diagnostics(
     output.parent.mkdir(parents=True, exist_ok=True)
     diagnostics_dir = _diagnostics_root(output)
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
-    learning_curve = _save_learning_curve(output, history)
+    progress_paths = save_learning_progress(output, history)
     prediction_cache = save_prediction_cache(
         output,
         validation=validation,
@@ -2413,7 +2495,8 @@ def save_training_diagnostics(
     )
     diagnostics: dict[str, Any] = {
         "directory": str(diagnostics_dir),
-        "learning_curve_pdf": str(learning_curve),
+        "learning_curve_pdf": progress_paths["learning_curve_pdf"],
+        "history_json": progress_paths["history_json"],
         "prediction_cache": str(prediction_cache),
     }
     if save_reconstruction:

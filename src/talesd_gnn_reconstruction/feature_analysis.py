@@ -1,0 +1,466 @@
+from __future__ import annotations
+
+import json
+import math
+import random
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from .constants import EDGE_FEATURE_COLUMNS, PULSE_FEATURE_COLUMNS, TARGET_COLUMNS, WAVEFORM_FEATURE_CHANNELS
+from .dataset import H5GraphDataset, StandardScaler
+from .diagnostics import _prepare_matplotlib
+from .metrics import binary_classification_metrics, reconstruction_metrics
+from .model import build_model_from_config
+from .progress import progress as _progress
+from .train import _make_graph_loader, _predict_numpy, resolve_device
+
+
+def expand_graph_paths(paths: str | Path | Sequence[str | Path]) -> list[str]:
+    raw_paths = [paths] if isinstance(paths, str | Path) else list(paths)
+    expanded: list[str] = []
+    for raw_path in raw_paths:
+        path = Path(raw_path).expanduser()
+        if path.is_dir():
+            expanded.extend(str(match) for match in sorted(path.glob("*.h5")))
+        elif path.exists():
+            expanded.append(str(path))
+        elif path.suffix == ".h5":
+            expanded.extend(str(match) for match in sorted(path.parent.glob(f"{path.stem}_*.h5")))
+        elif not path.suffix:
+            expanded.extend(str(match) for match in sorted(path.parent.glob(f"{path.name}_*.h5")))
+        else:
+            expanded.append(str(path))
+    return list(dict.fromkeys(expanded))
+
+
+def _columns_from_dataset(dataset: H5GraphDataset) -> dict[str, list[str]]:
+    try:
+        columns = json.loads(dataset.columns_json)
+    except json.JSONDecodeError:
+        columns = {}
+    if not isinstance(columns, dict):
+        columns = {}
+    return {
+        "node_features": [str(value) for value in columns.get("node_features", dataset.node_feature_columns)],
+        "edge_features": [str(value) for value in columns.get("edge_features", EDGE_FEATURE_COLUMNS)],
+        "pulse_features": [str(value) for value in columns.get("pulse_features", PULSE_FEATURE_COLUMNS)],
+        "waveform_features": [str(value) for value in columns.get("waveform_features", WAVEFORM_FEATURE_CHANNELS)],
+        "target": [str(value) for value in columns.get("target", TARGET_COLUMNS)],
+    }
+
+
+def _sample_indices(n_items: int, max_items: int, seed: int) -> list[int]:
+    if max_items <= 0 or n_items <= max_items:
+        return list(range(n_items))
+    rng = random.Random(seed)
+    return sorted(rng.sample(range(n_items), max_items))
+
+
+def _reservoir_merge(current: np.ndarray | None, values: np.ndarray, *, cap: int, rng: np.random.Generator) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.empty((0,), dtype=np.float64) if current is None else current
+    if current is None or current.size == 0:
+        if values.size > cap:
+            values = values[rng.choice(values.size, size=cap, replace=False)]
+        return values.astype(np.float64, copy=False)
+    merged = np.concatenate([current, values])
+    if merged.size > cap:
+        merged = merged[rng.choice(merged.size, size=cap, replace=False)]
+    return merged.astype(np.float64, copy=False)
+
+
+def _summarize_values(values: np.ndarray) -> dict[str, float | int | None]:
+    values = np.asarray(values, dtype=np.float64)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return {"n": 0}
+    quantiles = np.percentile(values, [1, 5, 16, 50, 84, 95, 99])
+    return {
+        "n": int(values.size),
+        "mean": float(np.mean(values)),
+        "std": float(np.std(values)),
+        "min": float(np.min(values)),
+        "p01": float(quantiles[0]),
+        "p05": float(quantiles[1]),
+        "p16": float(quantiles[2]),
+        "median": float(quantiles[3]),
+        "p84": float(quantiles[4]),
+        "p95": float(quantiles[5]),
+        "p99": float(quantiles[6]),
+        "max": float(np.max(values)),
+    }
+
+
+def _escape_tex(text: str) -> str:
+    return text.replace("_", r"\_")
+
+
+def _plot_feature_group(samples: dict[str, np.ndarray], output: Path, title: str) -> None:
+    _prepare_matplotlib()
+    import matplotlib.pyplot as plt
+
+    items = [(name, values[np.isfinite(values)]) for name, values in samples.items() if np.any(np.isfinite(values))]
+    if not items:
+        return
+    ncols = 4
+    nrows = int(math.ceil(len(items) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.4 * ncols, 2.6 * nrows), squeeze=False)
+    for ax in axes.ravel():
+        ax.axis("off")
+    for ax, (name, values) in zip(axes.ravel(), items):
+        ax.axis("on")
+        lo, hi = np.percentile(values, [0.5, 99.5])
+        if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
+            lo, hi = float(np.min(values)), float(np.max(values))
+        if lo == hi:
+            lo -= 0.5
+            hi += 0.5
+        ax.hist(values, bins=np.linspace(lo, hi, 50), histtype="stepfilled", alpha=0.35)
+        ax.set_title(_escape_tex(name), fontsize=9)
+        ax.set_ylabel("events")
+    fig.suptitle(_escape_tex(title))
+    fig.tight_layout()
+    fig.savefig(output)
+    plt.close(fig)
+
+
+def save_input_distributions(
+    graphs_path: str | Path | Sequence[str | Path],
+    output_dir: str | Path,
+    *,
+    max_graphs: int = 100000,
+    max_values_per_feature: int = 200000,
+    seed: int = 12345,
+    show_progress: bool = True,
+) -> dict[str, Any]:
+    paths = expand_graph_paths(graphs_path)
+    dataset = H5GraphDataset(
+        paths,
+        require_target=False,
+        load_attrs=False,
+        load_node_positions=False,
+        load_particle_label=True,
+    )
+    columns = _columns_from_dataset(dataset)
+    indices = _sample_indices(len(dataset), int(max_graphs), int(seed))
+    rng = np.random.default_rng(seed)
+    samples: dict[str, dict[str, np.ndarray | None]] = {
+        "node": {name: None for name in columns["node_features"]},
+        "edge": {name: None for name in columns["edge_features"]},
+        "pulse": {name: None for name in columns["pulse_features"]},
+        "waveform": {name: None for name in columns["waveform_features"]},
+        "target": {name: None for name in columns["target"]},
+    }
+    particle_labels: list[float] = []
+
+    for index in _progress(indices, desc="collect input distributions", total=len(indices), enabled=show_progress):
+        sample = dataset[index]
+        node = np.asarray(sample["node_features"], dtype=np.float64)
+        for col, name in enumerate(columns["node_features"][: node.shape[1]]):
+            samples["node"][name] = _reservoir_merge(samples["node"][name], node[:, col], cap=max_values_per_feature, rng=rng)
+        edge = np.asarray(sample["edge_features"], dtype=np.float64)
+        for col, name in enumerate(columns["edge_features"][: edge.shape[1]]):
+            samples["edge"][name] = _reservoir_merge(samples["edge"][name], edge[:, col], cap=max_values_per_feature, rng=rng)
+        pulse = np.asarray(sample["pulse_features"], dtype=np.float64)
+        for col, name in enumerate(columns["pulse_features"][: pulse.shape[1]]):
+            samples["pulse"][name] = _reservoir_merge(samples["pulse"][name], pulse[:, col], cap=max_values_per_feature, rng=rng)
+        waveform = np.asarray(sample["waveform_features"], dtype=np.float64)
+        if waveform.ndim == 3:
+            for col, name in enumerate(columns["waveform_features"][: waveform.shape[1]]):
+                samples["waveform"][name] = _reservoir_merge(
+                    samples["waveform"][name],
+                    waveform[:, col, :].reshape(-1),
+                    cap=max_values_per_feature,
+                    rng=rng,
+                )
+        target = sample.get("target")
+        if target is not None:
+            target = np.asarray(target, dtype=np.float64)
+            for col, name in enumerate(columns["target"][: target.shape[0]]):
+                samples["target"][name] = _reservoir_merge(samples["target"][name], target[col : col + 1], cap=max_values_per_feature, rng=rng)
+        label = sample.get("particle_label")
+        if label is not None and np.isfinite(float(label)):
+            particle_labels.append(float(label))
+
+    output = Path(output_dir).expanduser()
+    output.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "graphs": paths,
+        "n_graphs_total": len(dataset),
+        "n_graphs_sampled": len(indices),
+        "columns": columns,
+        "features": {
+            group: {name: _summarize_values(values if values is not None else np.empty((0,))) for name, values in group_samples.items()}
+            for group, group_samples in samples.items()
+        },
+        "particle_labels": {
+            "n": len(particle_labels),
+            "proton": int(np.sum(np.asarray(particle_labels) < 0.5)) if particle_labels else 0,
+            "iron": int(np.sum(np.asarray(particle_labels) >= 0.5)) if particle_labels else 0,
+        },
+    }
+    summary_path = output / "input_feature_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    for group, group_samples in samples.items():
+        _plot_feature_group(
+            {name: values for name, values in group_samples.items() if values is not None},
+            output / f"{group}_features.pdf",
+            f"{group} feature distributions",
+        )
+    dataset.close()
+    summary["summary_json"] = str(summary_path)
+    return summary
+
+
+def default_feature_groups(columns: dict[str, list[str]]) -> dict[str, dict[str, list[str]]]:
+    return {
+        "node_geometry": {
+            "node": [
+                "x_km",
+                "y_km",
+                "z_km",
+                "nearest_detector_distance_km",
+                "mean3_detector_distance_km",
+                "neighbor_count_1p5km",
+                "local_detector_density_1p5km2",
+                "dx_from_bary_km",
+                "dy_from_bary_km",
+                "dz_from_bary_km",
+                "r_from_bary_km",
+            ]
+        },
+        "node_timing": {"node": ["first_arrival_usec_rel", "trig_usec_rel"]},
+        "node_signal": {
+            "node": [
+                "log10_first_rho",
+                "sqrt_first_rho",
+                "log10_max_rho",
+                "n_pulses",
+                "pulse_time_span_usec",
+                "n_wf_segments",
+                "wf_length_usec",
+                "log10_fadc_peak",
+            ]
+        },
+        "node_pedestal": {"node": ["upper_ped", "lower_ped", "upper_ped_sigma", "lower_ped_sigma"]},
+        "node_order": {"node": ["detector_pulse_order", "is_first_detector_pulse"]},
+        "edge_geometry": {"edge": ["dx_km", "dy_km", "dz_km", "distance_km"]},
+        "edge_timing": {"edge": ["dt_usec", "abs_dt_usec", "dt_per_km"]},
+        "edge_signal": {"edge": ["log10_rho_ratio"]},
+        "edge_ising": {"edge": ["ising_weight", "ising_weight_raw", "ising_causal_excess_usec", "ising_spatial", "ising_causal"]},
+        "pulse_features": {"pulse": [name for name in columns["pulse_features"] if name != "node_index"]},
+        "waveform": {"waveform": list(columns["waveform_features"])},
+    }
+
+
+class _FeatureAblationDataset:
+    def __init__(
+        self,
+        dataset: H5GraphDataset,
+        *,
+        columns: dict[str, list[str]],
+        scalers: dict[str, StandardScaler],
+        group: dict[str, list[str]],
+    ) -> None:
+        self.dataset = dataset
+        self.columns = columns
+        self.scalers = scalers
+        self.group = group
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        sample = dict(self.dataset[index])
+        if "node" in self.group and "node" in self.scalers:
+            node = np.array(sample["node_features"], copy=True)
+            for name in self.group["node"]:
+                if name in self.columns["node_features"]:
+                    col = self.columns["node_features"].index(name)
+                    if col < node.shape[1]:
+                        node[:, col] = self.scalers["node"].mean[col]
+            sample["node_features"] = node
+        if "edge" in self.group and "edge" in self.scalers:
+            edge = np.array(sample["edge_features"], copy=True)
+            for name in self.group["edge"]:
+                if name in self.columns["edge_features"]:
+                    col = self.columns["edge_features"].index(name)
+                    if col < edge.shape[1]:
+                        edge[:, col] = self.scalers["edge"].mean[col]
+            sample["edge_features"] = edge
+        if "pulse" in self.group and "pulse" in self.scalers:
+            pulse = np.array(sample["pulse_features"], copy=True)
+            for name in self.group["pulse"]:
+                if name in self.columns["pulse_features"]:
+                    col = self.columns["pulse_features"].index(name)
+                    scaler_col = col - 1
+                    if col < pulse.shape[1] and scaler_col >= 0 and scaler_col < self.scalers["pulse"].mean.shape[0]:
+                        pulse[:, col] = self.scalers["pulse"].mean[scaler_col]
+            sample["pulse_features"] = pulse
+        if "waveform" in self.group:
+            sample["waveform_features"] = np.zeros_like(sample["waveform_features"])
+        return sample
+
+
+def _selected_checkpoint_indices(checkpoint: dict[str, Any], split: str) -> list[int]:
+    key = {"validation": "val_indices", "val": "val_indices", "test": "test_indices", "train": "train_indices"}[split]
+    return [int(value) for value in np.asarray(checkpoint[key]).reshape(-1)]
+
+
+def _metric_delta(baseline: dict[str, Any] | None, changed: dict[str, Any] | None) -> dict[str, float]:
+    if baseline is None or changed is None:
+        return {}
+    keys = ["rmse_log10_energy", "angular_68_deg", "core_68_km", "median_abs_log10_energy", "median_abs_relative_energy"]
+    return {
+        key: float(changed[key]) - float(baseline[key])
+        for key in keys
+        if key in baseline and key in changed and baseline[key] is not None and changed[key] is not None
+    }
+
+
+def save_feature_group_importance(
+    graphs_path: str | Path | Sequence[str | Path],
+    checkpoint_path: str | Path,
+    output_dir: str | Path,
+    *,
+    split: str = "validation",
+    max_graphs: int = 50000,
+    batch_size: int = 256,
+    device: str = "auto",
+    seed: int = 12345,
+    show_progress: bool = True,
+) -> dict[str, Any]:
+    import torch
+
+    device = resolve_device(device)
+    checkpoint = torch.load(Path(checkpoint_path).expanduser(), map_location=device)
+    scalers = {name: StandardScaler.from_dict(data) for name, data in checkpoint["scalers"].items()}
+    model_config = dict(checkpoint["model_config"])
+    model = build_model_from_config(model_config).to(device)
+    model.load_state_dict(checkpoint["model_state"])
+    model.eval()
+    runtime = dict(checkpoint.get("runtime", {}))
+    mass_classification = int(model_config.get("classification_dim", 0)) > 0
+    quality_prediction = int(model_config.get("quality_dim", 0)) > 0
+    error_prediction = int(model_config.get("error_dim", 0)) > 0
+    target_dim = int(model_config.get("target_dim", 7))
+    load_detector_lids = int(model_config.get("detector_embedding_dim", 0)) > 0
+    dataset = H5GraphDataset(
+        expand_graph_paths(graphs_path),
+        require_target=True,
+        load_attrs=False,
+        load_node_positions=False,
+        load_particle_label=mass_classification,
+        load_detector_lids=load_detector_lids,
+    )
+    columns = _columns_from_dataset(dataset)
+    indices = _selected_checkpoint_indices(checkpoint, split)
+    if max_graphs > 0 and len(indices) > max_graphs:
+        rng = random.Random(seed)
+        indices = sorted(rng.sample(indices, max_graphs))
+
+    def predict_for(ds: Any, desc: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        loader = _make_graph_loader(
+            ds,
+            indices,
+            scalers=scalers,
+            batch_size=batch_size,
+            shuffle=False,
+            require_target=True,
+            num_workers=0,
+            prefetch_factor=2,
+            seed=seed,
+            pin_memory=device.startswith("cuda"),
+            persistent_workers=False,
+            collate_backend="cpp",
+            collate_threads=1,
+        )
+        pred, target, mass_logit, mass_label, _quality, _errors = _predict_numpy(
+            model,
+            loader,
+            scalers,
+            device,
+            non_blocking=device.startswith("cuda"),
+            desc=desc,
+            show_progress=show_progress,
+            mass_classification=mass_classification,
+            quality_prediction=quality_prediction,
+            error_prediction=error_prediction,
+            target_dim=target_dim,
+            error_angular_scale_deg=float(runtime.get("error_angular_scale_deg", runtime.get("quality_angular_scale_deg", 1.0))),
+            error_core_scale_km=float(runtime.get("error_core_scale_km", runtime.get("quality_core_scale_km", 0.05))),
+            error_energy_scale=float(runtime.get("error_energy_scale", runtime.get("quality_energy_scale", 0.10))),
+        )
+        reco = None if target_dim == 0 else reconstruction_metrics(pred, target)
+        mass = (
+            binary_classification_metrics(mass_logit, mass_label, threshold=0.5)
+            if mass_classification and mass_logit is not None and mass_label is not None
+            else None
+        )
+        return reco, mass
+
+    baseline_reco, baseline_mass = predict_for(dataset, "feature importance baseline")
+    groups = default_feature_groups(columns)
+    rows = []
+    for name, group in _progress(list(groups.items()), desc="feature group ablation", total=len(groups), enabled=show_progress):
+        ablated = _FeatureAblationDataset(dataset, columns=columns, scalers=scalers, group=group)
+        reco, mass = predict_for(ablated, f"ablate {name}")
+        row: dict[str, Any] = {
+            "group": name,
+            "features": group,
+            "reconstruction": reco,
+            "reconstruction_delta": _metric_delta(baseline_reco, reco),
+            "mass": mass,
+        }
+        if baseline_mass is not None and mass is not None:
+            row["mass_delta"] = {
+                "accuracy": float(mass["accuracy"]) - float(baseline_mass["accuracy"]),
+                "balanced_accuracy": float(mass["balanced_accuracy"]) - float(baseline_mass["balanced_accuracy"]),
+            }
+        rows.append(row)
+
+    output = Path(output_dir).expanduser()
+    output.mkdir(parents=True, exist_ok=True)
+    result = {
+        "checkpoint": str(Path(checkpoint_path).expanduser()),
+        "graphs": expand_graph_paths(graphs_path),
+        "split": split,
+        "n_graphs": len(indices),
+        "columns": columns,
+        "baseline": {"reconstruction": baseline_reco, "mass": baseline_mass},
+        "groups": rows,
+    }
+    json_path = output / "feature_group_importance.json"
+    json_path.write_text(json.dumps(result, indent=2, sort_keys=True))
+    _plot_feature_group_importance(result, output / "feature_group_importance.pdf")
+    dataset.close()
+    result["summary_json"] = str(json_path)
+    return result
+
+
+def _plot_feature_group_importance(result: dict[str, Any], output: Path) -> None:
+    _prepare_matplotlib()
+    import matplotlib.pyplot as plt
+
+    rows = result.get("groups", [])
+    if not rows:
+        return
+    names = [str(row["group"]) for row in rows]
+    metrics = ["rmse_log10_energy", "angular_68_deg", "core_68_km"]
+    fig, axes = plt.subplots(len(metrics), 1, figsize=(8.2, 2.8 * len(metrics)), sharex=True)
+    axes = np.atleast_1d(axes)
+    x = np.arange(len(names))
+    for ax, metric in zip(axes, metrics):
+        values = [float(row.get("reconstruction_delta", {}).get(metric, np.nan)) for row in rows]
+        ax.bar(x, values, color="#4c78a8", alpha=0.75)
+        ax.axhline(0.0, color="0.25", linewidth=1.0)
+        ax.set_ylabel(r"$\Delta$ " + _escape_tex(metric))
+    axes[-1].set_xticks(x, [_escape_tex(name) for name in names], rotation=35, ha="right")
+    fig.tight_layout()
+    fig.savefig(output)
+    plt.close(fig)

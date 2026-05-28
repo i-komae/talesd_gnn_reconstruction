@@ -6,7 +6,7 @@ import os
 import random
 import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 from math import ceil
 from pathlib import Path
@@ -16,7 +16,7 @@ import h5py
 import numpy as np
 
 from .dataset import H5GraphDataset, StandardScaler, collate_graph_arrays, fit_scalers
-from .diagnostics import require_matplotlib_latex, save_training_diagnostics
+from .diagnostics import require_matplotlib_latex, save_best_validation_diagnostics, save_learning_progress, save_training_diagnostics
 from .metrics import balanced_accuracy_threshold, binary_classification_metrics, direction_to_angles, reconstruction_metrics
 from .progress import progress as _progress
 from .progress import progress_bar as _progress_bar
@@ -1241,8 +1241,12 @@ def train_model(
     nll_sigma_core_floor_km: float = 0.005,
     show_progress: bool = True,
     save_diagnostics: bool = True,
+    update_learning_curve_each_epoch: bool = True,
+    best_diagnostics: bool = True,
+    best_diagnostic_max_graphs: int = 20000,
     diagnostic_energy_bin_width: float = 0.1,
     diagnostic_min_bin_count: int = 20,
+    epoch_callback: Callable[[list[dict[str, Any]], Path], None] | None = None,
 ) -> dict[str, Any]:
     stage_started = time.perf_counter()
     _progress_write("stage=start import_torch")
@@ -1520,6 +1524,30 @@ def train_model(
         collate_backend=collate_backend,
         collate_threads=collate_threads,
     )
+    best_diagnostic_loader = None
+    best_diagnostic_indices: list[int] = []
+    if save_diagnostics and bool(best_diagnostics):
+        max_best_graphs = max(int(best_diagnostic_max_graphs), 0)
+        if max_best_graphs > 0 and len(val_indices) > max_best_graphs:
+            best_rng = random.Random(seed + 912367)
+            best_diagnostic_indices = sorted(best_rng.sample(list(val_indices), max_best_graphs))
+        else:
+            best_diagnostic_indices = list(val_indices)
+        best_diagnostic_loader = _make_graph_loader(
+            dataset,
+            best_diagnostic_indices,
+            scalers=scalers,
+            batch_size=batch_size,
+            shuffle=False,
+            require_target=True,
+            num_workers=0,
+            prefetch_factor=prefetch_factor,
+            seed=seed,
+            pin_memory=pin_memory,
+            persistent_workers=False,
+            collate_backend=collate_backend,
+            collate_threads=collate_threads,
+        )
     stage_seconds["model_and_loaders"] = time.perf_counter() - stage_started
     _progress_write(
         f"device={device} data_loader_workers={num_workers} "
@@ -1552,6 +1580,11 @@ def train_model(
             else ""
         )
         + f" particle_filter={particle_filter}"
+        + (
+            f" best_diagnostics=1 best_diagnostic_graphs={len(best_diagnostic_indices)}"
+            if best_diagnostic_loader is not None
+            else " best_diagnostics=0"
+        )
         + (
             f" requested_collate_backend={requested_collate_backend}"
             if requested_collate_backend != collate_backend
@@ -1634,6 +1667,10 @@ def train_model(
             "lr_patience": lr_patience,
             "early_stopping_patience": early_stopping_patience,
             "early_stopping_min_epochs": early_stopping_min_epochs,
+            "update_learning_curve_each_epoch": bool(update_learning_curve_each_epoch),
+            "best_diagnostics": bool(best_diagnostics),
+            "best_diagnostic_max_graphs": int(best_diagnostic_max_graphs),
+            "best_diagnostic_graphs": len(best_diagnostic_indices),
             "best_epoch": best_epoch,
             "best_val_loss": best_val,
             "checkpoint_complete": checkpoint_complete,
@@ -2001,6 +2038,16 @@ def train_model(
         if val_error_losses:
             epoch_row["val_error_loss"] = float(np.mean(val_error_losses))
         history.append(epoch_row)
+        if save_diagnostics and bool(update_learning_curve_each_epoch):
+            try:
+                save_learning_progress(output, history)
+            except Exception as exc:
+                _progress_write(f"warning: failed to update learning curve at epoch={epoch:04d}: {exc}")
+        if epoch_callback is not None:
+            try:
+                epoch_callback(history, output)
+            except Exception as exc:
+                _progress_write(f"warning: epoch callback failed at epoch={epoch:04d}: {exc}")
         if epoch_row["val_loss"] < best_val:
             best_val = epoch_row["val_loss"]
             best_epoch = int(epoch)
@@ -2017,6 +2064,60 @@ def train_model(
                 f"saved best validation checkpoint: epoch={best_epoch:04d} "
                 f"val_loss={best_val:.6f} path={output} elapsed={save_elapsed:.1f}s"
             )
+            if best_diagnostic_loader is not None:
+                diagnostics_started = time.perf_counter()
+                try:
+                    (
+                        pred_best_val,
+                        target_best_val,
+                        mass_logit_best_val,
+                        mass_label_best_val,
+                        quality_best_val,
+                        error_best_val,
+                    ) = _predict_numpy(
+                        model,
+                        best_diagnostic_loader,
+                        scalers,
+                        device,
+                        non_blocking=pin_memory,
+                        desc=f"best epoch {epoch}/{epochs} validation diagnostics",
+                        show_progress=show_progress,
+                        mass_classification=mass_classification,
+                        quality_prediction=quality_prediction,
+                        error_prediction=error_prediction,
+                        target_dim=target_dim,
+                        mass_logit_offset=0.0,
+                        error_angular_scale_deg=error_angular_scale_deg,
+                        error_core_scale_km=error_core_scale_km,
+                        error_energy_scale=error_energy_scale,
+                    )
+                    best_diagnostic_summary = save_best_validation_diagnostics(
+                        output,
+                        epoch=best_epoch,
+                        history=history,
+                        validation=(pred_best_val, target_best_val),
+                        validation_mass=(mass_logit_best_val, mass_label_best_val)
+                        if mass_logit_best_val is not None and mass_label_best_val is not None
+                        else None,
+                        validation_particle_labels=mass_label_best_val,
+                        validation_quality=quality_best_val,
+                        validation_predicted_errors=error_best_val,
+                        energy_bin_width=diagnostic_energy_bin_width,
+                        min_bin_count=diagnostic_min_bin_count,
+                        save_reconstruction=training_task != "mass",
+                    )
+                    diagnostics_elapsed = time.perf_counter() - diagnostics_started
+                    stage_seconds["best_diagnostics"] = (
+                        stage_seconds.get("best_diagnostics", 0.0) + diagnostics_elapsed
+                    )
+                    _progress_write(
+                        f"updated best validation diagnostics: epoch={best_epoch:04d} "
+                        f"graphs={len(best_diagnostic_indices)} "
+                        f"summary={best_diagnostic_summary.get('summary_json')} "
+                        f"elapsed={diagnostics_elapsed:.1f}s"
+                    )
+                except Exception as exc:
+                    _progress_write(f"warning: failed to update best validation diagnostics at epoch={epoch:04d}: {exc}")
         else:
             epochs_without_improvement += 1
 

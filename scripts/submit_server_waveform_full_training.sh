@@ -113,6 +113,16 @@ LOCAL_GRAPH_CLEANUP="${LOCAL_GRAPH_CLEANUP:-1}"
 LOCAL_GRAPH_COPY_TOOL="${LOCAL_GRAPH_COPY_TOOL:-auto}"
 LOCAL_GRAPH_WAIT_TIMEOUT_SEC="${LOCAL_GRAPH_WAIT_TIMEOUT_SEC:-21600}"
 LOCAL_GRAPH_STALE_LOCK_SEC="${LOCAL_GRAPH_STALE_LOCK_SEC:-60}"
+LOCAL_RUNTIME_CACHE="${LOCAL_RUNTIME_CACHE:-auto}"
+LOCAL_RUNTIME_ROOT="${LOCAL_RUNTIME_ROOT:-auto}"
+LOCAL_RUNTIME_ROOT_CANDIDATES="${LOCAL_RUNTIME_ROOT_CANDIDATES:-${LOCAL_GRAPH_ROOT_CANDIDATES}}"
+LOCAL_RUNTIME_FALLBACK_ROOTS="${LOCAL_RUNTIME_FALLBACK_ROOTS:-${LOCAL_GRAPH_FALLBACK_ROOTS}}"
+LOCAL_RUNTIME_CLEANUP="${LOCAL_RUNTIME_CLEANUP:-1}"
+LOCAL_RUNTIME_COPY_TOOL="${LOCAL_RUNTIME_COPY_TOOL:-auto}"
+SKIP_MODULE_LOAD="${SKIP_MODULE_LOAD:-1}"
+EPOCH_LEARNING_CURVE="${EPOCH_LEARNING_CURVE:-1}"
+BEST_DIAGNOSTICS="${BEST_DIAGNOSTICS:-1}"
+BEST_DIAGNOSTIC_MAX_GRAPHS="${BEST_DIAGNOSTIC_MAX_GRAPHS:-20000}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-/dicos_ui_home/ikomae/work/uv-cache}"
 UV_LINK_MODE="${UV_LINK_MODE:-copy}"
 OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
@@ -140,6 +150,30 @@ case "${LOCAL_GRAPH_COPY_TOOL}" in
     ;;
   *)
     echo "LOCAL_GRAPH_COPY_TOOL must be auto, rsync, or cp: ${LOCAL_GRAPH_COPY_TOOL}" >&2
+    exit 2
+    ;;
+esac
+case "${LOCAL_RUNTIME_CACHE}" in
+  0|1|auto)
+    ;;
+  *)
+    echo "LOCAL_RUNTIME_CACHE must be 0, 1, or auto: ${LOCAL_RUNTIME_CACHE}" >&2
+    exit 2
+    ;;
+esac
+case "${LOCAL_RUNTIME_CLEANUP}" in
+  0|1)
+    ;;
+  *)
+    echo "LOCAL_RUNTIME_CLEANUP must be 0 or 1: ${LOCAL_RUNTIME_CLEANUP}" >&2
+    exit 2
+    ;;
+esac
+case "${LOCAL_RUNTIME_COPY_TOOL}" in
+  auto|rsync|cp)
+    ;;
+  *)
+    echo "LOCAL_RUNTIME_COPY_TOOL must be auto, rsync, or cp: ${LOCAL_RUNTIME_COPY_TOOL}" >&2
     exit 2
     ;;
 esac
@@ -189,6 +223,53 @@ SUMMARY_DIR="${RUN_DIR}/summaries"
 LOG_DIR="${RUN_DIR}/logs"
 mkdir -p "${SBATCH_DIR}" "${SLURM_LOG_DIR}" "${SUMMARY_DIR}" "${LOG_DIR}"
 
+RUNTIME_BUNDLE_DIR="${RUN_DIR}/runtime_bundle"
+RUNTIME_BUNDLE_AVAILABLE=0
+if [[ "${DRY_RUN}" != "1" && "${LOCAL_RUNTIME_CACHE}" != "0" ]]; then
+  RUNTIME_BUNDLE_TMP="${RUNTIME_BUNDLE_DIR}.tmp"
+  rm -rf "${RUNTIME_BUNDLE_TMP}"
+  mkdir -p "${RUNTIME_BUNDLE_TMP}/src"
+  runtime_copy_tool="${LOCAL_RUNTIME_COPY_TOOL}"
+  if [[ "${runtime_copy_tool}" == "auto" ]]; then
+    if command -v rsync >/dev/null 2>&1; then
+      runtime_copy_tool="rsync"
+    else
+      runtime_copy_tool="cp"
+    fi
+  fi
+  if [[ "${runtime_copy_tool}" == "rsync" ]]; then
+    if rsync -a --delete \
+      --exclude .git \
+      --exclude .mypy_cache \
+      --exclude .pytest_cache \
+      --exclude __pycache__ \
+      --exclude '*.egg-info' \
+      --exclude outputs \
+      --exclude graphs \
+      --exclude .venv \
+      "${REPO%/}/" "${RUNTIME_BUNDLE_TMP}/src/" \
+      && { [[ ! -d "${REPO}/.venv" ]] || rsync -a --delete "${REPO}/.venv/" "${RUNTIME_BUNDLE_TMP}/src/.venv/"; }; then
+      rm -rf "${RUNTIME_BUNDLE_DIR}"
+      mv "${RUNTIME_BUNDLE_TMP}" "${RUNTIME_BUNDLE_DIR}"
+      RUNTIME_BUNDLE_AVAILABLE=1
+    fi
+  else
+    if cp -a "${REPO%/}/." "${RUNTIME_BUNDLE_TMP}/src/"; then
+      rm -rf "${RUNTIME_BUNDLE_DIR}"
+      mv "${RUNTIME_BUNDLE_TMP}" "${RUNTIME_BUNDLE_DIR}"
+      RUNTIME_BUNDLE_AVAILABLE=1
+    fi
+  fi
+  if [[ "${RUNTIME_BUNDLE_AVAILABLE}" != "1" ]]; then
+    rm -rf "${RUNTIME_BUNDLE_TMP}"
+    if [[ "${LOCAL_RUNTIME_CACHE}" == "1" ]]; then
+      echo "LOCAL_RUNTIME_CACHE=1 but runtime bundle preparation failed: ${RUNTIME_BUNDLE_DIR}" >&2
+      exit 2
+    fi
+    echo "LOCAL_RUNTIME_CACHE=auto: runtime bundle preparation failed; job will use REPO directly." >&2
+  fi
+fi
+
 SBATCH_FILE="${SBATCH_DIR}/${RUN_NAME}.sbatch"
 SBATCH_NODELIST_LINE=""
 if [[ -n "${NODELIST}" ]]; then
@@ -230,15 +311,120 @@ trap 'status=\$?; line=\${LINENO}; command=\${BASH_COMMAND}; echo "ERROR status=
 mkdir -p "${LOG_DIR}" "${SUMMARY_DIR}" "${SLURM_LOG_DIR}"
 exec > >(tee -a "\${JOB_LOG_PATH}" "\${EARLY_LOG_PATH}") 2>&1
 
-module purge
-module load gcc/13.1.0 cmake/3.28 cuda/12.6.0 hdf5/2.0.0 mkl/latest tbb/latest
+LOCAL_RUNTIME_JOB_DIR=""
+LOCAL_RUNTIME_ROOT_SELECTED=""
+REPO_EFFECTIVE="${REPO}"
+PYTHON_BIN_EFFECTIVE=".venv/bin/python"
 
-cd "${REPO}"
+cleanup_local_runtime() {
+  set +e
+  if [[ -n "\${LOCAL_RUNTIME_JOB_DIR}" && -n "\${LOCAL_RUNTIME_ROOT_SELECTED}" && "${LOCAL_RUNTIME_CLEANUP}" == "1" ]]; then
+    case "\${LOCAL_RUNTIME_JOB_DIR}" in
+      "\${LOCAL_RUNTIME_ROOT_SELECTED%/}"/*)
+        echo "Cleaning local runtime cache: \${LOCAL_RUNTIME_JOB_DIR}"
+        rm -rf -- "\${LOCAL_RUNTIME_JOB_DIR}"
+        ;;
+      *)
+        echo "Refusing to clean unexpected local runtime path: \${LOCAL_RUNTIME_JOB_DIR}" >&2
+        ;;
+    esac
+  fi
+}
+trap cleanup_local_runtime EXIT
+
+select_local_runtime_root() {
+  local root
+  local candidates
+  local -a roots
+
+  if [[ "${LOCAL_RUNTIME_ROOT}" == "auto" ]]; then
+    candidates="${LOCAL_RUNTIME_ROOT_CANDIDATES}"
+  else
+    candidates="${LOCAL_RUNTIME_ROOT}"
+    if [[ -n "${LOCAL_RUNTIME_FALLBACK_ROOTS}" ]]; then
+      candidates="\${candidates}:${LOCAL_RUNTIME_FALLBACK_ROOTS}"
+    fi
+  fi
+
+  IFS=: read -r -a roots <<< "\${candidates}"
+  for root in "\${roots[@]}"; do
+    [[ -z "\${root}" ]] && continue
+    if mkdir -p "\${root}" 2>/dev/null && [[ -w "\${root}" ]]; then
+      printf '%s\n' "\${root%/}"
+      return 0
+    fi
+    echo "local runtime root is not writable: \${root}" >&2
+  done
+  return 1
+}
+
+copy_runtime_bundle_to_local() {
+  local src="\$1"
+  local dst="\$2"
+  local copy_tool="${LOCAL_RUNTIME_COPY_TOOL}"
+
+  if [[ "\${copy_tool}" == "auto" ]]; then
+    if command -v rsync >/dev/null 2>&1; then
+      copy_tool="rsync"
+    else
+      copy_tool="cp"
+    fi
+  fi
+  echo "local_runtime_copy_tool_effective=\${copy_tool}"
+  if [[ "\${copy_tool}" == "rsync" ]]; then
+    rsync -a --delete "\${src%/}/" "\${dst%/}/"
+  else
+    cp -a "\${src%/}/." "\${dst%/}/"
+  fi
+}
+
+if [[ "${LOCAL_RUNTIME_CACHE}" != "0" && "${RUNTIME_BUNDLE_AVAILABLE}" == "1" && -d "${RUNTIME_BUNDLE_DIR}/src" ]]; then
+  if LOCAL_RUNTIME_ROOT_SELECTED="\$(select_local_runtime_root)"; then
+    LOCAL_RUNTIME_JOB_DIR="\${LOCAL_RUNTIME_ROOT_SELECTED}/runtime/\${SLURM_JOB_ID:-manual_${RUN_ID}}_${RUN_NAME}"
+    mkdir -p "\${LOCAL_RUNTIME_JOB_DIR}"
+    echo "======================================================================"
+    echo "COPY RUNTIME TO LOCAL STORAGE"
+    echo "date=\$(date)"
+    echo "runtime_bundle=${RUNTIME_BUNDLE_DIR}"
+    echo "local_runtime_root_selected=\${LOCAL_RUNTIME_ROOT_SELECTED}"
+    echo "local_runtime_job_dir=\${LOCAL_RUNTIME_JOB_DIR}"
+    df -h "\${LOCAL_RUNTIME_ROOT_SELECTED}" || true
+    copy_runtime_bundle_to_local "${RUNTIME_BUNDLE_DIR}" "\${LOCAL_RUNTIME_JOB_DIR}"
+    REPO_EFFECTIVE="\${LOCAL_RUNTIME_JOB_DIR}/src"
+    PYTHON_BIN_EFFECTIVE="\${REPO_EFFECTIVE}/.venv/bin/python"
+    if [[ ! -x "\${PYTHON_BIN_EFFECTIVE}" ]]; then
+      echo "Local runtime has no executable venv python; falling back to source repo venv." >&2
+      PYTHON_BIN_EFFECTIVE="${REPO}/.venv/bin/python"
+    fi
+    echo "repo_effective=\${REPO_EFFECTIVE}"
+    echo "python_bin_effective=\${PYTHON_BIN_EFFECTIVE}"
+    echo "date=\$(date)"
+    echo "======================================================================"
+  elif [[ "${LOCAL_RUNTIME_CACHE}" == "1" ]]; then
+    echo "LOCAL_RUNTIME_CACHE=1 but no writable local runtime root was found." >&2
+    exit 2
+  else
+    echo "LOCAL_RUNTIME_CACHE=auto: local runtime cache is unavailable; using REPO directly." >&2
+  fi
+else
+  echo "LOCAL_RUNTIME_CACHE=${LOCAL_RUNTIME_CACHE}: using REPO directly."
+fi
+
+if [[ "${SKIP_MODULE_LOAD}" == "1" ]]; then
+  echo "SKIP_MODULE_LOAD=1: not loading site modules"
+else
+  module purge
+  module load gcc/13.1.0 cmake/3.28 cuda/12.6.0 hdf5/2.0.0 mkl/latest tbb/latest
+fi
+
+cd "\${REPO_EFFECTIVE}"
 
 export UV_CACHE_DIR="${UV_CACHE_DIR}"
 export UV_LINK_MODE="${UV_LINK_MODE}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS}"
 export TALESD_GNN_H5_MAX_OPEN_FILES="${TALESD_GNN_H5_MAX_OPEN_FILES}"
+export PYTHON_BIN="\${PYTHON_BIN_EFFECTIVE}"
+export PYTHONPATH="\${REPO_EFFECTIVE}/src:\${PYTHONPATH:-}"
 
 GRAPH_INPUT_ORIGINAL="${GRAPH_INPUT}"
 LOCAL_GRAPH_JOB_DIR=""
@@ -302,10 +488,11 @@ cleanup_local_graph_cache() {
         ;;
     esac
   fi
+  cleanup_local_runtime
 }
 trap cleanup_local_graph_cache EXIT
-trap 'echo "Received SIGTERM; cleaning local graph cache before exit" >&2; exit 143' TERM
-trap 'echo "Received SIGINT; cleaning local graph cache before exit" >&2; exit 130' INT
+trap 'echo "Received SIGTERM; cleaning local caches before exit" >&2; exit 143' TERM
+trap 'echo "Received SIGINT; cleaning local caches before exit" >&2; exit 130' INT
 
 select_local_graph_root() {
   local root
@@ -689,6 +876,17 @@ echo "mem_per_gpu_gb=${MEM_PER_GPU_GB}"
 echo "mem=${MEM}"
 echo "graph_input_original=\${GRAPH_INPUT_ORIGINAL}"
 echo "graph_input_effective=\${GRAPH_INPUT}"
+echo "repo_original=${REPO}"
+echo "repo_effective=\${REPO_EFFECTIVE}"
+echo "python_bin=\${PYTHON_BIN_EFFECTIVE}"
+echo "local_runtime_cache=${LOCAL_RUNTIME_CACHE}"
+echo "local_runtime_root_requested=${LOCAL_RUNTIME_ROOT}"
+echo "local_runtime_root_selected=\${LOCAL_RUNTIME_ROOT_SELECTED:-none}"
+echo "local_runtime_root_candidates=${LOCAL_RUNTIME_ROOT_CANDIDATES}"
+echo "local_runtime_fallback_roots=${LOCAL_RUNTIME_FALLBACK_ROOTS}"
+echo "local_runtime_cleanup=${LOCAL_RUNTIME_CLEANUP}"
+echo "local_runtime_copy_tool=${LOCAL_RUNTIME_COPY_TOOL}"
+echo "skip_module_load=${SKIP_MODULE_LOAD}"
 echo "local_graph_cache=${LOCAL_GRAPH_CACHE}"
 echo "local_graph_root_requested=${LOCAL_GRAPH_ROOT}"
 echo "local_graph_root_selected=\${LOCAL_GRAPH_ROOT_SELECTED:-none}"
@@ -710,6 +908,9 @@ echo "persistent_workers=${PERSISTENT_WORKERS}"
 echo "h5_max_open_files=${H5_MAX_OPEN_FILES}"
 echo "pin_memory=${PIN_MEMORY}"
 echo "collate_threads=${COLLATE_THREADS}"
+echo "epoch_learning_curve=${EPOCH_LEARNING_CURVE}"
+echo "best_diagnostics=${BEST_DIAGNOSTICS}"
+echo "best_diagnostic_max_graphs=${BEST_DIAGNOSTIC_MAX_GRAPHS}"
 echo "training_task=${TRAINING_TASK}"
 echo "mass_classification=${MASS_CLASSIFICATION}"
 echo "mass_loss_weight=${MASS_LOSS_WEIGHT}"
@@ -741,7 +942,7 @@ if [[ "${SUMMARIZE_GRAPHS}" == "1" ]]; then
     echo "date=\$(date)"
     echo "summary_json=${SUMMARY_DIR}/graph_summary.json"
     echo "summary_log=${SUMMARY_DIR}/graph_summary.log"
-    .venv/bin/python scripts/summarize_graph_shards.py "\${GRAPH_INPUT}" \\
+    "\${PYTHON_BIN_EFFECTIVE}" scripts/summarize_graph_shards.py "\${GRAPH_INPUT}" \\
       --workers "${PREPROCESS_WORKERS}" \\
       -o "${SUMMARY_DIR}/graph_summary.json"
     echo "date=\$(date)"
@@ -803,6 +1004,9 @@ env \\
   PERSISTENT_WORKERS="${PERSISTENT_WORKERS}" \\
   H5_MAX_OPEN_FILES="${H5_MAX_OPEN_FILES}" \\
   PIN_MEMORY="${PIN_MEMORY}" \\
+  EPOCH_LEARNING_CURVE="${EPOCH_LEARNING_CURVE}" \\
+  BEST_DIAGNOSTICS="${BEST_DIAGNOSTICS}" \\
+  BEST_DIAGNOSTIC_MAX_GRAPHS="${BEST_DIAGNOSTIC_MAX_GRAPHS}" \\
   TRAINING_TASK="${TRAINING_TASK}" \\
   MASS_CLASSIFICATION="${MASS_CLASSIFICATION}" \\
   MASS_LOSS_WEIGHT="${MASS_LOSS_WEIGHT}" \\
@@ -841,6 +1045,16 @@ job_log:
 graph_input_original:
   ${GRAPH_INPUT}
 
+local_runtime_cache=${LOCAL_RUNTIME_CACHE}
+local_runtime_root_requested=${LOCAL_RUNTIME_ROOT}
+local_runtime_root_candidates=${LOCAL_RUNTIME_ROOT_CANDIDATES}
+local_runtime_fallback_roots=${LOCAL_RUNTIME_FALLBACK_ROOTS}
+local_runtime_cleanup=${LOCAL_RUNTIME_CLEANUP}
+local_runtime_copy_tool=${LOCAL_RUNTIME_COPY_TOOL}
+runtime_bundle=${RUNTIME_BUNDLE_DIR}
+runtime_bundle_available=${RUNTIME_BUNDLE_AVAILABLE}
+skip_module_load=${SKIP_MODULE_LOAD}
+
 local_graph_cache=${LOCAL_GRAPH_CACHE}
 local_graph_root_requested=${LOCAL_GRAPH_ROOT}
 local_graph_root_candidates=${LOCAL_GRAPH_ROOT_CANDIDATES}
@@ -868,6 +1082,9 @@ persistent_workers=${PERSISTENT_WORKERS}
 h5_max_open_files=${H5_MAX_OPEN_FILES}
 pin_memory=${PIN_MEMORY}
 collate_threads=${COLLATE_THREADS}
+epoch_learning_curve=${EPOCH_LEARNING_CURVE}
+best_diagnostics=${BEST_DIAGNOSTICS}
+best_diagnostic_max_graphs=${BEST_DIAGNOSTIC_MAX_GRAPHS}
 training_task=${TRAINING_TASK}
 mass_classification=${MASS_CLASSIFICATION}
 mass_loss_weight=${MASS_LOSS_WEIGHT}

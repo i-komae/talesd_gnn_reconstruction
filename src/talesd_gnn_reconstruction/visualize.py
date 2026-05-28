@@ -33,7 +33,10 @@ def _feature(sample: dict[str, Any], columns: dict[str, list[str]], name: str, f
     names = columns.get("node_features", [])
     if name not in names:
         return np.full(sample["node_features"].shape[0], fallback, dtype=np.float32)
-    return sample["node_features"][:, names.index(name)]
+    column_index = names.index(name)
+    if column_index >= sample["node_features"].shape[1]:
+        return np.full(sample["node_features"].shape[0], fallback, dtype=np.float32)
+    return sample["node_features"][:, column_index]
 
 
 def _feature_any(

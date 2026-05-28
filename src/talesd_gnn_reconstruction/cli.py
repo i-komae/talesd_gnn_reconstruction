@@ -1522,6 +1522,9 @@ def _cmd_train(args: argparse.Namespace) -> None:
         nll_sigma_core_floor_km=args.nll_sigma_core_floor_km,
         show_progress=not args.no_progress,
         save_diagnostics=not args.no_diagnostics,
+        update_learning_curve_each_epoch=not args.no_epoch_learning_curve,
+        best_diagnostics=not args.no_best_diagnostics,
+        best_diagnostic_max_graphs=args.best_diagnostic_max_graphs,
         diagnostic_energy_bin_width=args.diagnostic_energy_bin_width,
         diagnostic_min_bin_count=args.diagnostic_min_bin_count,
     )
@@ -1558,6 +1561,39 @@ def _cmd_predict(args: argparse.Namespace) -> None:
         include_truth=not args.no_truth,
     )
     print(f"wrote predictions to {output}")
+
+
+def _cmd_input_distributions(args: argparse.Namespace) -> None:
+    from .feature_analysis import save_input_distributions
+
+    graphs = _resolve_graph_args(args.graphs, args.graphs_list)
+    summary = save_input_distributions(
+        graphs,
+        args.output,
+        max_graphs=args.max_graphs,
+        max_values_per_feature=args.max_values_per_feature,
+        seed=args.seed,
+        show_progress=not args.no_progress,
+    )
+    print(f"input feature summary: {summary['summary_json']}")
+
+
+def _cmd_feature_importance(args: argparse.Namespace) -> None:
+    from .feature_analysis import save_feature_group_importance
+
+    graphs = _resolve_graph_args(args.graphs, args.graphs_list)
+    summary = save_feature_group_importance(
+        graphs,
+        args.checkpoint,
+        args.output,
+        split=args.split,
+        max_graphs=args.max_graphs,
+        batch_size=args.batch_size,
+        device=args.device,
+        seed=args.seed,
+        show_progress=not args.no_progress,
+    )
+    print(f"feature group importance: {summary['summary_json']}")
 
 
 def _cmd_visualize(args: argparse.Namespace) -> None:
@@ -1710,6 +1746,9 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--nll-sigma-core-floor-km", type=float, default=0.005, help="Gaussian NLLで使うcore sigma下限[km]")
     train.add_argument("--no-progress", action="store_true", help="学習中のprogress barを表示しない")
     train.add_argument("--no-diagnostics", action="store_true", help="学習後のPDF診断図を保存しない")
+    train.add_argument("--no-epoch-learning-curve", action="store_true", help="epochごとのlearning curve更新を止める")
+    train.add_argument("--no-best-diagnostics", action="store_true", help="validation loss最良更新時の軽量診断図更新を止める")
+    train.add_argument("--best-diagnostic-max-graphs", type=int, default=20000, help="最良更新時の診断に使うvalidation graph数の上限。0ならvalidation全件")
     train.add_argument("--diagnostic-energy-bin-width", type=float, default=0.1, help="診断図で使うtrue log10(E/eV) bin幅")
     train.add_argument("--diagnostic-min-bin-count", type=int, default=20, help="energy bin別診断に使う最小event数")
     train.set_defaults(func=_cmd_train)
@@ -1723,6 +1762,29 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--device", default="auto", help="auto, cpu, mps, cuda など")
     predict.add_argument("--no-truth", action="store_true", help="truth列を出力しない")
     predict.set_defaults(func=_cmd_predict)
+
+    input_dist = sub.add_parser("input-distributions", help="HDF5グラフ入力特徴量の分布図と要約JSONを作成")
+    input_dist.add_argument("--graphs", nargs="*", default=[], help="HDF5グラフ。shard、shard base、またはHDF5ディレクトリを指定可")
+    input_dist.add_argument("--graphs-list", action="append", default=[], help="HDF5 shardパスを1行1ファイルで書いたリスト。複数指定可")
+    input_dist.add_argument("-o", "--output", required=True, help="出力ディレクトリ")
+    input_dist.add_argument("--max-graphs", type=int, default=100000, help="分布作成に使う最大graph数。0なら全件")
+    input_dist.add_argument("--max-values-per-feature", type=int, default=200000, help="各特徴量で保持する最大値数")
+    input_dist.add_argument("--seed", type=int, default=12345)
+    input_dist.add_argument("--no-progress", action="store_true")
+    input_dist.set_defaults(func=_cmd_input_distributions)
+
+    importance = sub.add_parser("feature-importance", help="学習済みcheckpointに対する特徴量group ablation重要度を評価")
+    importance.add_argument("--graphs", nargs="*", default=[], help="HDF5グラフ。checkpoint作成時と同じgraph集合を指定する")
+    importance.add_argument("--graphs-list", action="append", default=[], help="HDF5 shardパスを1行1ファイルで書いたリスト。複数指定可")
+    importance.add_argument("--checkpoint", required=True, help="評価するcheckpoint .pt")
+    importance.add_argument("-o", "--output", required=True, help="出力ディレクトリ")
+    importance.add_argument("--split", choices=["validation", "val", "test", "train"], default="validation", help="checkpoint内のどのsplitで評価するか")
+    importance.add_argument("--max-graphs", type=int, default=50000, help="評価に使う最大graph数。0ならsplit全件")
+    importance.add_argument("--batch-size", type=int, default=256)
+    importance.add_argument("--device", default="auto")
+    importance.add_argument("--seed", type=int, default=12345)
+    importance.add_argument("--no-progress", action="store_true")
+    importance.set_defaults(func=_cmd_feature_importance)
 
     visualize = sub.add_parser("visualize", help="HDF5グラフをPDFとして描画")
     visualize.add_argument("--graphs", nargs="*", default=[], help="exportで作成したHDF5グラフ。shardを複数指定可")

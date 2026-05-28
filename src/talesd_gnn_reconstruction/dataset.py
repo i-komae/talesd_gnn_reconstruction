@@ -12,7 +12,14 @@ from typing import Any
 import h5py
 import numpy as np
 
-from .constants import PULSE_FEATURE_COLUMNS, WAVEFORM_FEATURE_CHANNELS, WAVEFORM_SCHEMA, WAVEFORM_TRACE_BINS
+from .constants import (
+    DROPPED_NODE_FEATURE_COLUMNS,
+    NODE_FEATURE_COLUMNS,
+    PULSE_FEATURE_COLUMNS,
+    WAVEFORM_FEATURE_CHANNELS,
+    WAVEFORM_SCHEMA,
+    WAVEFORM_TRACE_BINS,
+)
 from .progress import progress as _progress
 from .progress import progress_bar as _progress_bar
 
@@ -115,6 +122,41 @@ def _text_attr(value: Any, default: str = "") -> str:
     return str(value)
 
 
+def _columns_from_handle(handle: h5py.File) -> dict[str, list[str]]:
+    columns_text = _text_attr(handle.attrs.get("columns_json"), "{}")
+    try:
+        parsed = json.loads(columns_text)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    columns: dict[str, list[str]] = {}
+    for key, values in parsed.items():
+        if isinstance(values, list):
+            columns[str(key)] = [str(value) for value in values]
+    return columns
+
+
+def _node_feature_selection_from_columns(columns: dict[str, list[str]]) -> tuple[np.ndarray | None, list[str]]:
+    stored = list(columns.get("node_features") or [])
+    if not stored:
+        return None, []
+
+    dropped = set(DROPPED_NODE_FEATURE_COLUMNS)
+    kept_indices = [index for index, name in enumerate(stored) if name not in dropped]
+    effective = [stored[index] for index in kept_indices]
+    expected = list(NODE_FEATURE_COLUMNS)
+    if effective != expected:
+        raise ValueError(
+            "stored node feature columns are incompatible with this code after dropping disabled columns: "
+            f"stored={stored!r}, effective={effective!r}, expected={expected!r}. "
+            "Re-export the graph HDF5 files or update the feature-column migration rule."
+        )
+    if len(kept_indices) == len(stored):
+        return None, effective
+    return np.asarray(kept_indices, dtype=np.int64), effective
+
+
 def _validate_waveform_schema(path: Path, handle: h5py.File) -> None:
     stored_schema = _text_attr(handle.attrs.get("waveform_schema"), "")
     if stored_schema and stored_schema != WAVEFORM_SCHEMA:
@@ -123,11 +165,7 @@ def _validate_waveform_schema(path: Path, handle: h5py.File) -> None:
             "Re-export the graph HDF5 files from DST before training with this waveform definition."
         )
 
-    columns_text = _text_attr(handle.attrs.get("columns_json"), "{}")
-    try:
-        columns = json.loads(columns_text)
-    except json.JSONDecodeError:
-        return
+    columns = _columns_from_handle(handle)
     waveform_columns = columns.get("waveform_features")
     if waveform_columns is None:
         return
@@ -178,6 +216,8 @@ class H5GraphDataset:
         self._path_lengths: list[int] = []
         self._cumulative_lengths: list[int] = []
         self._path_has_metadata: list[bool] = []
+        self._node_feature_indices: list[np.ndarray | None] = []
+        self.node_feature_columns: list[str] = []
         self.columns_json = "{}"
 
         remaining = self.max_graphs
@@ -187,8 +227,22 @@ class H5GraphDataset:
                 if remaining is not None and remaining <= 0:
                     break
                 with h5py.File(graph_path, "r") as handle:
+                    columns = _columns_from_handle(handle)
+                    node_feature_indices, effective_node_columns = _node_feature_selection_from_columns(columns)
                     if path_index == 0:
-                        self.columns_json = handle.attrs.get("columns_json", "{}")
+                        effective_columns = dict(columns)
+                        if effective_node_columns:
+                            effective_columns["node_features"] = effective_node_columns
+                            self.node_feature_columns = effective_node_columns
+                            self.columns_json = json.dumps(effective_columns)
+                        else:
+                            self.columns_json = handle.attrs.get("columns_json", "{}")
+                    elif effective_node_columns and self.node_feature_columns and effective_node_columns != self.node_feature_columns:
+                        raise ValueError(
+                            f"{graph_path} has node feature columns incompatible with the first shard: "
+                            f"{effective_node_columns!r} != {self.node_feature_columns!r}"
+                        )
+                    self._node_feature_indices.append(node_feature_indices)
                     _validate_waveform_schema(graph_path, handle)
                     events = handle["events"]
                     key_list_all = sorted(events.keys())
@@ -426,6 +480,19 @@ class H5GraphDataset:
             n_nodes = 0
         return self._group_detector_lids(group, n_nodes)
 
+    def _node_features_from_group(self, path_index: int, group: h5py.Group) -> np.ndarray:
+        node_features = group["node_features"][()].astype(np.float32)
+        indices = self._node_feature_indices[path_index] if path_index < len(self._node_feature_indices) else None
+        if indices is not None:
+            node_features = node_features[:, indices]
+        return node_features
+
+    def node_feature_dim_for_group(self, path_index: int, group: h5py.Group) -> int:
+        indices = self._node_feature_indices[path_index] if path_index < len(self._node_feature_indices) else None
+        if indices is not None:
+            return int(indices.shape[0])
+        return int(group["node_features"].shape[1])
+
     def __getitem__(self, index: int) -> dict[str, Any]:
         if self.cache_size > 0 and index in self._cache:
             sample = self._cache.pop(index)
@@ -440,8 +507,9 @@ class H5GraphDataset:
         particle_label = self.particle_label(index) if self.load_particle_label else None
         if self.require_particle_label and particle_label is None:
             raise ValueError(f"graph has no proton/iron label: {self.paths[path_index]}::{key}")
+        node_features = self._node_features_from_group(path_index, group)
         sample: dict[str, Any] = {
-            "node_features": group["node_features"][()].astype(np.float32),
+            "node_features": node_features,
             "edge_index": group["edge_index"][()].astype(np.int64),
             "edge_features": group["edge_features"][()].astype(np.float32),
             "pulse_features": group["pulse_features"][()].astype(np.float32)
@@ -451,7 +519,7 @@ class H5GraphDataset:
             if "waveform_features" in group
             else np.zeros(
                 (
-                    int(group["node_features"].shape[0]),
+                    int(node_features.shape[0]),
                     0,
                     0,
                 ),
@@ -513,7 +581,7 @@ def fit_scalers(
 def _scaler_feature_dimensions(dataset: H5GraphDataset, index: int) -> tuple[int, int, int, int]:
     path_index, _local_index, key = dataset._locate(index)
     group = dataset._handle(path_index)["events"][key]
-    node_dim = int(group["node_features"].shape[1])
+    node_dim = dataset.node_feature_dim_for_group(path_index, group)
     edge_dim = int(group["edge_features"].shape[1])
     pulse_dim = int(max(group["pulse_features"].shape[1] - 1, 0)) if "pulse_features" in group else 0
     target_dim = int(group["target"].shape[0]) if "target" in group else 0
@@ -530,7 +598,7 @@ def _update_scaler_stats(
 ) -> None:
     path_index, _local_index, key = dataset._locate(index)
     group = dataset._handle(path_index)["events"][key]
-    node_stats.update(group["node_features"][()].astype(np.float32))
+    node_stats.update(dataset._node_features_from_group(path_index, group))
     edge_features = group["edge_features"][()].astype(np.float32)
     if edge_features.shape[0] > 0:
         edge_stats.update(edge_features)

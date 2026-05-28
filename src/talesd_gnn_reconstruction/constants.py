@@ -36,8 +36,6 @@ NODE_FEATURE_COLUMNS = [
     "trig_usec_rel",
     "log10_first_rho",
     "sqrt_first_rho",
-    "log10_total_rho",
-    "sqrt_total_rho",
     "log10_max_rho",
     "n_pulses",
     "pulse_time_span_usec",
@@ -51,6 +49,11 @@ NODE_FEATURE_COLUMNS = [
     "detector_pulse_order",
     "is_first_detector_pulse",
 ]
+
+DROPPED_NODE_FEATURE_COLUMNS = (
+    "log10_total_rho",
+    "sqrt_total_rho",
+)
 
 EDGE_FEATURE_COLUMNS = [
     "dx_km",
