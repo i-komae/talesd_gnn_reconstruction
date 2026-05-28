@@ -15,6 +15,7 @@ from .diagnostics import _prepare_matplotlib
 from .metrics import binary_classification_metrics, reconstruction_metrics
 from .model import build_model_from_config
 from .progress import progress as _progress
+from .progress import write as _progress_write
 from .train import _make_graph_loader, _predict_numpy, resolve_device
 
 
@@ -139,15 +140,28 @@ def save_input_distributions(
     show_progress: bool = True,
 ) -> dict[str, Any]:
     paths = expand_graph_paths(graphs_path)
+    if show_progress:
+        _progress_write(f"stage=start input_distributions paths={len(paths)}")
+        _progress_write("stage=start input_distributions dataset_init")
     dataset = H5GraphDataset(
         paths,
         require_target=False,
         load_attrs=False,
         load_node_positions=False,
         load_particle_label=True,
+        show_progress=show_progress,
     )
+    if show_progress:
+        _progress_write(
+            f"stage=done input_distributions dataset_init graphs={len(dataset)} shards={len(dataset.paths)}"
+        )
     columns = _columns_from_dataset(dataset)
     indices = _sample_indices(len(dataset), int(max_graphs), int(seed))
+    if show_progress:
+        _progress_write(
+            f"stage=start input_distributions collect sampled_graphs={len(indices)} total_graphs={len(dataset)} "
+            f"max_values_per_feature={int(max_values_per_feature)}"
+        )
     rng = np.random.default_rng(seed)
     samples: dict[str, dict[str, np.ndarray | None]] = {
         "node": {name: None for name in columns["node_features"]},
@@ -186,9 +200,13 @@ def save_input_distributions(
         label = sample.get("particle_label")
         if label is not None and np.isfinite(float(label)):
             particle_labels.append(float(label))
+    if show_progress:
+        _progress_write("stage=done input_distributions collect")
 
     output = Path(output_dir).expanduser()
     output.mkdir(parents=True, exist_ok=True)
+    if show_progress:
+        _progress_write(f"stage=start input_distributions summarize output={output}")
     summary = {
         "graphs": paths,
         "n_graphs_total": len(dataset),
@@ -206,14 +224,22 @@ def save_input_distributions(
     }
     summary_path = output / "input_feature_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    if show_progress:
+        _progress_write(f"stage=done input_distributions summary_json={summary_path}")
     for group, group_samples in samples.items():
+        if show_progress:
+            _progress_write(f"stage=start input_distributions plot group={group}")
         _plot_feature_group(
             {name: values for name, values in group_samples.items() if values is not None},
             output / f"{group}_features.pdf",
             f"{group} feature distributions",
         )
+        if show_progress:
+            _progress_write(f"stage=done input_distributions plot group={group}")
     dataset.close()
     summary["summary_json"] = str(summary_path)
+    if show_progress:
+        _progress_write(f"stage=done input_distributions output={output}")
     return summary
 
 
