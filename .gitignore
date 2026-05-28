@@ -11,8 +11,15 @@ wheels/
 # Virtual environments
 .venv
 
+# Jupyter
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
 # Local outputs
 outputs/
+notebook/
+notebook_outputs/
 *.h5
 *.pt
+*.pt.diagnostics/
 *.csv
