@@ -223,52 +223,8 @@ SUMMARY_DIR="${RUN_DIR}/summaries"
 LOG_DIR="${RUN_DIR}/logs"
 mkdir -p "${SBATCH_DIR}" "${SLURM_LOG_DIR}" "${SUMMARY_DIR}" "${LOG_DIR}"
 
-RUNTIME_BUNDLE_DIR="${RUN_DIR}/runtime_bundle"
-RUNTIME_BUNDLE_AVAILABLE=0
-if [[ "${DRY_RUN}" != "1" && "${LOCAL_RUNTIME_CACHE}" != "0" ]]; then
-  RUNTIME_BUNDLE_TMP="${RUNTIME_BUNDLE_DIR}.tmp"
-  rm -rf "${RUNTIME_BUNDLE_TMP}"
-  mkdir -p "${RUNTIME_BUNDLE_TMP}/src"
-  runtime_copy_tool="${LOCAL_RUNTIME_COPY_TOOL}"
-  if [[ "${runtime_copy_tool}" == "auto" ]]; then
-    if command -v rsync >/dev/null 2>&1; then
-      runtime_copy_tool="rsync"
-    else
-      runtime_copy_tool="cp"
-    fi
-  fi
-  if [[ "${runtime_copy_tool}" == "rsync" ]]; then
-    if rsync -a --delete \
-      --exclude .git \
-      --exclude .mypy_cache \
-      --exclude .pytest_cache \
-      --exclude __pycache__ \
-      --exclude '*.egg-info' \
-      --exclude outputs \
-      --exclude graphs \
-      --exclude .venv \
-      "${REPO%/}/" "${RUNTIME_BUNDLE_TMP}/src/" \
-      && { [[ ! -d "${REPO}/.venv" ]] || rsync -a --delete "${REPO}/.venv/" "${RUNTIME_BUNDLE_TMP}/src/.venv/"; }; then
-      rm -rf "${RUNTIME_BUNDLE_DIR}"
-      mv "${RUNTIME_BUNDLE_TMP}" "${RUNTIME_BUNDLE_DIR}"
-      RUNTIME_BUNDLE_AVAILABLE=1
-    fi
-  else
-    if cp -a "${REPO%/}/." "${RUNTIME_BUNDLE_TMP}/src/"; then
-      rm -rf "${RUNTIME_BUNDLE_DIR}"
-      mv "${RUNTIME_BUNDLE_TMP}" "${RUNTIME_BUNDLE_DIR}"
-      RUNTIME_BUNDLE_AVAILABLE=1
-    fi
-  fi
-  if [[ "${RUNTIME_BUNDLE_AVAILABLE}" != "1" ]]; then
-    rm -rf "${RUNTIME_BUNDLE_TMP}"
-    if [[ "${LOCAL_RUNTIME_CACHE}" == "1" ]]; then
-      echo "LOCAL_RUNTIME_CACHE=1 but runtime bundle preparation failed: ${RUNTIME_BUNDLE_DIR}" >&2
-      exit 2
-    fi
-    echo "LOCAL_RUNTIME_CACHE=auto: runtime bundle preparation failed; job will use REPO directly." >&2
-  fi
-fi
+# Runtime cache is prepared inside the allocated Slurm job only.
+# Do not copy the repo or venv before sbatch submission.
 
 SBATCH_FILE="${SBATCH_DIR}/${RUN_NAME}.sbatch"
 SBATCH_NODELIST_LINE=""
@@ -358,10 +314,11 @@ select_local_runtime_root() {
   return 1
 }
 
-copy_runtime_bundle_to_local() {
+copy_runtime_source_to_local() {
   local src="\$1"
   local dst="\$2"
   local copy_tool="${LOCAL_RUNTIME_COPY_TOOL}"
+  local item
 
   if [[ "\${copy_tool}" == "auto" ]]; then
     if command -v rsync >/dev/null 2>&1; then
@@ -372,28 +329,50 @@ copy_runtime_bundle_to_local() {
   fi
   echo "local_runtime_copy_tool_effective=\${copy_tool}"
   if [[ "\${copy_tool}" == "rsync" ]]; then
-    rsync -a --delete "\${src%/}/" "\${dst%/}/"
+    rsync -a --delete \
+      --exclude .git \
+      --exclude .mypy_cache \
+      --exclude .pytest_cache \
+      --exclude __pycache__ \
+      --exclude '*.egg-info' \
+      --exclude outputs \
+      --exclude graphs \
+      --exclude notebook \
+      --exclude notebook_outputs \
+      "\${src%/}/" "\${dst%/}/"
   else
-    cp -a "\${src%/}/." "\${dst%/}/"
+    mkdir -p "\${dst}"
+    for item in .venv src scripts configs docs pyproject.toml uv.lock setup.py README.md; do
+      [[ -e "\${src%/}/\${item}" ]] || continue
+      cp -a "\${src%/}/\${item}" "\${dst%/}/"
+    done
   fi
 }
 
-if [[ "${LOCAL_RUNTIME_CACHE}" != "0" && "${RUNTIME_BUNDLE_AVAILABLE}" == "1" && -d "${RUNTIME_BUNDLE_DIR}/src" ]]; then
+if [[ "${LOCAL_RUNTIME_CACHE}" != "0" ]]; then
   if LOCAL_RUNTIME_ROOT_SELECTED="\$(select_local_runtime_root)"; then
     LOCAL_RUNTIME_JOB_DIR="\${LOCAL_RUNTIME_ROOT_SELECTED}/runtime/\${SLURM_JOB_ID:-manual_${RUN_ID}}_${RUN_NAME}"
-    mkdir -p "\${LOCAL_RUNTIME_JOB_DIR}"
+    mkdir -p "\${LOCAL_RUNTIME_JOB_DIR}/src"
     echo "======================================================================"
     echo "COPY RUNTIME TO LOCAL STORAGE"
     echo "date=\$(date)"
-    echo "runtime_bundle=${RUNTIME_BUNDLE_DIR}"
+    echo "runtime_source=${REPO}"
     echo "local_runtime_root_selected=\${LOCAL_RUNTIME_ROOT_SELECTED}"
     echo "local_runtime_job_dir=\${LOCAL_RUNTIME_JOB_DIR}"
     df -h "\${LOCAL_RUNTIME_ROOT_SELECTED}" || true
-    copy_runtime_bundle_to_local "${RUNTIME_BUNDLE_DIR}" "\${LOCAL_RUNTIME_JOB_DIR}"
-    REPO_EFFECTIVE="\${LOCAL_RUNTIME_JOB_DIR}/src"
-    PYTHON_BIN_EFFECTIVE="\${REPO_EFFECTIVE}/.venv/bin/python"
-    if [[ ! -x "\${PYTHON_BIN_EFFECTIVE}" ]]; then
-      echo "Local runtime has no executable venv python; falling back to source repo venv." >&2
+    if copy_runtime_source_to_local "${REPO}" "\${LOCAL_RUNTIME_JOB_DIR}/src"; then
+      REPO_EFFECTIVE="\${LOCAL_RUNTIME_JOB_DIR}/src"
+      PYTHON_BIN_EFFECTIVE="\${REPO_EFFECTIVE}/.venv/bin/python"
+      if [[ ! -x "\${PYTHON_BIN_EFFECTIVE}" ]]; then
+        echo "Local runtime has no executable venv python; falling back to source repo venv." >&2
+        PYTHON_BIN_EFFECTIVE="${REPO}/.venv/bin/python"
+      fi
+    elif [[ "${LOCAL_RUNTIME_CACHE}" == "1" ]]; then
+      echo "LOCAL_RUNTIME_CACHE=1 but runtime copy failed." >&2
+      exit 2
+    else
+      echo "LOCAL_RUNTIME_CACHE=auto: runtime copy failed; using REPO directly." >&2
+      REPO_EFFECTIVE="${REPO}"
       PYTHON_BIN_EFFECTIVE="${REPO}/.venv/bin/python"
     fi
     echo "repo_effective=\${REPO_EFFECTIVE}"
@@ -1051,8 +1030,7 @@ local_runtime_root_candidates=${LOCAL_RUNTIME_ROOT_CANDIDATES}
 local_runtime_fallback_roots=${LOCAL_RUNTIME_FALLBACK_ROOTS}
 local_runtime_cleanup=${LOCAL_RUNTIME_CLEANUP}
 local_runtime_copy_tool=${LOCAL_RUNTIME_COPY_TOOL}
-runtime_bundle=${RUNTIME_BUNDLE_DIR}
-runtime_bundle_available=${RUNTIME_BUNDLE_AVAILABLE}
+local_runtime_copy_timing=inside_allocated_job
 skip_module_load=${SKIP_MODULE_LOAD}
 
 local_graph_cache=${LOCAL_GRAPH_CACHE}
