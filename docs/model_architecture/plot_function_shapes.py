@@ -72,8 +72,15 @@ def main() -> None:
     axes[1, 0].set_ylim(-0.05, 2.6)
     axes[1, 0].legend(frameon=False, fontsize=8)
 
-    axes[1, 1].plot(z, bce_with_logits(z, y=1.0), color="#9467bd", lw=2.2, label=r"$y=1$")
-    axes[1, 1].plot(z, bce_with_logits(z, y=0.0), color="#ff7f0e", lw=2.2, label=r"$y=0$")
+    for target, color in [(0.1, "#ff7f0e"), (0.5, "#9467bd"), (0.9, "#17becf")]:
+        axes[1, 1].plot(
+            z,
+            bce_with_logits(z, y=target),
+            color=color,
+            lw=2.2,
+            label=rf"$q_{{\mathrm{{target}}}}={target:.1f}$",
+        )
+        axes[1, 1].axvline(logit(np.asarray(target)), color=color, lw=0.8, ls=":")
     axes[1, 1].axvline(0.0, color="0.55", lw=0.8, ls="--")
     axes[1, 1].set_title(r"$\mathrm{BCEWithLogits}(z,y)$")
     axes[1, 1].set_xlabel(r"$z$")
