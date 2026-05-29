@@ -320,7 +320,18 @@ fi
   fi
 
   echo "stage=start talesd_gnn_train date=$(date)"
+  printf 'command:'
+  printf ' %q' "${cmd[@]}"
+  printf '\n'
   "${cmd[@]}"
+  if [[ ! -s "${CHECKPOINT}" ]]; then
+    echo "ERROR: training command finished but checkpoint was not written: ${CHECKPOINT}" >&2
+    exit 1
+  fi
+  if [[ ! -s "${METRICS_PATH}" ]]; then
+    echo "ERROR: training command finished but metrics were not written: ${METRICS_PATH}" >&2
+    exit 1
+  fi
   echo "stage=done talesd_gnn_train date=$(date)"
 
   echo "checkpoint=${CHECKPOINT}"
