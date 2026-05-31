@@ -1692,7 +1692,7 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--energy-loss-weight", type=float, default=1.0)
     train.add_argument("--core-loss-weight", type=float, default=1.0)
     train.add_argument("--direction-loss-weight", type=float, default=1.0)
-    train.add_argument("--core-loss-scale-km", type=float, default=0.12)
+    train.add_argument("--core-loss-scale-km", type=float, default=0.05)
     train.add_argument("--angular-loss-scale-deg", type=float, default=1.0, help="角度lossをこの角度[deg]で正規化する")
     train.add_argument("--val-fraction", type=float, default=0.1)
     train.add_argument("--test-fraction", type=float, default=0.1)

@@ -1197,7 +1197,7 @@ def train_model(
     energy_loss_weight: float = 1.0,
     core_loss_weight: float = 1.0,
     direction_loss_weight: float = 1.0,
-    core_loss_scale_km: float = 0.12,
+    core_loss_scale_km: float = 0.05,
     angular_loss_scale_deg: float = 1.0,
     val_fraction: float = 0.1,
     test_fraction: float = 0.1,

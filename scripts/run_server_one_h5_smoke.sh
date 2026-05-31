@@ -132,7 +132,7 @@ PY
     --energy-loss-weight 1.2 \
     --core-loss-weight 1.0 \
     --direction-loss-weight 1.4 \
-    --core-loss-scale-km 0.12 \
+    --core-loss-scale-km 0.05 \
     --particle-filter all \
     --device "${DEVICE}" \
     --num-workers "${TRAIN_WORKERS}" \
