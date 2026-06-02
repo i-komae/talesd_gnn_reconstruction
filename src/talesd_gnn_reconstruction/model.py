@@ -79,7 +79,19 @@ def _waveform_shape_summary(
     else:
         waveform = waveform[:, :4, :]
 
-    positive = waveform.clamp_min(0.0)
+    upper_raw = waveform[:, 0, :].clamp_min(0.0)
+    lower_raw = waveform[:, 1, :].clamp_min(0.0)
+    upper_mask = waveform[:, 2, :].clamp(0.0, 1.0)
+    lower_mask = waveform[:, 3, :].clamp(0.0, 1.0)
+    positive = torch.stack(
+        [
+            upper_raw,
+            lower_raw,
+            upper_raw * upper_mask,
+            lower_raw * lower_mask,
+        ],
+        dim=1,
+    )
     sums = positive.sum(dim=-1)
     peaks = positive.amax(dim=-1)
     length = int(positive.shape[-1])

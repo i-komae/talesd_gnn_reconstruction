@@ -289,9 +289,9 @@ def plot_graph_sample(
 
     x = positions[:, 0]
     y = positions[:, 1]
-    arrival_usec = _feature_any(sample, columns, ["first_arrival_usec_rel", "arrival_usec_rel"])
+    arrival_usec = _feature_any(sample, columns, ["pulse_arrival_usec_rel", "first_arrival_usec_rel", "arrival_usec_rel"])
     arrival_usec = arrival_usec - np.nanmin(arrival_usec) if arrival_usec.size else arrival_usec
-    log10_rho = _feature_any(sample, columns, ["log10_first_rho", "log10_rho"])
+    log10_rho = _feature_any(sample, columns, ["log10_pulse_rho", "log10_first_rho", "log10_rho"])
     sizes = _node_sizes(log10_rho)
     max_time = float(np.nanmax(arrival_usec)) if arrival_usec.size else 1.0
     if not math.isfinite(max_time) or max_time <= 0.0:

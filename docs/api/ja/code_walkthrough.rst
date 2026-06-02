@@ -95,15 +95,15 @@ GraphEvent作成
    * - field
      - 内容
    * - ``node_features``
-     - detector位置、barycenter相対位置、到着時刻、charge、pulse数、波形長、FADC peakなど。
+     - detector位置、barycenter相対位置、accepted pulse到着時刻、pulse自身のcharge、同一detector内のaccepted pulse合計charge、pulse数、波形長、FADC peakなど。
    * - ``edge_index``
      - directed edgeの始点・終点node index。
    * - ``edge_features``
      - detector間距離、時刻差、空間重み、因果方向、signal weightなど。
    * - ``pulse_features``
-     - nodeに対応するpulse単位の補助特徴量。
+     - 対応nodeを示す ``node_index``。追加のpulse scalar入力は現行仕様では落とす。
    * - ``waveform_features``
-     - waveform encoderへ渡す波形特徴量。
+     - waveform encoderへ渡す波形特徴量。現行仕様では上下層の rise-aligned raw window と accepted-pulse mask。
    * - ``target``
      - MC truth由来のlog energy、core、directionなど。
    * - ``particle_label``
@@ -121,14 +121,17 @@ node特徴量
 
 - detectorの位置 ``x, y, z``。
 - event内barycenterからの相対位置、半径。
-- first arrivalからの相対時刻。
-- trigger time、chargeの対数・平方根、最大charge。
-- pulse数、pulse time span、waveform segment数、waveform length。
+- event内の最初のaccepted pulseから見た、そのpulse自身の相対時刻。
+- detector trigger time。
+- そのaccepted pulse自身のchargeの対数・平方根。
+- 同一detector内のaccepted pulse最大charge、合計charge、accepted pulse数、accepted pulse time span。
+- detector waveform segment数、waveform length。
 - FADC peak、pedestal、sigma。
-- pulse order、first-pulse flag。
+- accepted pulse order、first accepted pulse flag。
 
 後でfeature selectionを変える場合は、まずこの関数と ``graph_columns`` : ``event_graph.py:755`` を確認します。
-HDF5にはcolumn名も保存されるため、学習時の ``H5GraphDataset`` はcolumn名を見て使う特徴量を決めます。
+HDF5にはcolumn名も保存されるため、学習時の ``H5GraphDataset`` はcolumn名を見てschema互換性を確認します。
+現行schemaでは物理定義が変わっているため、旧HDF5を黙って現行列へ読み替えず、再exportを要求します。
 
 edge特徴量
 ~~~~~~~~~~
@@ -142,7 +145,7 @@ edge特徴量には次のような情報が入ります。
 - 到着時刻差。
 - spatial weight。
 - causal direction。
-- signal weight。
+- pulse信号量差 ``dlog10_pulse_rho`` とsignal weight。
 - degree normalization用の量。
 
 edge特徴量を変える場合は、``event_graph.py`` だけでなく、モデル側の ``edge_feature_dim`` とcheckpoint互換性にも影響します。
@@ -230,7 +233,7 @@ Scaler fitting
 
 - node features。
 - edge features。
-- pulse features。
+- pulse featuresは、追加scalarがある旧仕様の場合だけ対象になる。現行仕様では ``node_index`` のみなのでpulse scalerは作らない。
 - target。
 
 これはvalidation/testの情報を標準化へ混ぜないためです。
@@ -248,7 +251,7 @@ collateで行うこと:
 - eventごとのnode配列を連結する。
 - edge indexをnode offsetで付け替える。
 - ``batch`` 配列を作り、nodeがどのgraphに属するかを示す。
-- ``pulse_features`` と ``waveform_features`` を連結する。
+- ``waveform_features`` を連結する。``pulse_features`` は現行仕様では ``node_index`` だけなので、pulse scalar tensorは空になる。
 - targetやmass labelをbatch配列にする。
 - torch tensorへ変換する。
 
@@ -352,17 +355,17 @@ checkpointにはmodel重みだけでなく、以下も入ります。
 - ``node_features``: node encoderへ入る。
 - ``edge_index``、``edge_features``: message passingへ入る。
 - ``batch``: graph poolingで使う。
-- ``pulse_features``: pulse encoderでnode表現へ足される。
+- ``pulse_features``: 現行仕様では ``node_index`` だけで、pulse encoderは無効。旧仕様の追加pulse scalarがある場合だけnode表現へ足される。
 - ``waveform_features``: waveform encoderでnodeまたはgraph表現へ入る。
 - ``detector_lids``: detector embeddingを使う場合に入る。
 
 node / pulse / waveform
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-``PhysicsTaleSdGNN`` では、node特徴量だけでなくpulse特徴量とwaveform特徴量も使います。
+``PhysicsTaleSdGNN`` では、node特徴量とwaveform特徴量を使います。現行仕様では追加のpulse scalar特徴量は無効です。
 
 - node encoderは静的なdetector/event特徴量をhidden dimへ写す。
-- pulse encoderはpulse特徴量をnodeへ集約する。
+- pulse encoderは、旧仕様の追加pulse scalarがある場合だけ使われます。現行仕様では ``pulse_dim=0`` です。
 - waveform encoderは ``cnn-gru`` などでFADC波形由来の特徴量を抽出する。
 - detector embeddingを有効にすると、detector ID固有の埋め込みも加わる。
 

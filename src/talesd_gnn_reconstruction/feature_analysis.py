@@ -47,7 +47,7 @@ def _columns_from_dataset(dataset: H5GraphDataset) -> dict[str, list[str]]:
     return {
         "node_features": [str(value) for value in columns.get("node_features", dataset.node_feature_columns)],
         "edge_features": [str(value) for value in columns.get("edge_features", EDGE_FEATURE_COLUMNS)],
-        "pulse_features": [str(value) for value in columns.get("pulse_features", PULSE_FEATURE_COLUMNS)],
+        "pulse_features": [str(value) for value in columns.get("pulse_features", dataset.pulse_feature_columns or PULSE_FEATURE_COLUMNS)],
         "waveform_features": [str(value) for value in columns.get("waveform_features", WAVEFORM_FEATURE_CHANNELS)],
         "target": [str(value) for value in columns.get("target", TARGET_COLUMNS)],
     }
@@ -81,6 +81,9 @@ def _summarize_values(values: np.ndarray) -> dict[str, float | int | None]:
     if values.size == 0:
         return {"n": 0}
     quantiles = np.percentile(values, [1, 5, 16, 50, 84, 95, 99])
+    rounded = np.round(values, 6)
+    unique_values, counts = np.unique(rounded, return_counts=True)
+    dominant_index = int(np.argmax(counts))
     return {
         "n": int(values.size),
         "mean": float(np.mean(values)),
@@ -94,6 +97,9 @@ def _summarize_values(values: np.ndarray) -> dict[str, float | int | None]:
         "p95": float(quantiles[5]),
         "p99": float(quantiles[6]),
         "max": float(np.max(values)),
+        "dominant_value_6dp": float(unique_values[dominant_index]),
+        "dominant_fraction_6dp": float(counts[dominant_index] / values.size),
+        "n_unique_6dp": int(unique_values.size),
     }
 
 
@@ -166,7 +172,7 @@ def save_input_distributions(
     samples: dict[str, dict[str, np.ndarray | None]] = {
         "node": {name: None for name in columns["node_features"]},
         "edge": {name: None for name in columns["edge_features"]},
-        "pulse": {name: None for name in columns["pulse_features"]},
+        "pulse": {name: None for name in columns["pulse_features"] if name != "node_index"},
         "waveform": {name: None for name in columns["waveform_features"]},
         "target": {name: None for name in columns["target"]},
     }
@@ -182,6 +188,8 @@ def save_input_distributions(
             samples["edge"][name] = _reservoir_merge(samples["edge"][name], edge[:, col], cap=max_values_per_feature, rng=rng)
         pulse = np.asarray(sample["pulse_features"], dtype=np.float64)
         for col, name in enumerate(columns["pulse_features"][: pulse.shape[1]]):
+            if name == "node_index":
+                continue
             samples["pulse"][name] = _reservoir_merge(samples["pulse"][name], pulse[:, col], cap=max_values_per_feature, rng=rng)
         waveform = np.asarray(sample["waveform_features"], dtype=np.float64)
         if waveform.ndim == 3:
@@ -244,7 +252,7 @@ def save_input_distributions(
 
 
 def default_feature_groups(columns: dict[str, list[str]]) -> dict[str, dict[str, list[str]]]:
-    return {
+    groups = {
         "node_geometry": {
             "node": [
                 "x_km",
@@ -253,35 +261,44 @@ def default_feature_groups(columns: dict[str, list[str]]) -> dict[str, dict[str,
                 "nearest_detector_distance_km",
                 "mean3_detector_distance_km",
                 "neighbor_count_1p5km",
-                "local_detector_density_1p5km2",
-                "dx_from_bary_km",
-                "dy_from_bary_km",
-                "dz_from_bary_km",
-                "r_from_bary_km",
+                "dx_from_signal_bary_km",
+                "dy_from_signal_bary_km",
+                "dz_from_signal_bary_km",
+                "r_from_signal_bary_km",
             ]
         },
-        "node_timing": {"node": ["first_arrival_usec_rel", "trig_usec_rel"]},
+        "node_timing": {"node": ["pulse_arrival_usec_rel", "detector_trigger_usec_rel"]},
         "node_signal": {
             "node": [
-                "log10_first_rho",
-                "sqrt_first_rho",
-                "log10_max_rho",
-                "n_pulses",
-                "pulse_time_span_usec",
-                "n_wf_segments",
-                "wf_length_usec",
-                "log10_fadc_peak",
+                "log10_pulse_rho",
+                "sqrt_pulse_rho",
+                "log10_detector_max_pulse_rho",
+                "log10_detector_sum_pulse_rho",
+                "sqrt_detector_sum_pulse_rho",
+                "detector_accepted_pulse_count",
+                "detector_accepted_pulse_time_span_usec",
             ]
         },
-        "node_pedestal": {"node": ["upper_ped", "lower_ped", "upper_ped_sigma", "lower_ped_sigma"]},
-        "node_order": {"node": ["detector_pulse_order", "is_first_detector_pulse"]},
+        "node_waveform_context": {"node": ["detector_wf_segments", "detector_wf_length_usec", "log10_detector_fadc_peak"]},
+        "node_pedestal": {
+            "node": [
+                "detector_upper_ped",
+                "detector_lower_ped",
+                "detector_upper_ped_sigma",
+                "detector_lower_ped_sigma",
+            ]
+        },
+        "node_order": {"node": ["accepted_pulse_order", "is_first_accepted_pulse"]},
         "edge_geometry": {"edge": ["dx_km", "dy_km", "dz_km", "distance_km"]},
         "edge_timing": {"edge": ["dt_usec", "abs_dt_usec", "dt_per_km"]},
-        "edge_signal": {"edge": ["log10_rho_ratio"]},
+        "edge_signal": {"edge": ["dlog10_pulse_rho"]},
         "edge_ising": {"edge": ["ising_weight", "ising_weight_raw", "ising_causal_excess_usec", "ising_spatial", "ising_causal"]},
-        "pulse_features": {"pulse": [name for name in columns["pulse_features"] if name != "node_index"]},
         "waveform": {"waveform": list(columns["waveform_features"])},
     }
+    pulse_inputs = [name for name in columns["pulse_features"] if name != "node_index"]
+    if pulse_inputs:
+        groups["pulse_features"] = {"pulse": pulse_inputs}
+    return groups
 
 
 class _FeatureAblationDataset:

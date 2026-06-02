@@ -204,33 +204,28 @@ def _pulse_interval(pulse: Any, channel: str) -> tuple[int, int]:
     raise ValueError(f"unknown waveform channel: {channel}")
 
 
-def _pulse_time_origin_bin(accepted_pulses: list[Any]) -> int:
-    return min(min(int(pulse.upper_rise_bin), int(pulse.lower_rise_bin)) for pulse in accepted_pulses)
-
-
-def _copy_accepted_gapped_pulses(
-    values: np.ndarray,
+def _copy_accepted_pulse_mask(
     accepted_pulses: list[Any],
     *,
     channel: str,
+    rise_anchor_bin: int,
+    source_length: int,
     length: int = WAVEFORM_TRACE_BINS,
 ) -> np.ndarray:
     out = np.zeros(length, dtype=np.float32)
     if not accepted_pulses:
         return out
-    origin_bin = _pulse_time_origin_bin(accepted_pulses)
+    window_start = int(rise_anchor_bin) - int(WAVEFORM_RISE_ANCHOR_BIN)
+    window_end = window_start + int(length)
     for pulse in accepted_pulses:
         start, end = _pulse_interval(pulse, channel)
-        start = max(start, 0)
-        end = min(end, int(values.shape[0]))
-        if end <= start:
+        src_start = max(int(start), window_start, 0)
+        src_end = min(int(end), window_end, int(source_length))
+        if src_end <= src_start:
             continue
-        dst_start = max(start - origin_bin, 0)
-        if dst_start >= length:
-            continue
-        n_copy = min(end - start, int(length) - dst_start)
-        if n_copy > 0:
-            out[dst_start : dst_start + n_copy] = values[start : start + n_copy]
+        dst_start = src_start - window_start
+        dst_end = src_end - window_start
+        out[dst_start:dst_end] = 1.0
     return out
 
 
@@ -256,8 +251,18 @@ def _waveform_features_for_pulse(
         [
             _copy_rise_aligned_window(upper_vem, rise_anchor_bin),
             _copy_rise_aligned_window(lower_vem, rise_anchor_bin),
-            _copy_accepted_gapped_pulses(upper_vem, accepted_pulses, channel="upper"),
-            _copy_accepted_gapped_pulses(lower_vem, accepted_pulses, channel="lower"),
+            _copy_accepted_pulse_mask(
+                accepted_pulses,
+                channel="upper",
+                rise_anchor_bin=rise_anchor_bin,
+                source_length=upper_vem.shape[0],
+            ),
+            _copy_accepted_pulse_mask(
+                accepted_pulses,
+                channel="lower",
+                rise_anchor_bin=rise_anchor_bin,
+                source_length=lower_vem.shape[0],
+            ),
         ],
         axis=0,
     ).astype(np.float32, copy=False)
@@ -350,7 +355,7 @@ def _extract_hit(
         )
 
     fadc_peak = float(max(np.max(upper_wf), np.max(lower_wf)))
-    total_rho = float(pulse_rows[0]["rho"])
+    sum_rho = float(sum(row["rho"] for row in pulse_rows))
     max_rho = float(max(row["rho"] for row in pulse_rows))
     time_span = float(max(row["arrival_usec"] for row in pulse_rows) - min(row["arrival_usec"] for row in pulse_rows))
 
@@ -363,12 +368,12 @@ def _extract_hit(
         "lower_ped": lower_ped,
         "upper_sigma": upper_sigma,
         "lower_sigma": lower_sigma,
-        "num_pulses": len(pulses),
-        "total_rho": total_rho,
-        "max_rho": max_rho,
-        "pulse_time_span_usec": time_span,
-        "num_segments": int(sub.get("numSegments", 1)),
-        "wf_length_usec": float(int(sub.get("wfLengthBins", upper_wf.size)) * FADC_BIN_WIDTH_USEC),
+        "raw_pulse_count": len(pulses),
+        "raw_sum_rho": sum_rho,
+        "raw_max_rho": max_rho,
+        "raw_pulse_time_span_usec": time_span,
+        "detector_wf_segments": int(sub.get("numSegments", 1)),
+        "detector_wf_length_usec": float(int(sub.get("wfLengthBins", upper_wf.size)) * FADC_BIN_WIDTH_USEC),
         "pulses": pulse_rows,
     }
 
@@ -389,7 +394,7 @@ def _merge_hits_by_lid(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for order, pulse in enumerate(pulses):
             pulse["order"] = order
 
-        total_rho = float(pulses[0]["rho"])
+        sum_rho = float(sum(float(pulse["rho"]) for pulse in pulses))
         max_rho = float(max(float(pulse["rho"]) for pulse in pulses))
         time_span = float(float(pulses[-1]["arrival_usec"]) - float(pulses[0]["arrival_usec"]))
         first_row = min(rows, key=lambda row: min(float(pulse["arrival_usec"]) for pulse in row["pulses"]))
@@ -404,12 +409,12 @@ def _merge_hits_by_lid(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "lower_ped": float(np.mean([row["lower_ped"] for row in rows])),
                 "upper_sigma": float(np.mean([row["upper_sigma"] for row in rows])),
                 "lower_sigma": float(np.mean([row["lower_sigma"] for row in rows])),
-                "num_pulses": len(pulses),
-                "total_rho": total_rho,
-                "max_rho": max_rho,
-                "pulse_time_span_usec": time_span,
-                "num_segments": int(sum(row.get("num_segments", 1) for row in rows)),
-                "wf_length_usec": float(max(row.get("wf_length_usec", 0.0) for row in rows)),
+                "raw_pulse_count": len(pulses),
+                "raw_sum_rho": sum_rho,
+                "raw_max_rho": max_rho,
+                "raw_pulse_time_span_usec": time_span,
+                "detector_wf_segments": int(sum(row.get("detector_wf_segments", 1) for row in rows)),
+                "detector_wf_length_usec": float(max(row.get("detector_wf_length_usec", 0.0) for row in rows)),
                 "pulses": pulses,
             }
         )
@@ -474,16 +479,25 @@ def _build_node_features(
     pulse_nodes: list[dict[str, Any]] = []
     for hit in hits:
         pulses = sorted(hit["pulses"], key=lambda pulse: float(pulse["arrival_usec"]))
-        if not pulses:
-            continue
-        first_arrival = float(pulses[0]["arrival_usec"])
-        max_rho = float(max(float(pulse["rho"]) for pulse in pulses))
-        time_span = float(float(pulses[-1]["arrival_usec"]) - first_arrival)
         fadc_peak = float(hit["fadc_peak"])
-        for order, pulse in enumerate(pulses):
+        if not pulses or fadc_peak >= MAX_FADC_COUNT:
+            continue
+
+        accepted = [
+            pulse
+            for pulse in pulses
+            if float(pulse["rho"]) >= MIN_VALID_MIP
+        ]
+        if not accepted:
+            continue
+
+        first_arrival = float(accepted[0]["arrival_usec"])
+        accepted_rhos = [float(pulse["rho"]) for pulse in accepted]
+        max_rho = float(max(accepted_rhos))
+        sum_rho = float(sum(accepted_rhos))
+        time_span = float(float(accepted[-1]["arrival_usec"]) - first_arrival)
+        for order, pulse in enumerate(accepted):
             rho = float(pulse["rho"])
-            if rho < MIN_VALID_MIP or fadc_peak >= MAX_FADC_COUNT:
-                continue
             pulse_nodes.append(
                 {
                     "lid": int(hit["lid"]),
@@ -492,17 +506,18 @@ def _build_node_features(
                     "trig_usec_rel": float(hit["trig_usec_rel"]),
                     "rho": rho,
                     "detector_max_rho": max_rho,
-                    "detector_num_pulses": len(pulses),
-                    "detector_pulse_time_span_usec": time_span,
-                    "detector_pulse_order": order,
-                    "is_first_detector_pulse": 1.0 if order == 0 else 0.0,
+                    "detector_sum_rho": sum_rho,
+                    "detector_num_accepted_pulses": len(accepted),
+                    "detector_accepted_pulse_time_span_usec": time_span,
+                    "accepted_pulse_order": order,
+                    "is_first_accepted_pulse": 1.0 if order == 0 else 0.0,
                     "fadc_peak": fadc_peak,
                     "upper_ped": float(hit["upper_ped"]),
                     "lower_ped": float(hit["lower_ped"]),
                     "upper_sigma": float(hit["upper_sigma"]),
                     "lower_sigma": float(hit["lower_sigma"]),
-                    "num_segments": int(hit["num_segments"]),
-                    "wf_length_usec": float(hit["wf_length_usec"]),
+                    "detector_wf_segments": int(hit["detector_wf_segments"]),
+                    "detector_wf_length_usec": float(hit["detector_wf_length_usec"]),
                     "waveform_features": np.asarray(
                         pulse.get(
                             "waveform_features",
@@ -542,6 +557,7 @@ def _build_node_features(
     for i, node in enumerate(pulse_nodes):
         rho_i = max(float(node["rho"]), 1.0e-6)
         max_rho_i = max(float(node["detector_max_rho"]), 1.0e-6)
+        sum_rho_i = max(float(node["detector_sum_rho"]), 1.0e-6)
         fadc_peak = max(float(node["fadc_peak"]), 1.0)
         lid = int(node["lid"])
         lids.append(lid)
@@ -553,7 +569,6 @@ def _build_node_features(
                 local_context[i, 0],
                 local_context[i, 1],
                 local_context[i, 2],
-                local_context[i, 3],
                 delta[i, 0],
                 delta[i, 1],
                 delta[i, 2],
@@ -563,28 +578,24 @@ def _build_node_features(
                 math.log10(rho_i),
                 math.sqrt(rho_i),
                 math.log10(max_rho_i),
-                float(node["detector_num_pulses"]),
-                float(node["detector_pulse_time_span_usec"]),
-                float(node["num_segments"]),
-                float(node["wf_length_usec"]),
+                math.log10(sum_rho_i),
+                math.sqrt(sum_rho_i),
+                float(node["detector_num_accepted_pulses"]),
+                float(node["detector_accepted_pulse_time_span_usec"]),
+                float(node["detector_wf_segments"]),
+                float(node["detector_wf_length_usec"]),
                 math.log10(fadc_peak),
                 float(node["upper_ped"]),
                 float(node["lower_ped"]),
                 float(node["upper_sigma"]),
                 float(node["lower_sigma"]),
-                float(node["detector_pulse_order"]),
-                float(node["is_first_detector_pulse"]),
+                float(node["accepted_pulse_order"]),
+                float(node["is_first_accepted_pulse"]),
             ]
         )
         pulse_features.append(
             [
                 float(i),
-                float(arrival_rel[i]),
-                float(arrival_rel[i]),
-                math.log10(rho_i),
-                math.sqrt(rho_i),
-                float(node["detector_pulse_order"]),
-                float(node["is_first_detector_pulse"]),
             ]
         )
         waveform = np.asarray(node["waveform_features"], dtype=np.float32)
@@ -703,8 +714,8 @@ def build_graph_event(
     if node_features.shape[0] < GEOM_MIN_POINTS or len(set(detector_ids)) < GEOM_MIN_POINTS:
         return None
 
-    arrival_rel = node_features[:, NODE_FEATURE_COLUMNS.index("first_arrival_usec_rel")]
-    log_rho = node_features[:, NODE_FEATURE_COLUMNS.index("log10_first_rho")]
+    arrival_rel = node_features[:, NODE_FEATURE_COLUMNS.index("pulse_arrival_usec_rel")]
+    log_rho = node_features[:, NODE_FEATURE_COLUMNS.index("log10_pulse_rho")]
     rho = np.power(10.0, log_rho)
     edge_index, edge_features = _build_edges(positions, arrival_rel, log_rho, rho, detector_ids)
     target = _target_from_sim(bank.get("sim"))

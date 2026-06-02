@@ -27,32 +27,34 @@ NODE_FEATURE_COLUMNS = [
     "nearest_detector_distance_km",
     "mean3_detector_distance_km",
     "neighbor_count_1p5km",
-    "local_detector_density_1p5km2",
-    "dx_from_bary_km",
-    "dy_from_bary_km",
-    "dz_from_bary_km",
-    "r_from_bary_km",
-    "first_arrival_usec_rel",
-    "trig_usec_rel",
-    "log10_first_rho",
-    "sqrt_first_rho",
-    "log10_max_rho",
-    "n_pulses",
-    "pulse_time_span_usec",
-    "n_wf_segments",
-    "wf_length_usec",
-    "log10_fadc_peak",
-    "upper_ped",
-    "lower_ped",
-    "upper_ped_sigma",
-    "lower_ped_sigma",
-    "detector_pulse_order",
-    "is_first_detector_pulse",
+    "dx_from_signal_bary_km",
+    "dy_from_signal_bary_km",
+    "dz_from_signal_bary_km",
+    "r_from_signal_bary_km",
+    "pulse_arrival_usec_rel",
+    "detector_trigger_usec_rel",
+    "log10_pulse_rho",
+    "sqrt_pulse_rho",
+    "log10_detector_max_pulse_rho",
+    "log10_detector_sum_pulse_rho",
+    "sqrt_detector_sum_pulse_rho",
+    "detector_accepted_pulse_count",
+    "detector_accepted_pulse_time_span_usec",
+    "detector_wf_segments",
+    "detector_wf_length_usec",
+    "log10_detector_fadc_peak",
+    "detector_upper_ped",
+    "detector_lower_ped",
+    "detector_upper_ped_sigma",
+    "detector_lower_ped_sigma",
+    "accepted_pulse_order",
+    "is_first_accepted_pulse",
 ]
 
 DROPPED_NODE_FEATURE_COLUMNS = (
     "log10_total_rho",
     "sqrt_total_rho",
+    "local_detector_density_1p5km2",
 )
 
 EDGE_FEATURE_COLUMNS = [
@@ -63,7 +65,7 @@ EDGE_FEATURE_COLUMNS = [
     "dt_usec",
     "abs_dt_usec",
     "dt_per_km",
-    "log10_rho_ratio",
+    "dlog10_pulse_rho",
     "ising_weight",
     "ising_weight_raw",
     "ising_causal_excess_usec",
@@ -86,20 +88,23 @@ IRON_PARTTYPE = 5626
 
 PULSE_FEATURE_COLUMNS = [
     "node_index",
+]
+
+DROPPED_PULSE_FEATURE_COLUMNS = (
     "arrival_usec_rel",
     "dt_from_first_usec",
     "log10_rho",
     "sqrt_rho",
     "pulse_order",
     "is_first_pulse",
-]
+)
 
 WAVEFORM_TRACE_BINS = 128
 WAVEFORM_RISE_ANCHOR_BIN = 32
-WAVEFORM_SCHEMA = "rise_aligned_raw_plus_accepted_gapped_v1"
+WAVEFORM_SCHEMA = "rise_aligned_raw_plus_accepted_mask_v1"
 WAVEFORM_FEATURE_CHANNELS = [
     "upper_raw_window_vem",
     "lower_raw_window_vem",
-    "upper_accepted_gapped_vem",
-    "lower_accepted_gapped_vem",
+    "upper_accepted_mask",
+    "lower_accepted_mask",
 ]

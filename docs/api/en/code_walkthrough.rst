@@ -84,11 +84,11 @@ The function does the following:
 
 Main fields in ``GraphEvent`` : ``event_graph.py:41``:
 
-- ``node_features``: detector position, barycenter-relative position, arrival time, charge, pulse counts, waveform length, FADC peak, and related quantities.
+- ``node_features``: detector position, barycenter-relative position, accepted-pulse arrival time, the pulse's own charge, summed accepted-pulse charge in the same detector, accepted-pulse count, waveform length, FADC peak, and related quantities.
 - ``edge_index``: source and destination node indices for directed edges.
 - ``edge_features``: distance, time difference, spatial weight, causal direction, signal weight, and normalization terms.
-- ``pulse_features``: pulse-level auxiliary features.
-- ``waveform_features``: waveform inputs for the waveform encoder.
+- ``pulse_features``: the ``node_index`` mapping for the corresponding accepted-pulse node. Additional pulse-level scalar inputs are disabled in the current schema.
+- ``waveform_features``: waveform inputs for the waveform encoder; currently upper/lower rise-aligned raw windows plus accepted-pulse masks.
 - ``target``: MC truth targets for energy, core, and direction.
 - ``particle_label``: label for mass classification.
 - ``metadata``: ``source_path``, ``source_index``, part type, and related split/diagnostic metadata.
@@ -98,7 +98,10 @@ Node and edge features
 
 ``_build_node_features`` creates one node per accepted pulse.
 The same detector ID may appear multiple times if a detector contributes multiple pulses.
+The node columns deliberately separate pulse-level quantities, detector-level accepted-pulse aggregates, and event-context quantities.
+Examples are ``log10_pulse_rho`` for the pulse itself, ``log10_detector_sum_pulse_rho`` for the accepted-pulse charge sum in the same detector, and ``dx_from_signal_bary_km`` for the event context.
 The column definitions are exposed by ``graph_columns`` : ``event_graph.py:755`` and are written into the HDF5 file.
+Because the physical meaning of several columns has changed, old HDF5 files are not silently migrated to the current schema; they must be re-exported.
 
 ``_build_edges`` scans node pairs from different detectors, removes pairs outside the distance and timing cuts, and writes bidirectional directed edges.
 Changing edge features affects the HDF5 schema, ``edge_feature_dim``, and checkpoint compatibility.
@@ -138,7 +141,7 @@ Dataset and batching
 ``H5GraphDataset`` : ``dataset.py:181`` expands file or directory inputs into HDF5 shards, validates schema, reads column definitions, applies particle filtering and max-graph limits, builds global-to-local index mapping, and checks target/metadata availability.
 The progress label ``initialize graph shards`` corresponds to this initialization step.
 
-``__getitem__`` reads one event group and returns NumPy arrays for node features, edge index, edge features, pulse features, waveform features, target, attributes, and optional detector IDs or particle labels.
+``__getitem__`` reads one event group and returns NumPy arrays for node features, edge index, edge features, pulse-to-node index mapping, waveform features, target, attributes, and optional detector IDs or particle labels.
 It does not return torch tensors yet.
 
 ``fit_scalers`` : ``dataset.py:549`` fits feature and target scalers using the training split only.
@@ -215,8 +218,8 @@ Model
 
 The current main model is ``PhysicsTaleSdGNN`` : ``model.py:718``.
 
-Inputs include node features, edge index, edge features, graph batch IDs, pulse features, waveform features, and optionally detector IDs.
-The model combines a node encoder, pulse encoder, waveform encoder, optional detector embedding, edge-aware message passing, graph-level readout, and task-specific heads.
+Inputs include node features, edge index, edge features, graph batch IDs, waveform features, and optionally detector IDs.
+The model combines a node encoder, waveform encoder, optional detector embedding, edge-aware message passing, graph-level readout, and task-specific heads. The pulse encoder is inactive in the current schema because ``pulse_features`` contains only ``node_index``.
 
 Main heads:
 

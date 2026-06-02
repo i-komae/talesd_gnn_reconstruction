@@ -14,6 +14,7 @@ import numpy as np
 
 from .constants import (
     DROPPED_NODE_FEATURE_COLUMNS,
+    DROPPED_PULSE_FEATURE_COLUMNS,
     NODE_FEATURE_COLUMNS,
     PULSE_FEATURE_COLUMNS,
     WAVEFORM_FEATURE_CHANNELS,
@@ -157,6 +158,26 @@ def _node_feature_selection_from_columns(columns: dict[str, list[str]]) -> tuple
     return np.asarray(kept_indices, dtype=np.int64), effective
 
 
+def _pulse_feature_selection_from_columns(columns: dict[str, list[str]]) -> tuple[np.ndarray | None, list[str]]:
+    stored = list(columns.get("pulse_features") or [])
+    if not stored:
+        return None, []
+
+    dropped = set(DROPPED_PULSE_FEATURE_COLUMNS)
+    kept_indices = [index for index, name in enumerate(stored) if name not in dropped]
+    effective = [stored[index] for index in kept_indices]
+    expected = list(PULSE_FEATURE_COLUMNS)
+    if effective != expected:
+        raise ValueError(
+            "stored pulse feature columns are incompatible with this code after dropping disabled columns: "
+            f"stored={stored!r}, effective={effective!r}, expected={expected!r}. "
+            "Re-export the graph HDF5 files or update the feature-column migration rule."
+        )
+    if len(kept_indices) == len(stored):
+        return None, effective
+    return np.asarray(kept_indices, dtype=np.int64), effective
+
+
 def _validate_waveform_schema(path: Path, handle: h5py.File) -> None:
     stored_schema = _text_attr(handle.attrs.get("waveform_schema"), "")
     if stored_schema and stored_schema != WAVEFORM_SCHEMA:
@@ -173,8 +194,8 @@ def _validate_waveform_schema(path: Path, handle: h5py.File) -> None:
         raise ValueError(
             f"{path} stores waveform_features={list(waveform_columns)!r}, "
             f"but this code expects {list(WAVEFORM_FEATURE_CHANNELS)!r}. "
-            "Re-export the graph HDF5 files from DST; old compact accepted-pulse waveforms cannot be "
-            "interpreted as accepted-gapped waveforms."
+            "Re-export the graph HDF5 files from DST; old compact or accepted-gapped waveforms cannot be "
+            "interpreted as raw waveform plus accepted-pulse mask channels."
         )
 
 
@@ -217,7 +238,9 @@ class H5GraphDataset:
         self._cumulative_lengths: list[int] = []
         self._path_has_metadata: list[bool] = []
         self._node_feature_indices: list[np.ndarray | None] = []
+        self._pulse_feature_indices: list[np.ndarray | None] = []
         self.node_feature_columns: list[str] = []
+        self.pulse_feature_columns: list[str] = []
         self.columns_json = "{}"
 
         remaining = self.max_graphs
@@ -229,20 +252,32 @@ class H5GraphDataset:
                 with h5py.File(graph_path, "r") as handle:
                     columns = _columns_from_handle(handle)
                     node_feature_indices, effective_node_columns = _node_feature_selection_from_columns(columns)
+                    pulse_feature_indices, effective_pulse_columns = _pulse_feature_selection_from_columns(columns)
                     if path_index == 0:
                         effective_columns = dict(columns)
                         if effective_node_columns:
                             effective_columns["node_features"] = effective_node_columns
                             self.node_feature_columns = effective_node_columns
-                            self.columns_json = json.dumps(effective_columns)
-                        else:
-                            self.columns_json = handle.attrs.get("columns_json", "{}")
+                        if effective_pulse_columns:
+                            effective_columns["pulse_features"] = effective_pulse_columns
+                            self.pulse_feature_columns = effective_pulse_columns
+                        self.columns_json = (
+                            json.dumps(effective_columns)
+                            if effective_node_columns or effective_pulse_columns
+                            else handle.attrs.get("columns_json", "{}")
+                        )
                     elif effective_node_columns and self.node_feature_columns and effective_node_columns != self.node_feature_columns:
                         raise ValueError(
                             f"{graph_path} has node feature columns incompatible with the first shard: "
                             f"{effective_node_columns!r} != {self.node_feature_columns!r}"
                         )
+                    elif effective_pulse_columns and self.pulse_feature_columns and effective_pulse_columns != self.pulse_feature_columns:
+                        raise ValueError(
+                            f"{graph_path} has pulse feature columns incompatible with the first shard: "
+                            f"{effective_pulse_columns!r} != {self.pulse_feature_columns!r}"
+                        )
                     self._node_feature_indices.append(node_feature_indices)
+                    self._pulse_feature_indices.append(pulse_feature_indices)
                     _validate_waveform_schema(graph_path, handle)
                     events = handle["events"]
                     key_list_all = sorted(events.keys())
@@ -487,11 +522,28 @@ class H5GraphDataset:
             node_features = node_features[:, indices]
         return node_features
 
+    def _pulse_features_from_group(self, path_index: int, group: h5py.Group) -> np.ndarray:
+        if "pulse_features" not in group:
+            return np.zeros((0, len(PULSE_FEATURE_COLUMNS)), dtype=np.float32)
+        pulse_features = group["pulse_features"][()].astype(np.float32)
+        indices = self._pulse_feature_indices[path_index] if path_index < len(self._pulse_feature_indices) else None
+        if indices is not None:
+            pulse_features = pulse_features[:, indices]
+        return pulse_features
+
     def node_feature_dim_for_group(self, path_index: int, group: h5py.Group) -> int:
         indices = self._node_feature_indices[path_index] if path_index < len(self._node_feature_indices) else None
         if indices is not None:
             return int(indices.shape[0])
         return int(group["node_features"].shape[1])
+
+    def pulse_feature_dim_for_group(self, path_index: int, group: h5py.Group) -> int:
+        indices = self._pulse_feature_indices[path_index] if path_index < len(self._pulse_feature_indices) else None
+        if indices is not None:
+            return max(int(indices.shape[0]) - 1, 0)
+        if "pulse_features" not in group:
+            return 0
+        return max(int(group["pulse_features"].shape[1]) - 1, 0)
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         if self.cache_size > 0 and index in self._cache:
@@ -512,9 +564,7 @@ class H5GraphDataset:
             "node_features": node_features,
             "edge_index": group["edge_index"][()].astype(np.int64),
             "edge_features": group["edge_features"][()].astype(np.float32),
-            "pulse_features": group["pulse_features"][()].astype(np.float32)
-            if "pulse_features" in group
-            else np.zeros((0, len(PULSE_FEATURE_COLUMNS)), dtype=np.float32),
+            "pulse_features": self._pulse_features_from_group(path_index, group),
             "waveform_features": group["waveform_features"][()].astype(np.float32)
             if "waveform_features" in group
             else np.zeros(
@@ -583,7 +633,7 @@ def _scaler_feature_dimensions(dataset: H5GraphDataset, index: int) -> tuple[int
     group = dataset._handle(path_index)["events"][key]
     node_dim = dataset.node_feature_dim_for_group(path_index, group)
     edge_dim = int(group["edge_features"].shape[1])
-    pulse_dim = int(max(group["pulse_features"].shape[1] - 1, 0)) if "pulse_features" in group else 0
+    pulse_dim = dataset.pulse_feature_dim_for_group(path_index, group)
     target_dim = int(group["target"].shape[0]) if "target" in group else 0
     return node_dim, edge_dim, pulse_dim, target_dim
 
@@ -603,7 +653,7 @@ def _update_scaler_stats(
     if edge_features.shape[0] > 0:
         edge_stats.update(edge_features)
     if pulse_stats is not None and "pulse_features" in group:
-        pulse_features = group["pulse_features"][()].astype(np.float32)
+        pulse_features = dataset._pulse_features_from_group(path_index, group)
         if pulse_features.shape[0] > 0 and pulse_features.shape[1] > 1:
             pulse_stats.update(pulse_features[:, 1:])
     if "target" in group:

@@ -10,87 +10,87 @@
 ]
 
 \node[input, text width=36mm] (x) {
-  accepted-pulse ノード特徴量\\
+  accepted-pulse node features\\
   $\mathbf{X}\in\mathbb{R}^{N_v\times F_{\mathrm{node}}}$\\
-  \scriptsize 検出器由来、パルス由来、事象文脈
+  \scriptsize detector-derived, pulse-derived, event context
 };
 \node[input, text width=36mm, below=7mm of x] (w) {
-  波形\\
+  waveforms\\
   $\mathbf{W}\in\mathbb{R}^{N_v\times4\times128}$\\
-  \scriptsize raw 窓と accepted mask
+  \scriptsize raw windows and accepted masks
 };
 \node[input, text width=36mm, below=7mm of w] (p) {
-  accepted pulse index\\
+  accepted-pulse index\\
   $\mathbf{P}\in\mathbb{R}^{N_v\times1}$\\
-  \scriptsize node index のみ
+  \scriptsize node index only
 };
 \node[input, text width=36mm, below=7mm of p] (e) {
-  グラフエッジ\\
+  graph edges\\
   $\mathbf{A}\in\mathbb{R}^{N_e\times F_{\mathrm{edge}}}$\\
-  \scriptsize $\Delta x,\Delta t,d,\log\rho$ 差、Ising 重み
+  \scriptsize $\Delta x,\Delta t,d,\log\rho$ difference, Ising weight
 };
 
 \node[enc, text width=34mm, right=16mm of w] (wenc) {
-  波形エンコーダ\\
+  waveform encoder\\
   Conv1D $\rightarrow$ SiLU\\
   Conv1D $\rightarrow$ GRU\\
-  または Transformer\\
+  or Transformer\\
   $N_v\times D_w$
 };
 \node[enc, text width=34mm, right=16mm of p] (penc) {
-  パルスエンコーダ\\
-  現行仕様では無効\\
+  pulse encoder\\
+  inactive in current schema\\
   \code{pulse\_dim}=0\\
-  出力なし
+  no output
 };
 \node[enc, text width=34mm, right=16mm of x] (xenc) {
-  ノードエンコーダ\\
-  MLP 入力\\
+  node encoder\\
+  MLP input\\
   $[\mathbf{X},\mathbf{w}]$\\
   $N_v\times H$
 };
 
 \node[gnn, text width=42mm, right=17mm of xenc] (mp) {
-  $L_g$ 層のゲート付き\\
-  エッジメッセージ伝播\\
+  $L_g$ gated edge\\
+  message-passing layers\\
   \vspace{1mm}
   $m_{ij}=\mathrm{MLP}([h_i,h_j,a_{ij}])$\\
-  ゲート、平均/最大集約\\
-  残差接続 + LayerNorm + FFN\\
+  gate, mean/max aggregation\\
+  residual + LayerNorm + FFN\\
   $N_v\times H$
 };
 
 \node[gnn, text width=38mm, right=16mm of mp] (pool) {
-  グラフ読み出し\\
-  平均プーリング\\
-  最大プーリング\\
-  $K$ 個の注意ヘッド\\
+  graph readout\\
+  mean pooling\\
+  max pooling\\
+  $K$ attentive heads\\
   $\mathbf{g}\in\mathbb{R}^{H(2+K)}$
 };
 
 \node[enc, text width=30mm, right=14mm of pool] (shared) {
-  共有 MLP\\
+  shared MLP\\
   $H(2+K)\rightarrow2H\rightarrow H$
 };
 
 \node[output, text width=30mm, above right=0mm and 13mm of shared] (energy) {
-  エネルギー出力層\\
+  energy head\\
   $\log_{10}(E/\mathrm{eV})$
 };
 \node[output, text width=30mm, right=13mm of shared] (core) {
-  コア出力層\\
+  core head\\
   $(x_c,y_c,z_c)$ km
 };
 \node[output, text width=30mm, below right=0mm and 13mm of shared] (dir) {
-  方向出力層\\
+  direction head\\
   $(\hat n_x,\hat n_y,\hat n_z)$
 };
 \node[output, text width=30mm, below=8mm of dir] (quality) {
-  品質出力層\\
-  事象選択用の品質スコア
+  quality head\\
+  event-selection score
 };
 \node[output, text width=30mm, below=8mm of quality] (mass) {
-  質量分類出力層\\
+  mass head\\
   $p(\mathrm{Fe})$
 };
 
@@ -109,14 +109,14 @@
 \draw[arrow] (shared) |- (mass);
 
 \node[note, below=6mm of e, text width=70mm] (idnote) {
-  標準モデルでは任意の検出器 ID 埋め込みを使わない。検出器ごとの意味の違いは、物理座標、局所的な検出器間隔、較正/ノイズ量、波形応答から与える。
+  The standard model does not use an arbitrary detector-ID embedding. Detector-dependent behavior is supplied through coordinates, local detector spacing, calibration/noise quantities, and waveform response.
 };
 
 \begin{scope}[on background layer]
-  \node[draw=gray!50, rounded corners=2pt, fit=(x)(w)(p)(e), inner sep=4mm, label={[font=\small]above:入力}] {};
-  \node[draw=gray!50, rounded corners=2pt, fit=(wenc)(penc)(xenc), inner sep=4mm, label={[font=\small]above:ノードごとのエンコーダ}] {};
-  \node[draw=gray!50, rounded corners=2pt, fit=(mp)(pool), inner sep=4mm, label={[font=\small]above:グラフネットワーク}] {};
-  \node[draw=gray!50, rounded corners=2pt, fit=(shared)(energy)(core)(dir)(quality)(mass), inner sep=4mm, label={[font=\small]above:出力}] {};
+  \node[draw=gray!50, rounded corners=2pt, fit=(x)(w)(p)(e), inner sep=4mm, label={[font=\small]above:inputs}] {};
+  \node[draw=gray!50, rounded corners=2pt, fit=(wenc)(penc)(xenc), inner sep=4mm, label={[font=\small]above:per-node encoders}] {};
+  \node[draw=gray!50, rounded corners=2pt, fit=(mp)(pool), inner sep=4mm, label={[font=\small]above:graph network}] {};
+  \node[draw=gray!50, rounded corners=2pt, fit=(shared)(energy)(core)(dir)(quality)(mass), inner sep=4mm, label={[font=\small]above:outputs}] {};
 \end{scope}
 
 \end{tikzpicture}

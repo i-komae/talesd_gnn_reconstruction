@@ -9,10 +9,10 @@ from types import SimpleNamespace
 import h5py
 import numpy as np
 
-from talesd_gnn_reconstruction.constants import WAVEFORM_RISE_ANCHOR_BIN, WAVEFORM_TRACE_BINS
+from talesd_gnn_reconstruction.constants import NODE_FEATURE_COLUMNS, WAVEFORM_RISE_ANCHOR_BIN, WAVEFORM_TRACE_BINS
 from talesd_gnn_reconstruction.dataset import H5GraphDataset
 from talesd_gnn_reconstruction.event_graph import (
-    _copy_accepted_gapped_pulses,
+    _copy_accepted_pulse_mask,
     _coincident_pulse_rise_anchor_bin,
     _waveform_features_for_pulse,
 )
@@ -50,20 +50,48 @@ class EventGraphWaveformTest(unittest.TestCase):
         self.assertEqual(features[1, WAVEFORM_RISE_ANCHOR_BIN], waveform[anchor_bin])
         self.assertEqual(features[1, WAVEFORM_RISE_ANCHOR_BIN + 4], waveform[pulse.lower_rise_bin])
 
-    def test_accepted_gapped_waveform_preserves_pulse_time_gaps(self) -> None:
+    def test_accepted_mask_marks_pulse_intervals_in_raw_window_time(self) -> None:
         pulses = [
             _pulse(upper_rise=10, upper_fall=12, lower_rise=11, lower_fall=13),
             _pulse(upper_rise=20, upper_fall=22, lower_rise=23, lower_fall=25),
         ]
-        waveform = np.zeros(64, dtype=np.float32)
-        waveform[10:13] = 1.0
-        waveform[20:23] = 2.0
+        accepted = _copy_accepted_pulse_mask(
+            pulses,
+            channel="upper",
+            rise_anchor_bin=10,
+            source_length=64,
+            length=WAVEFORM_TRACE_BINS,
+        )
 
-        accepted = _copy_accepted_gapped_pulses(waveform, pulses, channel="upper", length=32)
+        np.testing.assert_array_equal(accepted[WAVEFORM_RISE_ANCHOR_BIN : WAVEFORM_RISE_ANCHOR_BIN + 3], np.ones(3, dtype=np.float32))
+        np.testing.assert_array_equal(
+            accepted[WAVEFORM_RISE_ANCHOR_BIN + 3 : WAVEFORM_RISE_ANCHOR_BIN + 10],
+            np.zeros(7, dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            accepted[WAVEFORM_RISE_ANCHOR_BIN + 10 : WAVEFORM_RISE_ANCHOR_BIN + 13],
+            np.ones(3, dtype=np.float32),
+        )
 
-        np.testing.assert_array_equal(accepted[0:3], np.ones(3, dtype=np.float32))
-        np.testing.assert_array_equal(accepted[3:10], np.zeros(7, dtype=np.float32))
-        np.testing.assert_array_equal(accepted[10:13], np.full(3, 2.0, dtype=np.float32))
+    def test_waveform_features_use_raw_windows_and_accepted_masks(self) -> None:
+        pulse = _pulse(upper_rise=40, upper_fall=42, lower_rise=41, lower_fall=43)
+        later = _pulse(upper_rise=48, upper_fall=50, lower_rise=49, lower_fall=51)
+        waveform = np.arange(160, dtype=np.float32)
+        features = _waveform_features_for_pulse(
+            upper_wf=waveform,
+            lower_wf=waveform,
+            upper_ped=0.0,
+            lower_ped=0.0,
+            upper_mev2cnt=0.5,
+            lower_mev2cnt=0.5,
+            pulse=pulse,
+            accepted_pulses=[pulse, later],
+        )
+        self.assertEqual(features.shape, (4, WAVEFORM_TRACE_BINS))
+        self.assertEqual(features[0, WAVEFORM_RISE_ANCHOR_BIN], waveform[40])
+        self.assertEqual(features[2, WAVEFORM_RISE_ANCHOR_BIN], 1.0)
+        self.assertEqual(features[2, WAVEFORM_RISE_ANCHOR_BIN + 4], 0.0)
+        self.assertEqual(features[2, WAVEFORM_RISE_ANCHOR_BIN + 8], 1.0)
 
     def test_old_compact_waveform_hdf5_is_rejected(self) -> None:
         old_columns = {
@@ -80,7 +108,25 @@ class EventGraphWaveformTest(unittest.TestCase):
                 handle.attrs["columns_json"] = json.dumps(old_columns)
                 handle.create_group("events")
 
-            with self.assertRaisesRegex(ValueError, "old compact accepted-pulse waveforms"):
+            with self.assertRaisesRegex(ValueError, "old compact or accepted-gapped waveforms"):
+                H5GraphDataset(path)
+
+    def test_old_gapped_waveform_hdf5_is_rejected(self) -> None:
+        old_columns = {
+            "waveform_features": [
+                "upper_raw_window_vem",
+                "lower_raw_window_vem",
+                "upper_accepted_gapped_vem",
+                "lower_accepted_gapped_vem",
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "old_gapped_waveform_schema.h5"
+            with h5py.File(path, "w") as handle:
+                handle.attrs["columns_json"] = json.dumps(old_columns)
+                handle.create_group("events")
+
+            with self.assertRaisesRegex(ValueError, "old compact or accepted-gapped waveforms"):
                 H5GraphDataset(path)
 
     def test_hdf5_handles_are_lru_limited(self) -> None:
@@ -119,7 +165,7 @@ class EventGraphWaveformTest(unittest.TestCase):
             self.assertEqual(list(dataset._handles), [1])
             dataset.close()
 
-    def test_disabled_node_feature_columns_are_dropped_when_reading_old_hdf5(self) -> None:
+    def test_old_node_feature_schema_is_rejected_after_physical_redefinition(self) -> None:
         columns = {
             "node_features": [
                 "x_km",
@@ -164,12 +210,28 @@ class EventGraphWaveformTest(unittest.TestCase):
                 event.create_dataset("pulse_features", data=np.zeros((0, 1), dtype=np.float32))
                 event.create_dataset("waveform_features", data=np.zeros((1, 0, 0), dtype=np.float32))
 
+            with self.assertRaisesRegex(ValueError, "node feature columns are incompatible"):
+                H5GraphDataset(path, load_attrs=False, load_node_positions=False)
+
+    def test_current_node_feature_schema_is_accepted(self) -> None:
+        columns = {"node_features": list(NODE_FEATURE_COLUMNS)}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "current_node_features.h5"
+            with h5py.File(path, "w") as handle:
+                handle.attrs["columns_json"] = json.dumps(columns)
+                event = handle.create_group("events").create_group("00000000")
+                event.create_dataset(
+                    "node_features",
+                    data=np.arange(len(NODE_FEATURE_COLUMNS), dtype=np.float32).reshape(1, len(NODE_FEATURE_COLUMNS)),
+                )
+                event.create_dataset("edge_index", data=np.zeros((2, 0), dtype=np.int64))
+                event.create_dataset("edge_features", data=np.zeros((0, 1), dtype=np.float32))
+                event.create_dataset("pulse_features", data=np.zeros((0, 1), dtype=np.float32))
+                event.create_dataset("waveform_features", data=np.zeros((1, 0, 0), dtype=np.float32))
+
             dataset = H5GraphDataset(path, load_attrs=False, load_node_positions=False)
             sample = dataset[0]
-            self.assertEqual(sample["node_features"].shape, (1, 27))
-            self.assertNotIn("log10_total_rho", dataset.columns_json)
-            self.assertNotIn("sqrt_total_rho", dataset.columns_json)
-            np.testing.assert_array_equal(sample["node_features"][0, 15:17], np.array([17.0, 18.0], dtype=np.float32))
+            self.assertEqual(sample["node_features"].shape, (1, len(NODE_FEATURE_COLUMNS)))
             dataset.close()
 
 

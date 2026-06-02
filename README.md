@@ -131,6 +131,8 @@ train.train_model()
 | metrics、診断図 | `src/talesd_gnn_reconstruction/metrics.py`, `src/talesd_gnn_reconstruction/diagnostics.py` |
 | 入力分布、特徴量重要度 | `src/talesd_gnn_reconstruction/feature_analysis.py` |
 
+現在のモデル入力では、accepted-pulse node scalar は28列です。列名は `pulse_*`、`detector_*`、事象文脈量に分け、パルス自身の信号量、同一検出器内のaccepted pulse合計信号量、accepted pulse数、時間幅を区別します。`pulse_features` は対応nodeを示す `node_index` だけを保持し、pulse scalar encoderは使いません。旧HDF5の `log10_total_rho`、`sqrt_total_rho`、`local_detector_density_1p5km2` などを現行schemaへ黙って読み替えることはしません。特徴量の物理定義が変わったため、現行コードで学習するHDF5は再exportが必要です。
+
 ## APIドキュメント
 
 CLI API、Python API、サーバー実行フローのSphinxドキュメントを `docs/api/` に置いています。日本語版と英語版を同じSphinxプロジェクト内で管理します。

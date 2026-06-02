@@ -1,0 +1,405 @@
+\documentclass[a4paper,10pt]{article}
+
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,calc,backgrounds}
+
+\geometry{margin=18mm}
+\pagestyle{plain}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.6em}
+\sloppy
+
+\title{TALE-SD Waveform Graph Neural Network\\
+Physics and Model Specification}
+\author{}
+\date{}
+
+\newcommand{\code}[1]{\ifmmode\text{\ttfamily #1}\else\texttt{#1}\fi}
+\newcommand{\R}{\mathbb{R}}
+
+\begin{document}
+\maketitle
+\vspace{-7mm}
+
+\section{Scope}
+
+This document summarizes the physics-facing part of the TALE-SD waveform graph neural network.
+It intentionally omits server paths, Slurm settings, run names, and other environment-dependent details.
+The goal is to describe what enters the model, what the model predicts, and how the training losses are defined.
+
+The current baseline is a joint reconstruction and mass-classification model.
+It reconstructs the shower energy, core position, and arrival direction, predicts a reconstruction-quality score, and can classify the primary particle as proton or iron.
+
+\section{Event Graph Input}
+
+One air-shower event is represented as one directed graph.
+The graph nodes are accepted coincidence pulses after the Ising-style noise filter.
+If one detector has multiple accepted pulses, each pulse becomes a separate node.
+Events with fewer than four pulse nodes or fewer than four distinct detectors are not used.
+
+The HDF5 graph representation contains the tensors in Table~\ref{tab:tensors}.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Main tensors for one event graph.}
+  \label{tab:tensors}
+  \begin{tabular}{lll}
+    \toprule
+    Tensor & Shape & Meaning \\
+    \midrule
+    $\mathbf{X}$ & $N_v\times28$ & Accepted-pulse node scalar features. \\
+    $\mathbf{A}$ & $N_e\times13$ & Directed-edge scalar features. \\
+    $\mathbf{P}_{\mathrm{raw}}$ & $N_p\times1$ & Pulse-to-node index only. \\
+    $\mathbf{W}$ & $N_v\times4\times128$ & Four waveform channels per pulse node. \\
+    $\mathbf{y}_{\mathrm{reco}}$ & $7$ & Reconstruction target. \\
+    $y_{\mathrm{mass}}$ & $1$ & Proton/iron label when MC truth is available. \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The 28 node scalar features are attached to accepted-pulse nodes.
+The row unit is an accepted pulse, not a detector.
+Each row nevertheless contains a controlled mixture of pulse-derived, detector-derived, and event-context quantities:
+\begin{itemize}
+  \item detector-derived quantities: detector position, local detector spacing, trigger time, pedestal, pedestal RMS, waveform length, waveform segment count, and FADC peak;
+  \item pulse-derived quantities: the accepted pulse's own arrival time, signal density $\rho$, accepted-pulse order within the detector, and first-pulse flag;
+  \item detector pulse-context quantities: accepted-pulse count, accepted-pulse time span, maximum accepted-pulse signal, and summed accepted-pulse signal in the same detector;
+  \item event-context quantities: position relative to the signal-weighted event barycenter.
+\end{itemize}
+Thus $\mathbf{X}$ should be read as scalar features attached to accepted-pulse nodes, not as detector-node features.
+The standard model does not use a learned detector-ID embedding.
+Detector-dependent behavior is instead learned from coordinates, local spacing, calibration/noise quantities, waveforms, and graph connectivity.
+
+The current $\mathbf{P}_{\mathrm{raw}}$ keeps only the node index that maps each accepted pulse back to its node.
+Older HDF5 files stored six additional pulse-scalar columns, but they duplicate the accepted-pulse node features and are not used.
+Because the node-feature semantics have been redefined, old HDF5 files are not silently migrated to the current 28-column schema; the graph files must be re-exported.
+
+Each node also carries four calibrated waveform channels:
+\[
+\mathbf{W}_v =
+\left(
+W^u_{\mathrm{raw}},
+W^l_{\mathrm{raw}},
+M^u_{\mathrm{accepted}},
+M^l_{\mathrm{accepted}}
+\right)\in\R^{4\times128}.
+\]
+The raw channels are rise-aligned windows around the accepted pulse.
+The mask channels use the same time axis as the raw windows and mark accepted-pulse intervals with 1 and all other bins with 0.
+Thus waveform amplitudes and accepted-pulse selection are passed as separate inputs.
+One bin corresponds to $0.02\,\mu\mathrm{s}$, so 128 bins cover $2.56\,\mu\mathrm{s}$.
+
+Edges are drawn only between pulse nodes from different detectors.
+An undirected detector pair is accepted if the distance is at most $1.5\,\mathrm{km}$ and the time difference satisfies $|\Delta t|\le8\,\mu\mathrm{s}$.
+Each accepted pair is stored as two directed edges.
+For edge $i\rightarrow j$, the edge features include
+\[
+(\Delta x,\Delta y,\Delta z,d,\Delta t,|\Delta t|,\Delta t/d,
+\Delta\log_{10}\rho,
+w_{\mathrm{ising}},w_{\mathrm{raw}},t_{\mathrm{excess}},s_{\mathrm{space}},s_{\mathrm{causal}}).
+\]
+Here
+\[
+  s_{\mathrm{space}}=\exp(-d/0.8\,\mathrm{km}),\qquad
+  t_{\mathrm{excess}}=\max(0,|\Delta t|-d/c-0.3\,\mu\mathrm{s}),
+\]
+\[
+  s_{\mathrm{causal}}=\exp(-t_{\mathrm{excess}}/1.0\,\mu\mathrm{s}),
+\]
+and
+\[
+  w_{\mathrm{raw}}
+  =
+  s_{\mathrm{space}}s_{\mathrm{causal}}
+  \left[
+    1+0.12\sqrt{\log(1+\rho_i)\log(1+\rho_j)}
+  \right].
+\]
+The Ising-style weight is degree-normalized as
+\[
+  w_{\mathrm{ising}} =
+  \frac{w_{\mathrm{raw}}}{(D_iD_j)^{0.35}},
+\]
+where $D_i$ and $D_j$ are positive connection counts.
+
+\section{Input Distribution Diagnostics}
+
+Figures~\ref{fig:en-input-node}, \ref{fig:en-input-edge}, and~\ref{fig:en-input-pulse-waveform-target} show input distributions generated from an older downloaded \code{flat50000} HDF5 shard.
+The shard contains 29509 events; the plots use a 2000-event sample with 1018 proton events and 982 iron events.
+These plots are diagnostics for the old schema, not distributions of the current 28-column node schema.
+In the current schema, pulse-level quantities such as \code{log10\_pulse\_rho} are separated from detector-level accepted-pulse aggregates such as \code{log10\_detector\_sum\_pulse\_rho} and \code{detector\_accepted\_pulse\_count}.
+Therefore the current-schema distributions must be regenerated with \code{talesd-gnn input-distributions} after re-exporting the HDF5 graph files.
+The density column is not independent: it is exactly the same information as \code{neighbor\_count\_1p5km}/\((\pi\times1.5^2)\).
+The old six pulse-scalar columns duplicate accepted-pulse node features; the current schema keeps only \code{node\_index} and disables the pulse encoder.
+The old \code{n\_wf\_segments} and \code{wf\_length\_usec} columns correspond to \code{detector\_wf\_segments} and \code{detector\_wf\_length\_usec} in the current naming.
+They are dominated by one value in this shard, but their tails represent longer waveforms or multiple waveform segments, so they are retained until feature-importance or reduced-feature checks justify dropping them.
+These plots are input diagnostics, not trained-model performance metrics.
+No event-level graph topology figure is included here because no current-analysis graph PDF has been generated from this HDF5 shard.
+Older graph PDFs from other checks or analyses are intentionally not used as figures for this model description.
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig/input_distributions/node_features.pdf}
+  \caption{Accepted-pulse node-feature distributions from the older downloaded \code{flat50000} HDF5 shard. These are not distributions of the current 28-column schema.}
+  \label{fig:en-input-node}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig/input_distributions/edge_features.pdf}
+  \caption{Edge-feature distributions from the older downloaded \code{flat50000} HDF5 shard. In the current schema, the charge-ratio column is named \code{dlog10\_pulse\_rho}.}
+  \label{fig:en-input-edge}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig/input_distributions/waveform_features.pdf}
+  \vspace{2mm}
+  \includegraphics[width=0.95\linewidth]{fig/input_distributions/target_features.pdf}
+  \caption{Waveform-feature and reconstruction-target distributions from the older downloaded \code{flat50000} HDF5 shard. The current model does not use additional pulse-scalar inputs.}
+  \label{fig:en-input-pulse-waveform-target}
+\end{figure}
+
+\clearpage
+\section{Targets and Standardization}
+
+The reconstruction target is
+\[
+\mathbf{y}_{\mathrm{reco}}=
+(\log_{10}E,\ x_c,y_c,z_c,\ n_x,n_y,n_z)\in\R^7 .
+\]
+Energy is in eV, the core position is in km, and the direction is a unit vector.
+For mass classification, CORSIKA particle type 14 is mapped to proton label 0, and particle type 5626 is mapped to iron label 1.
+
+Node, edge, and reconstruction-target scalers are fitted on the training split only.
+No pulse scaler is created in the current schema because there are no additional pulse-scalar inputs.
+The network predicts standardized reconstruction coordinates, but the physics loss converts predictions and targets back to physical units before computing energy, core, and angular residuals.
+
+\section{Model Architecture}
+
+The standard model class is \code{PhysicsTaleSdGNN}.
+The current baseline uses hidden dimension $H=192$, five gated graph layers, four attentive readout heads, and a \code{cnn-gru} waveform encoder with waveform embedding dimension $D_w=64$.
+
+\begin{figure}[p]
+  \centering
+  \resizebox{\linewidth}{!}{\input{fig/model_architecture_en.tikz}}
+  \caption{Common model flow. Detector layout is not treated as a regular image; detector information enters through physical scalar features, waveforms, and graph edges.}
+  \label{fig:en-model-architecture}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \resizebox{0.92\linewidth}{!}{\input{fig/concrete_training_model_en.tikz}}
+  \caption{Concrete baseline used by the current training scripts. Reconstruction and mass-classification modes share the encoders and GNN, and switch the active heads and loss terms.}
+  \label{fig:en-concrete-training-model}
+\end{figure}
+
+\subsection{Node Encoders}
+
+In the current schema, \code{pulse\_features} contains only \code{node\_index}, so \code{pulse\_dim=0}; the pulse encoder and pulse pooling branch are inactive.
+
+The waveform encoder applies two one-dimensional convolution blocks to the four waveform channels, followed by a bidirectional GRU in the standard mode.
+The final GRU state, the mean of the convolutional sequence, and the max of the convolutional sequence are concatenated and projected to a 64-dimensional waveform embedding.
+
+The node encoder concatenates the 28 accepted-pulse node scalar features and the 64-dimensional waveform embedding:
+\[
+  28\oplus64=92.
+\]
+This vector is mapped to the hidden node state with a two-layer MLP,
+\[
+  \R^{92}\rightarrow\R^{192}\rightarrow\R^{192}.
+\]
+SiLU activations and layer normalization are used in the node encoder.
+
+\subsection{Message Passing and Readout}
+
+Before the graph layers, a time-difference encoder processes the edge timing features
+$(\Delta t,|\Delta t|,\Delta t/d)$
+and adds their destination-node average to the node state.
+This gives the shower-front timing information a direct path into the node representation.
+
+For each directed edge $i\rightarrow j$, the gated message layer uses
+\[
+  [h_i,h_j,a_{ij}]\in\R^{2H+13}
+\]
+as input.
+The message is
+\[
+  m_{ij}=
+  \mathrm{MLP}_m([h_i,h_j,a_{ij}])\,
+  \sigma(\mathrm{MLP}_g([h_i,h_j,a_{ij}])).
+\]
+Incoming messages are summarized by both mean and max aggregation.
+The node update uses a residual connection, layer normalization, and a feed-forward block.
+
+After five graph layers, the graph readout concatenates global mean pooling, global max pooling, and four attentive readout heads.
+The event vector therefore has dimension
+\[
+  H(2+4)=1152.
+\]
+For reconstruction and quality prediction, this vector is passed through a shared MLP
+\[
+  \R^{1152}\rightarrow\R^{384}\rightarrow\R^{192}.
+\]
+
+\section{Outputs}
+
+The reconstruction heads predict
+\[
+(\widehat{\log_{10}E},\hat{x}_c,\hat{y}_c,\hat{z}_c,\hat{n}_x,\hat{n}_y,\hat{n}_z).
+\]
+The energy head is linear.
+The core and direction heads are two-layer MLPs.
+When angular residuals are computed, the predicted and true direction vectors are normalized internally.
+
+The quality head outputs one logit $q_{\mathrm{logit}}$.
+The event quality score is $\sigma(q_{\mathrm{logit}})$ and is used as an event-selection score for reconstruction analyses.
+
+The enhanced mass-classification head outputs one logit $z_{\mathrm{mass}}$.
+The iron probability is
+\[
+  p(\mathrm{Fe})=\sigma(z_{\mathrm{mass}}).
+\]
+The enhanced head uses the final graph readout, the initial node-encoder readout, graph-size context, and direct waveform summaries.
+With the current dimensions, its input dimension is 1707.
+
+An optional error-prediction head exists, but it is not part of the current baseline.
+
+\section{Loss Functions}
+
+For a residual $r$, the SmoothL1 loss is
+\[
+  \mathrm{SmoothL1}_{\beta}(r)=
+  \begin{cases}
+    r^2/(2\beta), & |r|<\beta,\\
+    |r|-\beta/2, & |r|\ge\beta.
+  \end{cases}
+\]
+For a logit $z$ and target $y\in[0,1]$,
+\[
+  \mathrm{BCEWithLogits}(z,y)
+  =
+  -y\log\sigma(z)-(1-y)\log(1-\sigma(z)).
+\]
+The same BCEWithLogits expression is used both for binary mass labels and for continuous quality soft targets.
+
+\subsection{Physics Reconstruction Loss}
+
+The physics reconstruction loss is
+\[
+  L_{\mathrm{phys}} =
+  w_E L_E + w_c L_c + w_\theta L_\theta,
+\]
+with the current weights
+\[
+  w_E=1.2,\qquad w_c=1.0,\qquad w_\theta=1.4.
+\]
+The energy term is
+\[
+  L_E=
+  \mathrm{SmoothL1}(\widehat{\log_{10}E}-\log_{10}E;\beta=0.05).
+\]
+The core term uses the horizontal core residual:
+\[
+  L_c=
+  \left\langle
+  \frac{(\hat{x}_c-x_c)^2+(\hat{y}_c-y_c)^2}
+       {(0.05\,\mathrm{km})^2}
+  \right\rangle.
+\]
+The direction term uses the angular separation $\alpha$ between the predicted and true directions:
+\[
+  L_\theta=
+  \mathrm{SmoothL1}\left(\frac{\alpha}{1.0^\circ};\beta=1\right).
+\]
+
+\subsection{Quality Loss}
+
+The quality target is computed from the current reconstruction residual and detached from the computation graph:
+\[
+  q_{\mathrm{target}}=
+  \exp\left[-\frac{1}{3}\left(
+  \frac{|E_{\mathrm{rec}}/E_{\mathrm{true}}-1|}{0.10}
+  +\frac{\Delta r_c}{0.05\,\mathrm{km}}
+  +\frac{\alpha}{1.0^\circ}
+  \right)\right].
+\]
+The quality loss is
+\[
+  L_q=\mathrm{BCEWithLogits}(q_{\mathrm{logit}},q_{\mathrm{target}}),
+  \qquad w_q=0.2.
+\]
+For reconstruction without mass classification, the total loss is
+\[
+  L_{\mathrm{reco}}=L_{\mathrm{phys}}+0.2\,L_q.
+\]
+
+\subsection{Mass Classification Loss}
+
+The default mass-classification loss is BCEWithLogits with proton label 0 and iron label 1:
+\[
+  L_{\mathrm{BCE}}=
+  -y\log\sigma(z_{\mathrm{mass}})
+  -(1-y)\log(1-\sigma(z_{\mathrm{mass}})).
+\]
+No additional positive-class weight is used in the current baseline.
+
+The implementation also supports focal loss:
+\[
+  L_{\mathrm{focal}}=
+  \left\langle
+  (1-p_{t,i})^\gamma
+  \mathrm{BCEWithLogits}(z_i,y_i)
+  \right\rangle_i,
+\]
+where $p_{t,i}=p_i$ for iron events and $p_{t,i}=1-p_i$ for proton events.
+
+When both proton and iron events appear in a batch, a ranking term can be added:
+\[
+  L_{\mathrm{rank}}=
+  \left\langle
+  \mathrm{softplus}\left(m-(z^+-z^-)\right)
+  \right\rangle,
+\]
+where $z^+$ is an iron logit, $z^-$ is a proton logit, and the current margin is $m=1.0$.
+The current mass baseline uses
+\[
+  L_{\mathrm{mass}}=L_{\mathrm{BCE}}+0.5\,L_{\mathrm{rank}}.
+\]
+
+\subsection{Joint Reco+Mass Objective}
+
+The joint baseline combines reconstruction, quality, and mass terms:
+\[
+  L_{\mathrm{total}}
+  =
+  L_{\mathrm{phys}}
+  +0.2\,L_q
+  +\lambda_{\mathrm{mass}} L_{\mathrm{mass}}.
+\]
+The current candidate setting is
+\[
+  \lambda_{\mathrm{mass}}=0.15,\qquad
+  L_{\mathrm{mass}}=L_{\mathrm{BCE}}+0.5\,L_{\mathrm{rank}}.
+\]
+This weight was chosen from the observed loss scale of an earlier joint run, where the previous mass weight of 0.05 made the mass term much smaller than the quality term.
+
+\subsection{Optional Error/NLL Mode}
+
+The code can predict event-wise expected errors and combine them with a Gaussian negative log-likelihood.
+This mode is currently not the baseline.
+The present baseline keeps error prediction disabled and uses the detached quality score as the event-selection output.
+
+\section{Evaluation Outputs}
+
+After training, the best validation checkpoint is loaded before final validation and test evaluation.
+The main reconstruction metrics are energy residuals in $\log_{10}E$, angular resolution, and core-position resolution.
+Quality-cut curves are used to show how resolution changes as low-quality events are removed.
+For mass classification, the main metrics are accuracy, balanced accuracy, ROC AUC, score distributions, and confusion matrices.
+
+\end{document}
