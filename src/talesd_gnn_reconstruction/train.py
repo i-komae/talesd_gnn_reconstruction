@@ -447,6 +447,10 @@ def _assign_source_group(
     test_fraction: float,
     rng: random.Random,
     source_event_counts: dict[str, int] | None = None,
+    source_val_fraction: float | None = None,
+    source_test_fraction: float | None = None,
+    source_balance_weight: float = 0.75,
+    source_size_weight: float = 0.75,
 ) -> None:
     sources = list(sources)
     rng.shuffle(sources)
@@ -455,32 +459,86 @@ def _assign_source_group(
         return
     counts = source_event_counts or {source_path: 1 for source_path in sources}
     total_events = sum(max(int(counts.get(source_path, 1)), 1) for source_path in sources)
+    total_sources = len(sources)
     remaining = list(sources)
 
-    def pick_for_target(target_events: float, min_remaining_sources: int) -> list[str]:
+    def target_source_count(fraction: float | None, min_remaining_sources: int) -> int:
+        if fraction is None:
+            return 0
+        if fraction <= 0.0:
+            return 0
+        max_selectable = max(len(remaining) - int(min_remaining_sources), 0)
+        if max_selectable <= 0:
+            return 0
+        target = int(round(total_sources * float(fraction)))
+        target = max(target, 1)
+        return min(target, max_selectable)
+
+    def split_score(events: int, n_sources: int, target_events: float, target_sources: int) -> float:
+        event_scale = max(float(target_events), 1.0)
+        event_score = abs(float(events) - float(target_events)) / event_scale
+        if target_sources <= 0:
+            return event_score
+        source_score = abs(float(n_sources) - float(target_sources)) / max(float(target_sources), 1.0)
+        return event_score + max(float(source_balance_weight), 0.0) * source_score
+
+    def source_size_score(source_events: int, target_events: float, target_sources: int) -> float:
+        if target_sources <= 0 or target_events <= 0.0:
+            return 0.0
+        target_events_per_source = float(target_events) / max(float(target_sources), 1.0)
+        scale = max(target_events_per_source, 1.0)
+        return max(float(source_events) - target_events_per_source, 0.0) / scale
+
+    def pick_for_target(target_events: float, target_sources: int, min_remaining_sources: int) -> list[str]:
         selected: list[str] = []
         selected_events = 0
-        if target_events <= 0.0:
+        if target_events <= 0.0 and target_sources <= 0:
             return selected
-        while len(remaining) > min_remaining_sources and selected_events < target_events:
+        while len(remaining) > min_remaining_sources and (
+            selected_events < target_events or len(selected) < target_sources
+        ):
+            current_score = split_score(selected_events, len(selected), target_events, target_sources)
             best_index = min(
                 range(len(remaining)),
-                key=lambda index: abs(
-                    selected_events
-                    + max(int(counts.get(remaining[index], 1)), 1)
-                    - target_events
+                key=lambda index: (
+                    split_score(
+                        selected_events + max(int(counts.get(remaining[index], 1)), 1),
+                        len(selected) + 1,
+                        target_events,
+                        target_sources,
+                    )
+                    + max(float(source_size_weight), 0.0)
+                    * source_size_score(
+                        max(int(counts.get(remaining[index], 1)), 1),
+                        target_events,
+                        target_sources,
+                    )
                 ),
             )
             best_count = max(int(counts.get(remaining[best_index], 1)), 1)
-            if selected and abs(selected_events - target_events) < abs(selected_events + best_count - target_events):
+            best_score = split_score(
+                selected_events + best_count,
+                len(selected) + 1,
+                target_events,
+                target_sources,
+            )
+            if selected and len(selected) >= target_sources and best_score >= current_score:
                 break
             source_path = remaining.pop(best_index)
             selected.append(source_path)
             selected_events += best_count
         return selected
 
-    test_sources = pick_for_target(total_events * float(test_fraction), min_remaining_sources=2)
-    val_sources = pick_for_target(total_events * float(val_fraction), min_remaining_sources=1)
+    test_sources = pick_for_target(
+        total_events * float(test_fraction),
+        target_source_count(source_test_fraction, min_remaining_sources=2),
+        min_remaining_sources=2,
+    )
+    val_sources = pick_for_target(
+        total_events * float(val_fraction),
+        target_source_count(source_val_fraction, min_remaining_sources=1),
+        min_remaining_sources=1,
+    )
     split_sources["test"].extend(test_sources)
     split_sources["val"].extend(val_sources)
     split_sources["train"].extend(remaining)
@@ -488,13 +546,25 @@ def _assign_source_group(
 
 def split_indices_by_stratified_source_path(
     dataset: H5GraphDataset,
-    val_fraction: float = 0.1,
-    test_fraction: float = 0.2,
+    val_fraction: float = 0.05,
+    test_fraction: float = 0.10,
     seed: int = 12345,
     show_progress: bool = True,
     min_group_sources: int = 10,
     workers: int = 0,
+    source_val_fraction: float = 0.10,
+    source_test_fraction: float = 0.20,
 ) -> dict[str, list[int]]:
+    if val_fraction < 0.0 or test_fraction < 0.0 or val_fraction + test_fraction >= 1.0:
+        raise ValueError("val_fraction and test_fraction must be non-negative and sum to less than 1")
+    if (
+        source_val_fraction < 0.0
+        or source_test_fraction < 0.0
+        or source_val_fraction + source_test_fraction >= 1.0
+    ):
+        raise ValueError(
+            "source_val_fraction and source_test_fraction must be non-negative and sum to less than 1"
+        )
     source_to_indices: dict[str, list[int]] = {}
     source_stats: dict[str, dict[str, Any]] = {}
     if int(workers) > 1 and len(dataset) >= 1024 and len(dataset._path_lengths) > 1:
@@ -557,6 +627,8 @@ def split_indices_by_stratified_source_path(
                     test_fraction,
                     rng,
                     source_event_counts=source_event_counts,
+                    source_val_fraction=source_val_fraction,
+                    source_test_fraction=source_test_fraction,
                 )
             else:
                 next_pending.extend(sources)
@@ -570,6 +642,8 @@ def split_indices_by_stratified_source_path(
             test_fraction,
             rng,
             source_event_counts=source_event_counts,
+            source_val_fraction=source_val_fraction,
+            source_test_fraction=source_test_fraction,
         )
 
     if not split_sources["val"] or not split_sources["test"]:
@@ -582,6 +656,8 @@ def split_indices_by_stratified_source_path(
             test_fraction,
             rng,
             source_event_counts=source_event_counts,
+            source_val_fraction=source_val_fraction,
+            source_test_fraction=source_test_fraction,
         )
 
     split = {
@@ -606,7 +682,10 @@ def split_indices_by_stratified_source_path(
         f"test_graphs={len(split['test'])} ({len(split['test']) / total_graphs:.3f}) "
         f"train_sources={len(split_sources['train'])} ({len(split_sources['train']) / total_sources:.3f}) "
         f"val_sources={len(split_sources['val'])} ({len(split_sources['val']) / total_sources:.3f}) "
-        f"test_sources={len(split_sources['test'])} ({len(split_sources['test']) / total_sources:.3f})"
+        f"test_sources={len(split_sources['test'])} ({len(split_sources['test']) / total_sources:.3f}) "
+        f"target_graph_fractions=train:{1.0 - val_fraction - test_fraction:.3f},val:{val_fraction:.3f},test:{test_fraction:.3f} "
+        f"target_source_fractions=train:{1.0 - source_val_fraction - source_test_fraction:.3f},"
+        f"val:{source_val_fraction:.3f},test:{source_test_fraction:.3f}"
     )
     return split
 
@@ -1199,8 +1278,10 @@ def train_model(
     direction_loss_weight: float = 1.0,
     core_loss_scale_km: float = 0.05,
     angular_loss_scale_deg: float = 1.0,
-    val_fraction: float = 0.1,
-    test_fraction: float = 0.1,
+    val_fraction: float = 0.05,
+    test_fraction: float = 0.10,
+    source_val_fraction: float = 0.10,
+    source_test_fraction: float = 0.20,
     split_mode: str = "event",
     seed: int = 12345,
     device: str = "auto",
@@ -1370,6 +1451,8 @@ def train_model(
             seed=seed,
             show_progress=show_progress,
             workers=preprocess_workers,
+            source_val_fraction=source_val_fraction,
+            source_test_fraction=source_test_fraction,
         )
     else:
         raise ValueError("split_mode must be 'event', 'source-path', or 'source-stratified'")
@@ -1608,6 +1691,8 @@ def train_model(
         return {
             "val_fraction": val_fraction,
             "test_fraction": test_fraction,
+            "source_val_fraction": source_val_fraction,
+            "source_test_fraction": source_test_fraction,
             "split_mode": split_mode,
             "n_train": len(train_indices),
             "n_val": len(val_indices),

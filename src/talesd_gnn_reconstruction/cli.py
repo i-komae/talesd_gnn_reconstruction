@@ -1482,6 +1482,8 @@ def _cmd_train(args: argparse.Namespace) -> None:
         angular_loss_scale_deg=args.angular_loss_scale_deg,
         val_fraction=args.val_fraction,
         test_fraction=args.test_fraction,
+        source_val_fraction=args.source_val_fraction,
+        source_test_fraction=args.source_test_fraction,
         split_mode=args.split_mode,
         seed=args.seed,
         device=args.device,
@@ -1694,8 +1696,10 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--direction-loss-weight", type=float, default=1.0)
     train.add_argument("--core-loss-scale-km", type=float, default=0.05)
     train.add_argument("--angular-loss-scale-deg", type=float, default=1.0, help="角度lossをこの角度[deg]で正規化する")
-    train.add_argument("--val-fraction", type=float, default=0.1)
-    train.add_argument("--test-fraction", type=float, default=0.1)
+    train.add_argument("--val-fraction", type=float, default=0.05, help="validation event fraction")
+    train.add_argument("--test-fraction", type=float, default=0.10, help="test event fraction")
+    train.add_argument("--source-val-fraction", type=float, default=0.10, help="source-stratified splitでvalidationに割り当てるsource fraction")
+    train.add_argument("--source-test-fraction", type=float, default=0.20, help="source-stratified splitでtestに割り当てるsource fraction")
     train.add_argument(
         "--split-mode",
         choices=["event", "source-path", "source-stratified"],

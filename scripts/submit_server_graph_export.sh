@@ -51,6 +51,10 @@ TIME_LIMIT="${TIME_LIMIT:-2-00:00:00}"
 
 EXPORT_WORKERS="${EXPORT_WORKERS:-auto}"
 SUMMARY_WORKERS="${SUMMARY_WORKERS:-auto}"
+SPLIT_VAL_FRACTION="${SPLIT_VAL_FRACTION:-0.05}"
+SPLIT_TEST_FRACTION="${SPLIT_TEST_FRACTION:-0.10}"
+SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION:-0.10}"
+SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION:-0.20}"
 WORKER_MAX_FILES="${WORKER_MAX_FILES:-0}"
 MAX_EVENTS="${MAX_EVENTS:-}"
 MAX_EVENTS_PER_FILE="${MAX_EVENTS_PER_FILE:-0}"
@@ -480,6 +484,10 @@ MEM=${MEM}
 TIME_LIMIT=${TIME_LIMIT}
 EXPORT_WORKERS=${EXPORT_WORKERS}
 SUMMARY_WORKERS=${SUMMARY_WORKERS}
+SPLIT_VAL_FRACTION=${SPLIT_VAL_FRACTION}
+SPLIT_TEST_FRACTION=${SPLIT_TEST_FRACTION}
+SOURCE_VAL_FRACTION=${SOURCE_VAL_FRACTION}
+SOURCE_TEST_FRACTION=${SOURCE_TEST_FRACTION}
 WORKER_MAX_FILES=${WORKER_MAX_FILES}
 MAX_EVENTS=${MAX_EVENTS}
 MAX_EVENTS_PER_FILE=${MAX_EVENTS_PER_FILE}
@@ -560,6 +568,10 @@ echo "auto_max_mem_mb=${AUTO_MAX_MEM_MB}"
 echo "time_limit=${TIME_LIMIT}"
 echo "export_workers=${EXPORT_WORKERS}"
 echo "summary_workers=${SUMMARY_WORKERS}"
+echo "split_val_fraction=${SPLIT_VAL_FRACTION}"
+echo "split_test_fraction=${SPLIT_TEST_FRACTION}"
+echo "source_val_fraction=${SOURCE_VAL_FRACTION}"
+echo "source_test_fraction=${SOURCE_TEST_FRACTION}"
 echo "worker_max_files=${WORKER_MAX_FILES}"
 echo "graph_output=${GRAPH_OUTPUT}"
 echo "kind=${KIND}"
@@ -713,6 +725,16 @@ printf "%s\\n" $(q "${GRAPH_OUTPUT}") > $(q "${CONFIG_DIR}/graph_input.txt")
   --workers "${SUMMARY_WORKERS}" \\
   -o $(q "${SUMMARY_DIR}/graph_summary.json")
 
+.venv/bin/python scripts/summarize_split_distributions.py $(q "${GRAPH_OUTPUT}") \\
+  --split-workers "${SUMMARY_WORKERS}" \\
+  --val-fraction "${SPLIT_VAL_FRACTION}" \\
+  --test-fraction "${SPLIT_TEST_FRACTION}" \\
+  --source-val-fraction "${SOURCE_VAL_FRACTION}" \\
+  --source-test-fraction "${SOURCE_TEST_FRACTION}" \\
+  --seed "${SEED}" \\
+  --energy-bin-width "${ENERGY_BIN_WIDTH}" \\
+  -o $(q "${SUMMARY_DIR}/split_distribution_summary.json")
+
 cat > $(q "${RUN_DIR}/README.txt") <<README_EOF
 Run: ${RUN_NAME}
 Created: \$(date)
@@ -723,6 +745,7 @@ Important files:
   config/graph_input.txt
   logs/${RUN_NAME}.job.log
   summaries/graph_summary.json
+  summaries/split_distribution_summary.json
   DST_READ_COMPLETE.txt
 
 Graph input for training:
@@ -732,6 +755,7 @@ README_EOF
 echo "run_dir=${RUN_DIR}"
 echo "graph_input=${GRAPH_OUTPUT}"
 echo "graph_summary=${SUMMARY_DIR}/graph_summary.json"
+echo "split_distribution_summary=${SUMMARY_DIR}/split_distribution_summary.json"
 echo "read_done_marker=${RUN_DIR}/DST_READ_COMPLETE.txt"
 date
 EOF

@@ -57,6 +57,46 @@ class SourceSplitTest(unittest.TestCase):
         self.assertEqual(split_counts["val"], 10)
         self.assertEqual(split_counts["train"], 100)
 
+    def test_assign_source_group_avoids_single_large_source_in_holdout(self) -> None:
+        counts = {f"large_{index}": 1000 for index in range(3)}
+        counts.update({f"small_{index}": 100 for index in range(27)})
+        split_sources = {"train": [], "val": [], "test": []}
+
+        _assign_source_group(
+            split_sources,
+            list(counts),
+            val_fraction=0.1,
+            test_fraction=0.2,
+            rng=random.Random(5),
+            source_event_counts=counts,
+            source_val_fraction=0.10,
+            source_test_fraction=0.20,
+        )
+
+        self.assertTrue(all(counts[source_path] <= 100 for source_path in split_sources["val"]))
+        self.assertTrue(all(counts[source_path] <= 100 for source_path in split_sources["test"]))
+        self.assertEqual(len(split_sources["test"]), 6)
+        self.assertEqual(len(split_sources["val"]), 3)
+
+    def test_assign_source_group_can_target_source_fractions_separately(self) -> None:
+        counts = {f"source_{index}": 10 for index in range(100)}
+        split_sources = {"train": [], "val": [], "test": []}
+
+        _assign_source_group(
+            split_sources,
+            list(counts),
+            val_fraction=0.05,
+            test_fraction=0.10,
+            rng=random.Random(7),
+            source_event_counts=counts,
+            source_val_fraction=0.10,
+            source_test_fraction=0.20,
+        )
+
+        self.assertEqual(len(split_sources["train"]), 70)
+        self.assertEqual(len(split_sources["val"]), 10)
+        self.assertEqual(len(split_sources["test"]), 20)
+
     def test_stratified_source_split_keeps_source_paths_disjoint(self) -> None:
         source_counts = {
             **{f"/mc/proton/bin_16/source_{index}_16.dst.gz": 12 for index in range(12)},
