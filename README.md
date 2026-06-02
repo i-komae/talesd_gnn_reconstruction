@@ -10,6 +10,138 @@ TALE-SD の不規則な検出器配置をグラフとして扱い、GNNでエネ
 4. MC truth付きグラフでGNNを学習する
 5. 学習済みモデルで data / MC を再構成しCSVへ出力する
 
+## コード構成と実行フロー
+
+このプロジェクトは、実行入口、CLI、実処理の3層で見ると追いやすくなります。
+
+- `scripts/`: Slurm投入、resource指定、run名、graph path、環境変数を決める
+- `src/talesd_gnn_reconstruction/cli.py`: `talesd-gnn export/train/predict/...` の入口
+- `src/talesd_gnn_reconstruction/`: HDF5作成、dataset読み込み、モデル、loss、評価、診断図の実装
+
+`talesd-gnn` は `pyproject.toml` の console script で、`talesd_gnn_reconstruction.cli:main` に対応します。
+
+### HDF5グラフ作成
+
+サーバー上の標準入口は `scripts/submit_server_graph_export.sh` です。DSTを読み、GNN用HDF5 graph shardを書き出します。
+
+```text
+scripts/submit_server_graph_export.sh
+  -> .venv/bin/talesd-gnn export
+    -> cli._cmd_export()
+      -> dst_reader.py        DST bankを読む
+      -> event_graph.py       eventをgraphへ変換する
+      -> graph_io.py          HDF5へ書く
+```
+
+主な実装箇所:
+
+- `src/talesd_gnn_reconstruction/cli.py`: `export` commandの引数処理
+- `src/talesd_gnn_reconstruction/dst_reader.py`: DST入力の読み出し
+- `src/talesd_gnn_reconstruction/event_graph.py`: node/edge/waveform/target特徴量の構築
+- `src/talesd_gnn_reconstruction/graph_io.py`: HDF5 schemaと書き込み
+- `scripts/summarize_graph_shards.py`: graph数、metadata、particle/source分布などの集計
+
+既存の大規模HDF5から小規模HDF5を切り出す場合は、DSTを読み直しません。
+
+```text
+scripts/submit_server_small_graph_dataset.sh
+  -> scripts/make_small_graph_dataset.py
+    -> 既存HDF5 shardを読み、層化samplingして小規模HDF5を書く
+```
+
+### 学習
+
+学習の標準入口はtaskごとに分かれています。
+
+- 再構成 quality-only: `scripts/submit_server_waveform_full_training.sh`
+- mass-only: `scripts/submit_server_mass_only_training.sh`
+- reco+mass: `scripts/submit_server_reco_mass_training.sh`
+
+`mass-only` と `reco+mass` のsubmitterも、最終的には `submit_server_waveform_full_training.sh` に渡ります。実際の学習本体は `scripts/train_large_existing_graphs.sh` から `talesd-gnn train` を呼びます。
+
+```text
+scripts/submit_server_*.sh
+  -> scripts/train_large_existing_graphs.sh
+    -> .venv/bin/talesd-gnn train
+      -> cli._cmd_train()
+        -> train.train_model()
+          -> dataset.H5GraphDataset
+          -> DataLoader / collate
+          -> model.PhysicsTaleSdGNN
+          -> loss計算
+          -> checkpoint / metrics / diagnostics
+```
+
+主な実装箇所:
+
+- `src/talesd_gnn_reconstruction/cli.py`: `train` commandの引数処理
+- `src/talesd_gnn_reconstruction/train.py`: split、scaler、DataLoader、training loop、loss、best checkpoint、最終評価
+- `src/talesd_gnn_reconstruction/dataset.py`: HDF5 graphの読み込み、metadata参照、collate
+- `src/talesd_gnn_reconstruction/model.py`: GNN本体、waveform encoder、readout head
+- `src/talesd_gnn_reconstruction/metrics.py`: 評価指標
+- `src/talesd_gnn_reconstruction/diagnostics.py`: 学習曲線、energy依存性、quality cutなどの診断図
+
+### テスト・評価・推論
+
+学習時のvalidationと、学習後のtest評価は `train.train_model()` の中で実行されます。学習後はbest validation checkpointを読み戻して、validation/testに対するprediction、metrics、diagnosticsを作ります。
+
+```text
+train.train_model()
+  -> train/validation/test split
+  -> epochごとのtrain/validation loss
+  -> best validation checkpoint保存
+  -> best checkpoint読み戻し
+  -> validation predict
+  -> test predict
+  -> metrics JSON
+  -> diagnostics PDF/JSON
+```
+
+学習済みcheckpointを使って別途CSVを作る場合は `talesd-gnn predict` です。
+
+```text
+.venv/bin/talesd-gnn predict
+  -> cli._cmd_predict()
+    -> predict.predict_graphs()
+```
+
+入力分布と特徴量重要度は、学習本体とは別の診断入口です。
+
+```text
+.venv/bin/talesd-gnn input-distributions
+  -> feature_analysis.py
+
+.venv/bin/talesd-gnn feature-importance
+  -> feature_analysis.py
+```
+
+### 目的別に見る場所
+
+| 目的 | 主に見るファイル |
+| --- | --- |
+| Slurm投入条件、run名、graph path | `scripts/submit_*.sh` |
+| CLI引数とcommand入口 | `src/talesd_gnn_reconstruction/cli.py` |
+| DST読み込み | `src/talesd_gnn_reconstruction/dst_reader.py` |
+| graph特徴量の定義 | `src/talesd_gnn_reconstruction/event_graph.py` |
+| HDF5書き込み | `src/talesd_gnn_reconstruction/graph_io.py` |
+| HDF5読み込み、collate | `src/talesd_gnn_reconstruction/dataset.py` |
+| train/val/test split | `src/talesd_gnn_reconstruction/train.py` |
+| loss計算 | `src/talesd_gnn_reconstruction/train.py` |
+| モデル構造 | `src/talesd_gnn_reconstruction/model.py` |
+| metrics、診断図 | `src/talesd_gnn_reconstruction/metrics.py`, `src/talesd_gnn_reconstruction/diagnostics.py` |
+| 入力分布、特徴量重要度 | `src/talesd_gnn_reconstruction/feature_analysis.py` |
+
+## APIドキュメント
+
+CLI API、Python API、サーバー実行フローのSphinxドキュメントを `docs/api/` に置いています。日本語版と英語版を同じSphinxプロジェクト内で管理します。
+
+```bash
+uv sync --dev
+.venv/bin/sphinx-build -b html docs/api docs/api/_build/html
+```
+
+ビルド後は `docs/api/_build/html/index.html` を開きます。
+
 ## セットアップ
 
 ```bash

@@ -16,6 +16,8 @@ wheels/
 **/.ipynb_checkpoints/
 
 # Local outputs
+AGENTS.md
+docs/api/_build/
 outputs/
 notebook/
 notebook_outputs/

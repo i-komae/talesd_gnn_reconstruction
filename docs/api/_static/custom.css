@@ -1,0 +1,23 @@
+.wy-nav-content {
+  max-width: 1180px;
+}
+
+.wy-side-nav-search > a {
+  line-height: 1.2;
+  white-space: normal;
+}
+
+.rst-content table.docutils td,
+.rst-content table.docutils th {
+  vertical-align: top;
+}
+
+.rst-content div[class^="highlight"] pre,
+.rst-content pre.literal-block {
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.rst-content code.literal {
+  word-break: break-word;
+}
