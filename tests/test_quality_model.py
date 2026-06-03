@@ -8,6 +8,8 @@ import torch
 from talesd_gnn_reconstruction.model import PhysicsTaleSdGNN, build_model_from_config
 from talesd_gnn_reconstruction.train import (
     _angular_loss_from_vectors,
+    _energy_bin_bias_loss,
+    _energy_particle_bias_loss,
     _gaussian_reconstruction_nll,
     _mass_classification_loss,
 )
@@ -128,6 +130,60 @@ class QualityModelTest(unittest.TestCase):
         old_cosine_loss = 1.0 - math.cos(angle_rad)
 
         self.assertGreater(angular_loss, 100.0 * old_cosine_loss)
+
+    def test_energy_bin_bias_loss_penalizes_mean_loge_bias(self) -> None:
+        target = torch.tensor(
+            [
+                [18.05, 0.0, 0.0, 0.0, 0.0, 1.0],
+                [18.06, 0.0, 0.0, 0.0, 0.0, 1.0],
+                [18.15, 0.0, 0.0, 0.0, 0.0, 1.0],
+                [18.16, 0.0, 0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=torch.float32,
+        )
+        unbiased = target.clone()
+        biased = target.clone()
+        biased[:, 0] += torch.tensor([0.10, 0.10, -0.05, -0.05], dtype=torch.float32)
+
+        unbiased_loss = _energy_bin_bias_loss(unbiased, target, bin_width=0.1, min_bin_count=2)
+        biased_loss = _energy_bin_bias_loss(biased, target, bin_width=0.1, min_bin_count=2)
+
+        self.assertEqual(float(unbiased_loss), 0.0)
+        self.assertGreater(float(biased_loss), 0.0)
+
+    def test_energy_particle_bias_loss_penalizes_proton_iron_difference(self) -> None:
+        target = torch.tensor(
+            [
+                [18.05, 0.0, 0.0, 0.0, 0.0, 1.0],
+                [18.06, 0.0, 0.0, 0.0, 0.0, 1.0],
+                [18.07, 0.0, 0.0, 0.0, 0.0, 1.0],
+                [18.08, 0.0, 0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=torch.float32,
+        )
+        labels = torch.tensor([0.0, 0.0, 1.0, 1.0], dtype=torch.float32)
+        same_bias = target.clone()
+        same_bias[:, 0] += 0.05
+        particle_biased = target.clone()
+        particle_biased[:, 0] += torch.tensor([0.05, 0.05, -0.05, -0.05], dtype=torch.float32)
+
+        same_loss = _energy_particle_bias_loss(
+            same_bias,
+            target,
+            labels,
+            bin_width=0.1,
+            min_bin_count=2,
+        )
+        particle_loss = _energy_particle_bias_loss(
+            particle_biased,
+            target,
+            labels,
+            bin_width=0.1,
+            min_bin_count=2,
+        )
+
+        self.assertEqual(float(same_loss), 0.0)
+        self.assertGreater(float(particle_loss), 0.0)
 
     def test_mass_ranking_loss_pushes_classes_apart(self) -> None:
         labels = torch.tensor([0.0, 0.0, 1.0, 1.0], dtype=torch.float32)

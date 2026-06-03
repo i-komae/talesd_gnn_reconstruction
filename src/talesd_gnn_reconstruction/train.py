@@ -789,6 +789,79 @@ def _angular_loss_from_vectors(pred: Any, target: Any, *, angular_loss_scale_deg
     return F.smooth_l1_loss(scaled_angle, torch.zeros_like(scaled_angle), beta=1.0)
 
 
+def _energy_bin_bias_loss(
+    pred: Any,
+    target: Any,
+    *,
+    bin_width: float,
+    min_bin_count: int,
+) -> Any:
+    import torch
+
+    residual = pred[:, 0] - target[:, 0]
+    true_loge = target[:, 0]
+    finite = torch.isfinite(residual) & torch.isfinite(true_loge)
+    if not torch.any(finite):
+        return residual.new_zeros(())
+
+    residual = residual[finite]
+    true_loge = true_loge[finite]
+    width = max(float(bin_width), 1.0e-6)
+    min_count = max(int(min_bin_count), 1)
+    bin_index = torch.floor(true_loge / width).to(dtype=torch.int64)
+    losses = []
+    for bin_id in torch.unique(bin_index):
+        mask = bin_index == bin_id
+        if int(torch.count_nonzero(mask).item()) < min_count:
+            continue
+        mean_bias = residual[mask].mean()
+        losses.append(mean_bias * mean_bias)
+    if not losses:
+        return residual.new_zeros(())
+    return torch.stack(losses).mean()
+
+
+def _energy_particle_bias_loss(
+    pred: Any,
+    target: Any,
+    particle_labels: Any,
+    *,
+    bin_width: float,
+    min_bin_count: int,
+) -> Any:
+    import torch
+
+    residual = pred[:, 0] - target[:, 0]
+    true_loge = target[:, 0]
+    labels = particle_labels.to(device=residual.device, dtype=residual.dtype).reshape(-1)
+    finite = torch.isfinite(residual) & torch.isfinite(true_loge) & torch.isfinite(labels)
+    if not torch.any(finite):
+        return residual.new_zeros(())
+
+    residual = residual[finite]
+    true_loge = true_loge[finite]
+    labels = labels[finite]
+    width = max(float(bin_width), 1.0e-6)
+    min_count = max(int(min_bin_count), 1)
+    bin_index = torch.floor(true_loge / width).to(dtype=torch.int64)
+    losses = []
+    for bin_id in torch.unique(bin_index):
+        bin_mask = bin_index == bin_id
+        proton_mask = bin_mask & (labels < 0.5)
+        iron_mask = bin_mask & (labels >= 0.5)
+        if int(torch.count_nonzero(proton_mask).item()) < min_count:
+            continue
+        if int(torch.count_nonzero(iron_mask).item()) < min_count:
+            continue
+        mean_proton_bias = residual[proton_mask].mean()
+        mean_iron_bias = residual[iron_mask].mean()
+        delta_bias = mean_proton_bias - mean_iron_bias
+        losses.append(delta_bias * delta_bias)
+    if not losses:
+        return residual.new_zeros(())
+    return torch.stack(losses).mean()
+
+
 def _reconstruction_loss(
     pred_scaled: Any,
     target_scaled: Any,
@@ -905,6 +978,7 @@ def _reconstruction_training_loss(
     pred_scaled: Any,
     target_scaled: Any,
     error_raw: Any | None,
+    particle_labels: Any | None,
     *,
     mode: str,
     target_mean: Any,
@@ -921,8 +995,13 @@ def _reconstruction_training_loss(
     nll_sigma_energy_floor: float,
     nll_sigma_angle_floor_deg: float,
     nll_sigma_core_floor_km: float,
+    energy_bias_loss_weight: float,
+    energy_particle_bias_loss_weight: float,
+    energy_bias_bin_width: float,
+    energy_bias_min_bin_count: int,
 ) -> tuple[Any, dict[str, Any]]:
     mode = str(mode).lower()
+    components: dict[str, Any] = {}
     if mode in {"physics-nll", "nll"} and error_raw is None:
         raise ValueError("loss_mode 'physics-nll' and 'nll' require --error-prediction")
     if mode == "nll":
@@ -942,8 +1021,9 @@ def _reconstruction_training_loss(
             sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
             sigma_core_floor_km=nll_sigma_core_floor_km,
         )
-        return nll_loss, {"nll": nll_loss}
-    if mode == "physics-nll":
+        loss = nll_loss
+        components["nll"] = nll_loss
+    elif mode == "physics-nll":
         physics_loss = _reconstruction_loss(
             pred_scaled,
             target_scaled,
@@ -973,20 +1053,47 @@ def _reconstruction_training_loss(
             sigma_core_floor_km=nll_sigma_core_floor_km,
         )
         loss = physics_loss + float(nll_loss_weight) * nll_loss
-        return loss, {"physics": physics_loss, "nll": nll_loss}
-    loss = _reconstruction_loss(
-        pred_scaled,
-        target_scaled,
-        mode=mode,
-        target_mean=target_mean,
-        target_std=target_std,
-        energy_weight=energy_weight,
-        core_weight=core_weight,
-        direction_weight=direction_weight,
-        core_scale_km=core_scale_km,
-        angular_loss_scale_deg=angular_loss_scale_deg,
-    )
-    return loss, {}
+        components["physics"] = physics_loss
+        components["nll"] = nll_loss
+    else:
+        loss = _reconstruction_loss(
+            pred_scaled,
+            target_scaled,
+            mode=mode,
+            target_mean=target_mean,
+            target_std=target_std,
+            energy_weight=energy_weight,
+            core_weight=core_weight,
+            direction_weight=direction_weight,
+            core_scale_km=core_scale_km,
+            angular_loss_scale_deg=angular_loss_scale_deg,
+        )
+    if float(energy_bias_loss_weight) > 0.0:
+        pred = _inverse_scaled_target(pred_scaled, target_mean, target_std)
+        target = _inverse_scaled_target(target_scaled, target_mean, target_std)
+        bias_loss = _energy_bin_bias_loss(
+            pred,
+            target,
+            bin_width=energy_bias_bin_width,
+            min_bin_count=energy_bias_min_bin_count,
+        )
+        loss = loss + float(energy_bias_loss_weight) * bias_loss
+        components["energy_bias"] = bias_loss
+    if float(energy_particle_bias_loss_weight) > 0.0:
+        if particle_labels is None:
+            raise ValueError("energy particle bias loss requires particle labels in the training batch")
+        pred = _inverse_scaled_target(pred_scaled, target_mean, target_std)
+        target = _inverse_scaled_target(target_scaled, target_mean, target_std)
+        particle_bias_loss = _energy_particle_bias_loss(
+            pred,
+            target,
+            particle_labels,
+            bin_width=energy_bias_bin_width,
+            min_bin_count=energy_bias_min_bin_count,
+        )
+        loss = loss + float(energy_particle_bias_loss_weight) * particle_bias_loss
+        components["energy_particle_bias"] = particle_bias_loss
+    return loss, components
 
 
 def _quality_targets_from_reconstruction(
@@ -1304,6 +1411,10 @@ def train_model(
     direction_loss_weight: float = 1.0,
     core_loss_scale_km: float = 0.05,
     angular_loss_scale_deg: float = 1.0,
+    energy_bias_loss_weight: float = 0.0,
+    energy_particle_bias_loss_weight: float = 0.0,
+    energy_bias_bin_width: float = 0.1,
+    energy_bias_min_bin_count: int = 8,
     val_fraction: float = 0.05,
     test_fraction: float = 0.10,
     source_val_fraction: float = 0.10,
@@ -1401,6 +1512,13 @@ def train_model(
         raise ValueError("mass_pos_weight_mode must be 'none' or 'auto'")
     mass_ranking_weight = max(float(mass_ranking_weight), 0.0)
     mass_ranking_margin = float(mass_ranking_margin)
+    energy_bias_loss_weight = max(float(energy_bias_loss_weight), 0.0)
+    energy_particle_bias_loss_weight = max(float(energy_particle_bias_loss_weight), 0.0)
+    energy_bias_bin_width = max(float(energy_bias_bin_width), 1.0e-6)
+    energy_bias_min_bin_count = max(int(energy_bias_min_bin_count), 1)
+    require_particle_label_for_reco_loss = (
+        training_task != "mass" and float(energy_particle_bias_loss_weight) > 0.0
+    )
 
     overall_started = time.perf_counter()
     stage_started = time.perf_counter()
@@ -1425,7 +1543,7 @@ def train_model(
     dataset = H5GraphDataset(
         graphs_path,
         require_target=True,
-        require_particle_label=mass_classification,
+        require_particle_label=mass_classification or require_particle_label_for_reco_loss,
         cache_size=sample_cache_size,
         load_node_positions=False,
         load_attrs=False,
@@ -1671,6 +1789,10 @@ def train_model(
         + f" waveform_encoder={waveform_encoder} waveform_channels={model_kwargs['waveform_channels']}"
         + f" training_task={training_task} loss_mode={loss_mode}"
         + f" angular_loss_scale_deg={angular_loss_scale_deg}"
+        + f" energy_bias_loss_weight={energy_bias_loss_weight:.6g}"
+        + f" energy_particle_bias_loss_weight={energy_particle_bias_loss_weight:.6g}"
+        + f" energy_bias_bin_width={energy_bias_bin_width:.6g}"
+        + f" energy_bias_min_bin_count={energy_bias_min_bin_count}"
         + f" mass_classification={mass_classification} quality_prediction={quality_prediction}"
         + f" error_prediction={error_prediction}"
         + (
@@ -1803,6 +1925,10 @@ def train_model(
             "direction_loss_weight": direction_loss_weight,
             "core_loss_scale_km": core_loss_scale_km,
             "angular_loss_scale_deg": angular_loss_scale_deg,
+            "energy_bias_loss_weight": energy_bias_loss_weight,
+            "energy_particle_bias_loss_weight": energy_particle_bias_loss_weight,
+            "energy_bias_bin_width": energy_bias_bin_width,
+            "energy_bias_min_bin_count": energy_bias_min_bin_count,
             "max_graphs": max_graphs,
             "particle_filter": particle_filter,
             "stage_seconds": {name: round(value, 3) for name, value in stage_seconds.items()},
@@ -1864,6 +1990,8 @@ def train_model(
         train_reco_losses = []
         train_physics_losses = []
         train_nll_losses = []
+        train_energy_bias_losses = []
+        train_energy_particle_bias_losses = []
         train_mass_losses = []
         train_quality_losses = []
         train_error_losses = []
@@ -1895,6 +2023,7 @@ def train_model(
                     pred,
                     batch["y"],
                     error_raw,
+                    batch.get("mass_label"),
                     mode=loss_mode,
                     target_mean=target_mean,
                     target_std=target_std,
@@ -1910,6 +2039,10 @@ def train_model(
                     nll_sigma_energy_floor=nll_sigma_energy_floor,
                     nll_sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
                     nll_sigma_core_floor_km=nll_sigma_core_floor_km,
+                    energy_bias_loss_weight=energy_bias_loss_weight,
+                    energy_particle_bias_loss_weight=energy_particle_bias_loss_weight,
+                    energy_bias_bin_width=energy_bias_bin_width,
+                    energy_bias_min_bin_count=energy_bias_min_bin_count,
                 )
                 loss = reco_loss
             quality_loss = None
@@ -1975,6 +2108,12 @@ def train_model(
                 train_physics_losses.append(float(reco_components["physics"].detach().cpu()))
             if "nll" in reco_components:
                 train_nll_losses.append(float(reco_components["nll"].detach().cpu()))
+            if "energy_bias" in reco_components:
+                train_energy_bias_losses.append(float(reco_components["energy_bias"].detach().cpu()))
+            if "energy_particle_bias" in reco_components:
+                train_energy_particle_bias_losses.append(
+                    float(reco_components["energy_particle_bias"].detach().cpu())
+                )
             if mass_loss is not None:
                 train_mass_losses.append(float(mass_loss.detach().cpu()))
             if quality_loss is not None:
@@ -1988,6 +2127,8 @@ def train_model(
         val_reco_losses = []
         val_physics_losses = []
         val_nll_losses = []
+        val_energy_bias_losses = []
+        val_energy_particle_bias_losses = []
         val_mass_losses = []
         val_quality_losses = []
         val_error_losses = []
@@ -2020,6 +2161,7 @@ def train_model(
                         pred,
                         batch["y"],
                         error_raw,
+                        batch.get("mass_label"),
                         mode=loss_mode,
                         target_mean=target_mean,
                         target_std=target_std,
@@ -2035,6 +2177,10 @@ def train_model(
                         nll_sigma_energy_floor=nll_sigma_energy_floor,
                         nll_sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
                         nll_sigma_core_floor_km=nll_sigma_core_floor_km,
+                        energy_bias_loss_weight=energy_bias_loss_weight,
+                        energy_particle_bias_loss_weight=energy_particle_bias_loss_weight,
+                        energy_bias_bin_width=energy_bias_bin_width,
+                        energy_bias_min_bin_count=energy_bias_min_bin_count,
                     )
                     loss = reco_loss
                 quality_loss = None
@@ -2096,6 +2242,12 @@ def train_model(
                     val_physics_losses.append(float(reco_components["physics"].detach().cpu()))
                 if "nll" in reco_components:
                     val_nll_losses.append(float(reco_components["nll"].detach().cpu()))
+                if "energy_bias" in reco_components:
+                    val_energy_bias_losses.append(float(reco_components["energy_bias"].detach().cpu()))
+                if "energy_particle_bias" in reco_components:
+                    val_energy_particle_bias_losses.append(
+                        float(reco_components["energy_particle_bias"].detach().cpu())
+                    )
                 if mass_loss is not None:
                     val_mass_losses.append(float(mass_loss.detach().cpu()))
                 if quality_loss is not None:
@@ -2126,6 +2278,14 @@ def train_model(
             epoch_row["train_nll_loss"] = float(np.mean(train_nll_losses))
         if val_nll_losses:
             epoch_row["val_nll_loss"] = float(np.mean(val_nll_losses))
+        if train_energy_bias_losses:
+            epoch_row["train_energy_bias_loss"] = float(np.mean(train_energy_bias_losses))
+        if val_energy_bias_losses:
+            epoch_row["val_energy_bias_loss"] = float(np.mean(val_energy_bias_losses))
+        if train_energy_particle_bias_losses:
+            epoch_row["train_energy_particle_bias_loss"] = float(np.mean(train_energy_particle_bias_losses))
+        if val_energy_particle_bias_losses:
+            epoch_row["val_energy_particle_bias_loss"] = float(np.mean(val_energy_particle_bias_losses))
         if train_mass_losses:
             epoch_row["train_mass_loss"] = float(np.mean(train_mass_losses))
             train_mass_metrics = _binary_count_metrics(train_mass_counts)

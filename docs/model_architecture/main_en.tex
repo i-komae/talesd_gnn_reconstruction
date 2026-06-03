@@ -319,6 +319,42 @@ The direction term uses the angular separation $\alpha$ between the predicted an
   \mathrm{SmoothL1}\left(\frac{\alpha}{1.0^\circ};\beta=1\right).
 \]
 
+\subsection{Energy Bias Penalties}
+
+To suppress a positive low-energy bias in
+$\widehat{\log_{10}E}-\log_{10}E$, the next reconstruction training condition
+adds supervised penalties on the mean log-energy residual in true-energy bins.
+These terms are training losses for MC-labeled data, not post-hoc corrections for real data.
+Let
+\[
+  \delta_i=\widehat{\log_{10}E_i}-\log_{10}E_i
+\]
+and let $B_k$ be bins in true $\log_{10}E$ with width 0.1. The bin-mean bias term is
+\[
+  L_{\mathrm{bias}}=
+  \left\langle
+  \left(
+  \frac{1}{|B_k|}\sum_{i\in B_k}\delta_i
+  \right)^2
+  \right\rangle_k .
+\]
+To prevent proton and iron biases from cancelling each other inside the same energy bin, the training loss also includes
+\[
+  L_{\mathrm{p/Fe}}=
+  \left\langle
+  \left(
+  \langle\delta\rangle_{B_k,\mathrm{proton}}
+  -
+  \langle\delta\rangle_{B_k,\mathrm{iron}}
+  \right)^2
+  \right\rangle_k .
+\]
+The default submitters for reconstruction-containing runs use
+\[
+  \lambda_{\mathrm{bias}}=1.0,\qquad
+  \lambda_{\mathrm{p/Fe}}=1.0.
+\]
+
 \subsection{Quality Loss}
 
 The quality target is computed from the current reconstruction residual and detached from the computation graph:
@@ -337,7 +373,12 @@ The quality loss is
 \]
 For reconstruction without mass classification, the total loss is
 \[
-  L_{\mathrm{reco}}=L_{\mathrm{phys}}+0.2\,L_q.
+  L_{\mathrm{reco}}
+  =
+  L_{\mathrm{phys}}
+  +\lambda_{\mathrm{bias}}L_{\mathrm{bias}}
+  +\lambda_{\mathrm{p/Fe}}L_{\mathrm{p/Fe}}
+  +0.2\,L_q.
 \]
 
 \subsection{Mass Classification Loss}
@@ -380,6 +421,8 @@ The joint baseline combines reconstruction, quality, and mass terms:
   L_{\mathrm{total}}
   =
   L_{\mathrm{phys}}
+  +\lambda_{\mathrm{bias}}L_{\mathrm{bias}}
+  +\lambda_{\mathrm{p/Fe}}L_{\mathrm{p/Fe}}
   +0.2\,L_q
   +\lambda_{\mathrm{mass}} L_{\mathrm{mass}}.
 \]

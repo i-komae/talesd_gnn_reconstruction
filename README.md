@@ -75,7 +75,7 @@ scripts/submit_server_*.sh
 主な実装箇所:
 
 - `src/talesd_gnn_reconstruction/cli.py`: `train` commandの引数処理
-- `src/talesd_gnn_reconstruction/train.py`: split、scaler、DataLoader、training loop、loss、best checkpoint、最終評価
+- `src/talesd_gnn_reconstruction/train.py`: split、scaler、DataLoader、training loop、loss、best checkpoint、最終評価。再構成lossには、true energy binごとのlogE bias penaltyとproton/iron bias差 penaltyを指定できます。
 - `src/talesd_gnn_reconstruction/dataset.py`: HDF5 graphの読み込み、metadata参照、collate
 - `src/talesd_gnn_reconstruction/model.py`: GNN本体、waveform encoder、readout head
 - `src/talesd_gnn_reconstruction/metrics.py`: 評価指標

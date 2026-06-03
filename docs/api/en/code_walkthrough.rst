@@ -236,15 +236,16 @@ Loss functions
 
 Loss definitions are in ``train.py``.
 
-``_reconstruction_loss`` : ``train.py:691`` computes reconstruction loss.
+``_reconstruction_loss`` : ``train.py`` computes reconstruction loss.
 For ``loss_mode=physics``, energy, core, and direction are evaluated in physical units.
 Energy uses SmoothL1 on log-energy difference, core uses SmoothL1 after division by ``core_loss_scale_km``, and direction uses angular error.
+When enabled, the training wrapper also adds true-energy-bin bias penalties: one on the mean ``pred_logE - true_logE`` in each bin, and one on the proton/iron mean-residual difference in the same bin.
 
-``_quality_targets_from_reconstruction`` : ``train.py:889`` converts reconstruction errors into a soft quality target.
-``_quality_prediction_loss`` : ``train.py:915`` applies BCEWithLogits between the quality logit and that soft target.
+``_quality_targets_from_reconstruction`` : ``train.py`` converts reconstruction errors into a soft quality target.
+``_quality_prediction_loss`` : ``train.py`` applies BCEWithLogits between the quality logit and that soft target.
 This target is not the mass label.
 
-``_mass_classification_loss`` : ``train.py:1017`` computes mass-only or mass-head loss.
+``_mass_classification_loss`` : ``train.py`` computes mass-only or mass-head loss.
 It supports BCE, focal loss, and optional ranking loss.
 
 Diagnostics

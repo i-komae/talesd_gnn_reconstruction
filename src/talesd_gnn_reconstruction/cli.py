@@ -1480,6 +1480,10 @@ def _cmd_train(args: argparse.Namespace) -> None:
         direction_loss_weight=args.direction_loss_weight,
         core_loss_scale_km=args.core_loss_scale_km,
         angular_loss_scale_deg=args.angular_loss_scale_deg,
+        energy_bias_loss_weight=args.energy_bias_loss_weight,
+        energy_particle_bias_loss_weight=args.energy_particle_bias_loss_weight,
+        energy_bias_bin_width=args.energy_bias_bin_width,
+        energy_bias_min_bin_count=args.energy_bias_min_bin_count,
         val_fraction=args.val_fraction,
         test_fraction=args.test_fraction,
         source_val_fraction=args.source_val_fraction,
@@ -1696,6 +1700,15 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--direction-loss-weight", type=float, default=1.0)
     train.add_argument("--core-loss-scale-km", type=float, default=0.05)
     train.add_argument("--angular-loss-scale-deg", type=float, default=1.0, help="角度lossをこの角度[deg]で正規化する")
+    train.add_argument("--energy-bias-loss-weight", type=float, default=0.0, help="true energy binごとの平均logE residualを0に寄せるloss重み")
+    train.add_argument(
+        "--energy-particle-bias-loss-weight",
+        type=float,
+        default=0.0,
+        help="同じtrue energy bin内でproton/ironの平均logE residual差を0に寄せるloss重み",
+    )
+    train.add_argument("--energy-bias-bin-width", type=float, default=0.1, help="energy bias lossのtrue log10(E/eV) bin幅")
+    train.add_argument("--energy-bias-min-bin-count", type=int, default=8, help="energy bias lossで1 bin/classに必要な最小event数")
     train.add_argument("--val-fraction", type=float, default=0.05, help="validation event fraction")
     train.add_argument("--test-fraction", type=float, default=0.10, help="test event fraction")
     train.add_argument("--source-val-fraction", type=float, default=0.10, help="source-stratified splitでvalidationに割り当てるsource fraction")
