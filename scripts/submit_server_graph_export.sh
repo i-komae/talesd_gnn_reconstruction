@@ -16,6 +16,7 @@ RUN_NAME="${RUN_NAME:-server_graph_export_energyflat${ENERGY_SAMPLE_PER_BIN}_${R
 RUN_DIR="${RUN_DIR:-${OUTPUT_ROOT}/runs/${RUN_NAME}}"
 GRAPH_RUN_DIR="${GRAPH_RUN_DIR:-${GRAPH_ROOT}/${RUN_NAME}}"
 GRAPH_OUTPUT="${GRAPH_OUTPUT:-${GRAPH_RUN_DIR}/${RUN_NAME}.h5}"
+GRAPH_SUMMARY_DIR="${GRAPH_SUMMARY_DIR:-${GRAPH_RUN_DIR}/summaries}"
 
 DEFAULT_INPUT_DIRS="/dicos_ui_home/ikomae/work/taleMC/proton/sel/tale_proton5.5yr_16-16.9_v260313:/dicos_ui_home/ikomae/work/taleMC/proton/sel/tale_proton5.5yr_17-17.9_v260313:/dicos_ui_home/ikomae/work/taleMC/proton/sel/tale_proton5.5yr_18-18.9_v260313:/dicos_ui_home/ikomae/work/taleMC/iron/sel/tale_iron4yr_16-16.9_v260316:/dicos_ui_home/ikomae/work/taleMC/iron/sel/tale_iron4yr_17-17.9_v260316:/dicos_ui_home/ikomae/work/taleMC/iron/sel/tale_iron4yr_18-18.9_v260316"
 DEFAULT_MC_CALIB_DIR="/dicos_ui_home/ikomae/work/taleMC/calib"
@@ -51,6 +52,10 @@ TIME_LIMIT="${TIME_LIMIT:-2-00:00:00}"
 
 EXPORT_WORKERS="${EXPORT_WORKERS:-auto}"
 SUMMARY_WORKERS="${SUMMARY_WORKERS:-auto}"
+MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS:-1}"
+INPUT_DISTRIBUTION_MAX_GRAPHS="${INPUT_DISTRIBUTION_MAX_GRAPHS:-100000}"
+INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE="${INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE:-200000}"
+MAKE_SPLIT_DISTRIBUTION_PLOTS="${MAKE_SPLIT_DISTRIBUTION_PLOTS:-1}"
 SPLIT_VAL_FRACTION="${SPLIT_VAL_FRACTION:-0.05}"
 SPLIT_TEST_FRACTION="${SPLIT_TEST_FRACTION:-0.10}"
 SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION:-0.10}"
@@ -407,7 +412,7 @@ SLURM_LOG_DIR="${RUN_DIR}/slurm_logs"
 LOG_DIR="${RUN_DIR}/logs"
 CONFIG_DIR="${RUN_DIR}/config"
 SUMMARY_DIR="${RUN_DIR}/summaries"
-mkdir -p "${SBATCH_DIR}" "${SLURM_LOG_DIR}" "${LOG_DIR}" "${CONFIG_DIR}" "${SUMMARY_DIR}" "${GRAPH_RUN_DIR}"
+mkdir -p "${SBATCH_DIR}" "${SLURM_LOG_DIR}" "${LOG_DIR}" "${CONFIG_DIR}" "${SUMMARY_DIR}" "${GRAPH_RUN_DIR}" "${GRAPH_SUMMARY_DIR}"
 
 SBATCH_FILE="${SBATCH_DIR}/${RUN_NAME}.sbatch"
 RESOURCE_REPORT="${CONFIG_DIR}/resource_selection.tsv"
@@ -462,6 +467,7 @@ RUN_NAME=${RUN_NAME}
 RUN_DIR=${RUN_DIR}
 GRAPH_RUN_DIR=${GRAPH_RUN_DIR}
 GRAPH_OUTPUT=${GRAPH_OUTPUT}
+GRAPH_SUMMARY_DIR=${GRAPH_SUMMARY_DIR}
 INPUT_DIRS=${INPUT_DIRS}
 INPUT_LISTS=${INPUT_LISTS}
 INPUT_FILES=${INPUT_FILES}
@@ -484,6 +490,10 @@ MEM=${MEM}
 TIME_LIMIT=${TIME_LIMIT}
 EXPORT_WORKERS=${EXPORT_WORKERS}
 SUMMARY_WORKERS=${SUMMARY_WORKERS}
+MAKE_INPUT_DISTRIBUTIONS=${MAKE_INPUT_DISTRIBUTIONS}
+INPUT_DISTRIBUTION_MAX_GRAPHS=${INPUT_DISTRIBUTION_MAX_GRAPHS}
+INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE=${INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE}
+MAKE_SPLIT_DISTRIBUTION_PLOTS=${MAKE_SPLIT_DISTRIBUTION_PLOTS}
 SPLIT_VAL_FRACTION=${SPLIT_VAL_FRACTION}
 SPLIT_TEST_FRACTION=${SPLIT_TEST_FRACTION}
 SOURCE_VAL_FRACTION=${SOURCE_VAL_FRACTION}
@@ -528,7 +538,7 @@ ${SBATCH_NODELIST_DIRECTIVE}
 set -euo pipefail
 
 JOB_LOG_PATH=$(q "${LOG_DIR}/${RUN_NAME}.job.log")
-mkdir -p $(q "${LOG_DIR}") $(q "${SUMMARY_DIR}") $(q "${SLURM_LOG_DIR}") $(q "${GRAPH_RUN_DIR}") $(q "${CONFIG_DIR}")
+mkdir -p $(q "${LOG_DIR}") $(q "${SUMMARY_DIR}") $(q "${SLURM_LOG_DIR}") $(q "${GRAPH_RUN_DIR}") $(q "${GRAPH_SUMMARY_DIR}") $(q "${CONFIG_DIR}")
 exec > >(tee -a "\${JOB_LOG_PATH}") 2>&1
 
 module purge
@@ -568,6 +578,11 @@ echo "auto_max_mem_mb=${AUTO_MAX_MEM_MB}"
 echo "time_limit=${TIME_LIMIT}"
 echo "export_workers=${EXPORT_WORKERS}"
 echo "summary_workers=${SUMMARY_WORKERS}"
+echo "graph_summary_dir=${GRAPH_SUMMARY_DIR}"
+echo "make_input_distributions=${MAKE_INPUT_DISTRIBUTIONS}"
+echo "input_distribution_max_graphs=${INPUT_DISTRIBUTION_MAX_GRAPHS}"
+echo "input_distribution_max_values_per_feature=${INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE}"
+echo "make_split_distribution_plots=${MAKE_SPLIT_DISTRIBUTION_PLOTS}"
 echo "split_val_fraction=${SPLIT_VAL_FRACTION}"
 echo "split_test_fraction=${SPLIT_TEST_FRACTION}"
 echo "source_val_fraction=${SOURCE_VAL_FRACTION}"
@@ -721,9 +736,17 @@ READ_COMPLETE_EOF
 
 printf "%s\\n" $(q "${GRAPH_OUTPUT}") > $(q "${CONFIG_DIR}/graph_input.txt")
 
+GRAPH_SUMMARY_JSON=$(q "${GRAPH_SUMMARY_DIR}/graph_summary.json")
+SPLIT_SUMMARY_JSON=$(q "${GRAPH_SUMMARY_DIR}/split_distribution_summary.json")
+SPLIT_PLOT_ARGS=()
+if [[ "${MAKE_SPLIT_DISTRIBUTION_PLOTS}" == "1" ]]; then
+  SPLIT_PLOT_ARGS=(--plot-dir $(q "${GRAPH_SUMMARY_DIR}/split_distributions"))
+fi
+
 .venv/bin/python scripts/summarize_graph_shards.py $(q "${GRAPH_OUTPUT}") \\
   --workers "${SUMMARY_WORKERS}" \\
-  -o $(q "${SUMMARY_DIR}/graph_summary.json")
+  -o "\${GRAPH_SUMMARY_JSON}"
+cp -f "\${GRAPH_SUMMARY_JSON}" $(q "${SUMMARY_DIR}/graph_summary.json")
 
 .venv/bin/python scripts/summarize_split_distributions.py $(q "${GRAPH_OUTPUT}") \\
   --split-workers "${SUMMARY_WORKERS}" \\
@@ -733,7 +756,18 @@ printf "%s\\n" $(q "${GRAPH_OUTPUT}") > $(q "${CONFIG_DIR}/graph_input.txt")
   --source-test-fraction "${SOURCE_TEST_FRACTION}" \\
   --seed "${SEED}" \\
   --energy-bin-width "${ENERGY_BIN_WIDTH}" \\
-  -o $(q "${SUMMARY_DIR}/split_distribution_summary.json")
+  "\${SPLIT_PLOT_ARGS[@]}" \\
+  -o "\${SPLIT_SUMMARY_JSON}"
+cp -f "\${SPLIT_SUMMARY_JSON}" $(q "${SUMMARY_DIR}/split_distribution_summary.json")
+
+if [[ "${MAKE_INPUT_DISTRIBUTIONS}" == "1" ]]; then
+  .venv/bin/talesd-gnn input-distributions \\
+    --graphs $(q "${GRAPH_OUTPUT}") \\
+    --max-graphs "${INPUT_DISTRIBUTION_MAX_GRAPHS}" \\
+    --max-values-per-feature "${INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE}" \\
+    --seed "${SEED}" \\
+    -o $(q "${GRAPH_SUMMARY_DIR}/input_distributions")
+fi
 
 cat > $(q "${RUN_DIR}/README.txt") <<README_EOF
 Run: ${RUN_NAME}
@@ -746,6 +780,10 @@ Important files:
   logs/${RUN_NAME}.job.log
   summaries/graph_summary.json
   summaries/split_distribution_summary.json
+  ${GRAPH_SUMMARY_DIR}/graph_summary.json
+  ${GRAPH_SUMMARY_DIR}/split_distribution_summary.json
+  ${GRAPH_SUMMARY_DIR}/split_distributions/
+  ${GRAPH_SUMMARY_DIR}/input_distributions/
   DST_READ_COMPLETE.txt
 
 Graph input for training:
@@ -754,8 +792,10 @@ README_EOF
 
 echo "run_dir=${RUN_DIR}"
 echo "graph_input=${GRAPH_OUTPUT}"
-echo "graph_summary=${SUMMARY_DIR}/graph_summary.json"
-echo "split_distribution_summary=${SUMMARY_DIR}/split_distribution_summary.json"
+echo "graph_summary=${GRAPH_SUMMARY_DIR}/graph_summary.json"
+echo "split_distribution_summary=${GRAPH_SUMMARY_DIR}/split_distribution_summary.json"
+echo "split_distribution_plots=${GRAPH_SUMMARY_DIR}/split_distributions"
+echo "input_distributions=${GRAPH_SUMMARY_DIR}/input_distributions"
 echo "read_done_marker=${RUN_DIR}/DST_READ_COMPLETE.txt"
 date
 EOF

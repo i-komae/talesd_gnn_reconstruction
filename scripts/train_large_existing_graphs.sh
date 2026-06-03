@@ -91,7 +91,13 @@ PRECISION_MIN_BIN_COUNT="${PRECISION_MIN_BIN_COUNT:-1000}"
 EPOCH_LEARNING_CURVE="${EPOCH_LEARNING_CURVE:-1}"
 BEST_DIAGNOSTICS="${BEST_DIAGNOSTICS:-1}"
 BEST_DIAGNOSTIC_MAX_GRAPHS="${BEST_DIAGNOSTIC_MAX_GRAPHS:-20000}"
+FEATURE_IMPORTANCE="${FEATURE_IMPORTANCE:-1}"
+FEATURE_IMPORTANCE_SPLIT="${FEATURE_IMPORTANCE_SPLIT:-validation}"
+FEATURE_IMPORTANCE_MAX_GRAPHS="${FEATURE_IMPORTANCE_MAX_GRAPHS:-50000}"
+FEATURE_IMPORTANCE_BATCH_SIZE="${FEATURE_IMPORTANCE_BATCH_SIZE:-256}"
+FEATURE_IMPORTANCE_DEVICE="${FEATURE_IMPORTANCE_DEVICE:-${DEVICE}}"
 MAX_GRAPHS="${MAX_GRAPHS:-}"
+SEED="${SEED:-12345}"
 PYTHON_BIN="${PYTHON_BIN:-.venv/bin/python}"
 
 if [[ "${TRAINING_TASK}" != "mass" && ( "${LOSS_MODE}" == "physics-nll" || "${LOSS_MODE}" == "nll" ) ]]; then
@@ -192,7 +198,13 @@ DIAGNOSTIC_MIN_BIN_COUNT=${DIAGNOSTIC_MIN_BIN_COUNT}
 EPOCH_LEARNING_CURVE=${EPOCH_LEARNING_CURVE}
 BEST_DIAGNOSTICS=${BEST_DIAGNOSTICS}
 BEST_DIAGNOSTIC_MAX_GRAPHS=${BEST_DIAGNOSTIC_MAX_GRAPHS}
+FEATURE_IMPORTANCE=${FEATURE_IMPORTANCE}
+FEATURE_IMPORTANCE_SPLIT=${FEATURE_IMPORTANCE_SPLIT}
+FEATURE_IMPORTANCE_MAX_GRAPHS=${FEATURE_IMPORTANCE_MAX_GRAPHS}
+FEATURE_IMPORTANCE_BATCH_SIZE=${FEATURE_IMPORTANCE_BATCH_SIZE}
+FEATURE_IMPORTANCE_DEVICE=${FEATURE_IMPORTANCE_DEVICE}
 MAX_GRAPHS=${MAX_GRAPHS}
+SEED=${SEED}
 EOF
 
 cat <<EOF
@@ -288,6 +300,7 @@ fi
     --val-fraction "${VAL_FRACTION}" \
     --source-test-fraction "${SOURCE_TEST_FRACTION}" \
     --source-val-fraction "${SOURCE_VAL_FRACTION}" \
+    --seed "${SEED}" \
     --diagnostic-energy-bin-width 0.1 \
     --diagnostic-min-bin-count "${DIAGNOSTIC_MIN_BIN_COUNT}" \
     --best-diagnostic-max-graphs "${BEST_DIAGNOSTIC_MAX_GRAPHS}")
@@ -347,6 +360,35 @@ fi
 } 2>&1 | tee "${LOG_PATH}"
 
 "${PYTHON_BIN}" scripts/summarize_metrics.py "${METRICS_PATH}" -o "${SUMMARY_DIR}/metrics_summary.csv"
+FEATURE_IMPORTANCE_DIR="${CHECKPOINT}.diagnostics/feature_importance/${FEATURE_IMPORTANCE_SPLIT}"
+FEATURE_IMPORTANCE_SUMMARY="${FEATURE_IMPORTANCE_DIR}/feature_group_importance.json"
+if [[ "${FEATURE_IMPORTANCE}" == "1" ]]; then
+  {
+    echo "stage=start feature_importance date=$(date)"
+    feature_cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli feature-importance
+      --graphs "${GRAPH_INPUT}"
+      --checkpoint "${CHECKPOINT}"
+      -o "${FEATURE_IMPORTANCE_DIR}"
+      --split "${FEATURE_IMPORTANCE_SPLIT}"
+      --max-graphs "${FEATURE_IMPORTANCE_MAX_GRAPHS}"
+      --batch-size "${FEATURE_IMPORTANCE_BATCH_SIZE}"
+      --device "${FEATURE_IMPORTANCE_DEVICE}"
+      --seed "${SEED}")
+    printf 'command:'
+    printf ' %q' "${feature_cmd[@]}"
+    printf '\n'
+    "${feature_cmd[@]}"
+    if [[ ! -s "${FEATURE_IMPORTANCE_SUMMARY}" ]]; then
+      echo "ERROR: feature importance finished but summary was not written: ${FEATURE_IMPORTANCE_SUMMARY}" >&2
+      exit 1
+    fi
+    echo "stage=done feature_importance date=$(date)"
+    echo "feature_importance=${FEATURE_IMPORTANCE_SUMMARY}"
+  } 2>&1 | tee -a "${LOG_PATH}"
+else
+  FEATURE_IMPORTANCE_SUMMARY=""
+fi
+
 if [[ "${TRAINING_TASK}" == "mass" ]]; then
   precision_status="N/A"
   cat > "${PRECISION_REPORT}" <<EOF
@@ -385,6 +427,8 @@ Important files:
   checkpoints/${CONFIG_NAME}.pt.diagnostics/prediction_cache.npz
   summaries/metrics_summary.csv
   summaries/${CONFIG_NAME}_precision_targets.txt
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/feature_importance/${FEATURE_IMPORTANCE_SPLIT}/feature_group_importance.json
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/feature_importance/${FEATURE_IMPORTANCE_SPLIT}/feature_group_importance.pdf
   checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_confusion_matrix.pdf
   checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_score_distribution.pdf
   checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_roc.pdf
@@ -407,6 +451,9 @@ echo "metrics=${METRICS_PATH}"
 echo "diagnostics_dir=${CHECKPOINT}.diagnostics"
 echo "prediction_cache=${CHECKPOINT}.diagnostics/prediction_cache.npz"
 echo "summary_csv=${SUMMARY_DIR}/metrics_summary.csv"
+if [[ -n "${FEATURE_IMPORTANCE_SUMMARY}" ]]; then
+  echo "feature_importance=${FEATURE_IMPORTANCE_SUMMARY}"
+fi
 echo "precision_report=${PRECISION_REPORT}"
 echo "precision_status=${precision_status}"
 echo "log_path=${LOG_PATH}"

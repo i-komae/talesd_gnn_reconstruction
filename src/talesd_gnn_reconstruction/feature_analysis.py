@@ -11,7 +11,7 @@ import numpy as np
 
 from .constants import EDGE_FEATURE_COLUMNS, PULSE_FEATURE_COLUMNS, TARGET_COLUMNS, WAVEFORM_FEATURE_CHANNELS
 from .dataset import H5GraphDataset, StandardScaler
-from .diagnostics import _prepare_matplotlib
+from .diagnostics import FIGSIZE_SINGLE, FIGSIZE_STACKED, LINEWIDTH_THIN, _prepare_matplotlib, _save_pdf, _style_axes
 from .metrics import binary_classification_metrics, reconstruction_metrics
 from .model import build_model_from_config
 from .progress import progress as _progress
@@ -494,16 +494,27 @@ def _plot_feature_group_importance(result: dict[str, Any], output: Path) -> None
     if not rows:
         return
     names = [str(row["group"]) for row in rows]
-    metrics = ["rmse_log10_energy", "angular_68_deg", "core_68_km"]
-    fig, axes = plt.subplots(len(metrics), 1, figsize=(8.2, 2.8 * len(metrics)), sharex=True)
+    plot_specs: list[tuple[str, str, str]] = []
+    for metric in ("rmse_log10_energy", "angular_68_deg", "core_68_km"):
+        if any(metric in row.get("reconstruction_delta", {}) for row in rows):
+            plot_specs.append(("reconstruction_delta", metric, r"$\Delta$ " + _escape_tex(metric)))
+    for metric in ("accuracy", "balanced_accuracy"):
+        if any(metric in row.get("mass_delta", {}) for row in rows):
+            plot_specs.append(("mass_delta", metric, r"$\Delta$ " + _escape_tex(metric)))
+    if not plot_specs:
+        return
+
+    figsize = FIGSIZE_SINGLE if len(plot_specs) == 1 else FIGSIZE_STACKED
+    fig, axes = plt.subplots(len(plot_specs), 1, figsize=figsize, sharex=True)
     axes = np.atleast_1d(axes)
     x = np.arange(len(names))
-    for ax, metric in zip(axes, metrics):
-        values = [float(row.get("reconstruction_delta", {}).get(metric, np.nan)) for row in rows]
-        ax.bar(x, values, color="#4c78a8", alpha=0.75)
-        ax.axhline(0.0, color="0.25", linewidth=1.0)
-        ax.set_ylabel(r"$\Delta$ " + _escape_tex(metric))
+    colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["#1f77b4"])
+    for ax, (section, metric, ylabel) in zip(axes, plot_specs, strict=True):
+        values = [float(row.get(section, {}).get(metric, np.nan)) for row in rows]
+        ax.bar(x, values, color=colors[0], alpha=0.75)
+        ax.axhline(0.0, color="0.25", linewidth=LINEWIDTH_THIN)
+        ax.set_ylabel(ylabel)
+        _style_axes(ax)
     axes[-1].set_xticks(x, [_escape_tex(name) for name in names], rotation=35, ha="right")
     fig.tight_layout()
-    fig.savefig(output)
-    plt.close(fig)
+    _save_pdf(fig, output)

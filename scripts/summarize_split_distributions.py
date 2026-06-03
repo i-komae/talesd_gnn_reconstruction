@@ -108,6 +108,125 @@ def _finish_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _finite_array(values: list[float]) -> np.ndarray:
+    if not values:
+        return np.empty((0,), dtype=np.float64)
+    arr = np.asarray(values, dtype=np.float64)
+    return arr[np.isfinite(arr)]
+
+
+def _hist_bins(arrays: list[np.ndarray], *, bins: int = 40) -> np.ndarray:
+    combined = np.concatenate([arr for arr in arrays if arr.size]) if any(arr.size for arr in arrays) else np.empty((0,))
+    if combined.size == 0:
+        return np.linspace(0.0, 1.0, bins + 1)
+    low = float(np.min(combined))
+    high = float(np.max(combined))
+    if not math.isfinite(low) or not math.isfinite(high):
+        return np.linspace(0.0, 1.0, bins + 1)
+    if low == high:
+        width = max(abs(low) * 0.05, 1.0)
+        low -= width
+        high += width
+    return np.linspace(low, high, bins + 1)
+
+
+def _plot_split_distributions(
+    totals: dict[str, dict[str, Any]],
+    by_energy: dict[str, dict[str, dict[str, Any]]],
+    output_dir: Path,
+) -> list[str]:
+    from talesd_gnn_reconstruction.diagnostics import (  # noqa: PLC0415
+        FIGSIZE_GRID,
+        FIGSIZE_PAIR,
+        LINEWIDTH,
+        MARKERSIZE,
+        _prepare_matplotlib,
+        _save_pdf,
+        _style_axes,
+    )
+
+    _prepare_matplotlib()
+    import matplotlib.pyplot as plt  # noqa: PLC0415
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    split_order = [name for name in ("train", "validation", "test") if name in totals]
+    split_colors = dict(zip(split_order, plt.rcParams["axes.prop_cycle"].by_key().get("color", []), strict=False))
+    pdf_files: list[str] = []
+
+    features = [
+        ("log10_energy", r"$\log_{10}(E/\mathrm{eV})$"),
+        ("core_x_km", "core x [km]"),
+        ("core_y_km", "core y [km]"),
+        ("core_radius_km", "core radius [km]"),
+        ("zenith_deg", "zenith [deg]"),
+        ("azimuth_deg", "azimuth [deg]"),
+        ("nodes", "accepted pulses / event"),
+        ("edges", "edges / event"),
+        ("particle_labels", "particle label"),
+    ]
+    fig, axes = plt.subplots(3, 3, figsize=FIGSIZE_GRID)
+    for ax, (key, xlabel) in zip(axes.reshape(-1), features, strict=True):
+        arrays = [_finite_array(totals[name][key]) for name in split_order]
+        if key == "particle_labels":
+            bins = np.array([-0.5, 0.5, 1.5], dtype=np.float64)
+            ax.set_xticks([0.0, 1.0], ["p", "Fe"])
+        else:
+            bins = _hist_bins(arrays)
+        for name, arr in zip(split_order, arrays, strict=True):
+            if arr.size == 0:
+                continue
+            ax.hist(
+                arr,
+                bins=bins,
+                density=True,
+                histtype="step",
+                linewidth=LINEWIDTH,
+                color=split_colors.get(name),
+                label=f"{name} (n={arr.size})",
+            )
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("density")
+        _style_axes(ax)
+    axes.reshape(-1)[0].legend(frameon=False)
+    fig.suptitle("Train/validation/test parameter distributions")
+    fig.tight_layout()
+    pdf_files.append(_save_pdf(fig, output_dir / "split_parameter_distributions.pdf"))
+
+    energy_bins = sorted(by_energy)
+    if energy_bins:
+        x = []
+        labels = []
+        for bin_key in energy_bins:
+            low, high = bin_key.split("-", maxsplit=1)
+            x.append((float(low) + float(high)) * 0.5)
+            labels.append(bin_key)
+        fig, axes = plt.subplots(1, 2, figsize=FIGSIZE_PAIR)
+        for ax, value_key, ylabel in (
+            (axes[0], "events", "events"),
+            (axes[1], "sources", "sources"),
+        ):
+            for name in split_order:
+                y = [float(_finish_bucket(by_energy[bin_key][name])[value_key]) for bin_key in energy_bins]
+                ax.plot(
+                    x,
+                    y,
+                    marker="o",
+                    markersize=MARKERSIZE,
+                    linewidth=LINEWIDTH,
+                    color=split_colors.get(name),
+                    label=name,
+                )
+            ax.set_xlabel(r"$\log_{10}(E/\mathrm{eV})$ bin center")
+            ax.set_ylabel(ylabel)
+            ax.set_xticks(x[:: max(len(x) // 8, 1)], labels[:: max(len(labels) // 8, 1)], rotation=45, ha="right")
+            _style_axes(ax)
+        axes[0].legend(frameon=False)
+        fig.suptitle("Split counts by true-energy bin")
+        fig.tight_layout()
+        pdf_files.append(_save_pdf(fig, output_dir / "split_energy_bin_counts.pdf"))
+    return pdf_files
+
+
 def _shape_counts(dataset: H5GraphDataset, index: int) -> tuple[int | None, int | None]:
     path_index, _local_index, key = dataset._locate(index)  # noqa: SLF001 - summary script uses dataset internals for cheap shapes.
     group = dataset._handle(path_index)["events"][key]  # noqa: SLF001
@@ -127,6 +246,7 @@ def summarize(
     energy_bin_width: float,
     split_workers: int,
     show_progress: bool,
+    plot_dir: Path | None = None,
 ) -> dict[str, Any]:
     split = split_indices_by_stratified_source_path(
         dataset,
@@ -174,6 +294,7 @@ def summarize(
                 )
     total_events = max(sum(len(indices) for indices in split.values()), 1)
     total_sources = sum(len(totals[name]["sources"]) for name in split)
+    plot_files = _plot_split_distributions(totals, by_energy, plot_dir) if plot_dir is not None else []
     return {
         "config": {
             "val_fraction": float(val_fraction),
@@ -185,6 +306,7 @@ def summarize(
             "seed": int(seed),
             "energy_bin_width": float(energy_bin_width),
             "split_mode": "source-stratified",
+            "plot_files": plot_files,
         },
         "totals": {
             name: {
@@ -215,6 +337,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=12345)
     parser.add_argument("--energy-bin-width", type=float, default=0.1)
     parser.add_argument("--split-workers", type=int, default=1)
+    parser.add_argument("--plot-dir", default=None, help="optional output directory for train/val/test distribution PDFs")
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args()
 
@@ -241,6 +364,7 @@ def main() -> None:
             energy_bin_width=args.energy_bin_width,
             split_workers=args.split_workers,
             show_progress=not args.no_progress,
+            plot_dir=Path(args.plot_dir).expanduser() if args.plot_dir else None,
         )
     finally:
         dataset.close()

@@ -106,6 +106,8 @@ train.train_model()
 ```
 
 入力分布と特徴量重要度は、学習本体とは別の診断入口です。
+通常のサーバーH5作成では、`scripts/submit_server_graph_export.sh` がH5作成後に入力分布とsplit分布をサーバー側で作り、H5ディレクトリ配下の `summaries/` に保存します。大きなH5をローカルへ同期せず、必要なPDF/JSONだけを確認します。
+通常の学習では、`scripts/train_large_existing_graphs.sh` が学習完了後にbest checkpointを使ってfeature importanceを自動実行し、checkpoint diagnostics配下へ保存します。
 
 ```text
 .venv/bin/talesd-gnn input-distributions
