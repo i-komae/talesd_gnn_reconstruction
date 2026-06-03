@@ -486,7 +486,7 @@ class TaleSdGNN(nn.Module):
         node_dim: int,
         edge_dim: int,
         pulse_dim: int = 0,
-        target_dim: int = 7,
+        target_dim: int = 6,
         classification_dim: int = 0,
         quality_dim: int = 0,
         error_dim: int = 0,
@@ -733,7 +733,7 @@ class PhysicsTaleSdGNN(nn.Module):
         node_dim: int,
         edge_dim: int,
         pulse_dim: int = 0,
-        target_dim: int = 7,
+        target_dim: int = 6,
         classification_dim: int = 0,
         quality_dim: int = 0,
         error_dim: int = 0,
@@ -785,6 +785,9 @@ class PhysicsTaleSdGNN(nn.Module):
         self.pulse_dim = int(pulse_dim)
         self.hidden_dim = int(hidden_dim)
         self.target_dim = max(int(target_dim), 0)
+        if self.target_dim not in {0, 6, 7}:
+            raise ValueError("physics reconstruction target_dim must be 0, 6, or legacy 7")
+        self.core_output_dim = 3 if self.target_dim == 7 else 2
         self.classification_dim = int(classification_dim)
         self.quality_dim = int(quality_dim)
         self.error_dim = int(error_dim)
@@ -842,7 +845,11 @@ class PhysicsTaleSdGNN(nn.Module):
         self.direction_head = None
         if self.target_dim > 0:
             self.energy_head = nn.Linear(hidden_dim, 1)
-            self.core_head = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, 3))
+            self.core_head = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, self.core_output_dim),
+            )
             self.direction_head = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, 3))
         self.class_head = None
         if self.classification_dim > 0:
@@ -966,8 +973,6 @@ class PhysicsTaleSdGNN(nn.Module):
                 ],
                 dim=-1,
             )
-            if self.target_dim != 7:
-                reconstruction = reconstruction[:, : self.target_dim]
         outputs = [reconstruction]
         if self.class_head is not None:
             if shared is None and self.classification_arch != "enhanced":

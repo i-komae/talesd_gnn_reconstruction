@@ -17,7 +17,13 @@ import numpy as np
 
 from .dataset import H5GraphDataset, StandardScaler, collate_graph_arrays, fit_scalers
 from .diagnostics import require_matplotlib_latex, save_best_validation_diagnostics, save_learning_progress, save_training_diagnostics
-from .metrics import balanced_accuracy_threshold, binary_classification_metrics, direction_to_angles, reconstruction_metrics
+from .metrics import (
+    balanced_accuracy_threshold,
+    binary_classification_metrics,
+    direction_columns_for_dim,
+    direction_to_angles,
+    reconstruction_metrics,
+)
 from .progress import progress as _progress
 from .progress import progress_bar as _progress_bar
 from .progress import write as _progress_write
@@ -255,10 +261,13 @@ def _source_stratification_keys(source_path: str, target: np.ndarray | None, par
         particle = "iron" if float(particle_label) >= 0.5 else "proton"
     loge_bin = "nan"
     zenith_bin = "nan"
-    if target is not None and target.shape[0] >= 7 and np.all(np.isfinite(target[[0, 4, 5, 6]])):
-        loge_bin = _finite_bin(float(target[0]), 0.1)
-        zenith, _azimuth = direction_to_angles(target[None, 4:7])
-        zenith_bin = _finite_bin(float(zenith[0]), 10.0)
+    if target is not None and target.shape[0] >= 6:
+        direction_slice = direction_columns_for_dim(target.shape[0])
+        finite_columns = [0, *range(direction_slice.start, direction_slice.stop)]
+        if np.all(np.isfinite(target[finite_columns])):
+            loge_bin = _finite_bin(float(target[0]), 0.1)
+            zenith, _azimuth = direction_to_angles(target[None, direction_slice])
+            zenith_bin = _finite_bin(float(zenith[0]), 10.0)
     return {
         "fine": (parent, particle, loge_bin, zenith_bin),
         "mid": (parent, particle, loge_bin),
@@ -344,16 +353,20 @@ def _scan_stratified_source_shard(
             stats = source_stats.setdefault(
                 source_path,
                 {
-                    "target_sum": np.zeros(7, dtype=np.float64),
+                    "target_sum": None,
                     "target_count": 0,
                     "particle_label": particle_label,
                 },
             )
             if "target" in group:
                 target = group["target"][()]
-                if target.shape[0] >= 7 and np.all(np.isfinite(target[:7])):
-                    stats["target_sum"] += target[:7].astype(np.float64)
-                    stats["target_count"] += 1
+                if target.shape[0] >= 6 and np.all(np.isfinite(target)):
+                    target_values = target.astype(np.float64)
+                    if stats["target_sum"] is None:
+                        stats["target_sum"] = np.zeros_like(target_values, dtype=np.float64)
+                    if stats["target_sum"].shape == target_values.shape:
+                        stats["target_sum"] += target_values
+                        stats["target_count"] += 1
             if stats["particle_label"] is None:
                 stats["particle_label"] = particle_label
     return n_events, source_to_indices, source_stats
@@ -371,13 +384,17 @@ def _merge_stratified_source_scan(
         current = target_source_stats.setdefault(
             source_path,
             {
-                "target_sum": np.zeros(7, dtype=np.float64),
+                "target_sum": None,
                 "target_count": 0,
                 "particle_label": stats["particle_label"],
             },
         )
-        current["target_sum"] += stats["target_sum"]
-        current["target_count"] += int(stats["target_count"])
+        if stats["target_sum"] is not None:
+            if current["target_sum"] is None:
+                current["target_sum"] = np.zeros_like(stats["target_sum"], dtype=np.float64)
+            if current["target_sum"].shape == stats["target_sum"].shape:
+                current["target_sum"] += stats["target_sum"]
+                current["target_count"] += int(stats["target_count"])
         if current["particle_label"] is None:
             current["particle_label"] = stats["particle_label"]
 
@@ -586,22 +603,26 @@ def split_indices_by_stratified_source_path(
             stats = source_stats.setdefault(
                 source_path,
                 {
-                    "target_sum": np.zeros(7, dtype=np.float64),
+                    "target_sum": None,
                     "target_count": 0,
                     "particle_label": dataset.particle_label(index),
                 },
             )
             target = dataset.target(index)
-            if target is not None and target.shape[0] >= 7 and np.all(np.isfinite(target[:7])):
-                stats["target_sum"] += target[:7].astype(np.float64)
-                stats["target_count"] += 1
+            if target is not None and target.shape[0] >= 6 and np.all(np.isfinite(target)):
+                target_values = target.astype(np.float64)
+                if stats["target_sum"] is None:
+                    stats["target_sum"] = np.zeros_like(target_values, dtype=np.float64)
+                if stats["target_sum"].shape == target_values.shape:
+                    stats["target_sum"] += target_values
+                    stats["target_count"] += 1
             if stats["particle_label"] is None:
                 stats["particle_label"] = dataset.particle_label(index)
 
     source_keys: dict[str, dict[str, tuple[str, ...]]] = {}
     for source_path, stats in source_stats.items():
         target = None
-        if int(stats["target_count"]) > 0:
+        if int(stats["target_count"]) > 0 and stats["target_sum"] is not None:
             target = (stats["target_sum"] / int(stats["target_count"])).astype(np.float64)
         source_keys[source_path] = _source_stratification_keys(
             source_path,
@@ -760,8 +781,9 @@ def _angular_loss_from_vectors(pred: Any, target: Any, *, angular_loss_scale_deg
     import torch.nn.functional as F
 
     scale_rad = math.radians(max(float(angular_loss_scale_deg), 1.0e-6))
-    pred_dir = F.normalize(pred[:, 4:7], dim=1, eps=1.0e-8)
-    target_dir = F.normalize(target[:, 4:7], dim=1, eps=1.0e-8)
+    direction_slice = direction_columns_for_dim(pred.shape[1])
+    pred_dir = F.normalize(pred[:, direction_slice], dim=1, eps=1.0e-8)
+    target_dir = F.normalize(target[:, direction_slice], dim=1, eps=1.0e-8)
     dot = torch.sum(pred_dir * target_dir, dim=1).clamp(-1.0 + 1.0e-7, 1.0 - 1.0e-7)
     scaled_angle = torch.acos(dot) / scale_rad
     return F.smooth_l1_loss(scaled_angle, torch.zeros_like(scaled_angle), beta=1.0)
@@ -787,9 +809,10 @@ def _reconstruction_loss(
         return F.mse_loss(pred_scaled, target_scaled)
     if mode == "weighted-scaled-mse":
         delta = pred_scaled - target_scaled
+        direction_slice = direction_columns_for_dim(delta.shape[1])
         energy_loss = torch.mean(delta[:, 0] * delta[:, 0])
-        core_loss = torch.mean(torch.sum(delta[:, 1:4] * delta[:, 1:4], dim=1))
-        direction_loss = torch.mean(torch.sum(delta[:, 4:7] * delta[:, 4:7], dim=1))
+        core_loss = torch.mean(torch.sum(delta[:, 1:3] * delta[:, 1:3], dim=1))
+        direction_loss = torch.mean(torch.sum(delta[:, direction_slice] * delta[:, direction_slice], dim=1))
         return (
             float(energy_weight) * energy_loss
             + float(core_weight) * core_loss
@@ -801,7 +824,7 @@ def _reconstruction_loss(
     if mode == "hybrid-angle":
         delta = pred_scaled - target_scaled
         energy_loss = torch.mean(delta[:, 0] * delta[:, 0])
-        core_loss = torch.mean(torch.sum(delta[:, 1:4] * delta[:, 1:4], dim=1))
+        core_loss = torch.mean(torch.sum(delta[:, 1:3] * delta[:, 1:3], dim=1))
         direction_loss = _angular_loss_from_vectors(pred, target, angular_loss_scale_deg=angular_loss_scale_deg)
         return (
             float(energy_weight) * energy_loss
@@ -863,8 +886,9 @@ def _gaussian_reconstruction_nll(
     core_sq = torch.sum(core_delta * core_delta, dim=1)
     core_nll = 0.5 * core_sq / (sigma_core_km * sigma_core_km) + 2.0 * torch.log(sigma_core_km)
 
-    pred_dir = F.normalize(pred[:, 4:7], dim=1, eps=1.0e-8)
-    target_dir = F.normalize(target[:, 4:7], dim=1, eps=1.0e-8)
+    direction_slice = direction_columns_for_dim(pred.shape[1])
+    pred_dir = F.normalize(pred[:, direction_slice], dim=1, eps=1.0e-8)
+    target_dir = F.normalize(target[:, direction_slice], dim=1, eps=1.0e-8)
     dot = torch.sum(pred_dir * target_dir, dim=1).clamp(-1.0 + 1.0e-7, 1.0 - 1.0e-7)
     angle_deg = torch.rad2deg(torch.acos(dot))
     angle_nll = 0.5 * (angle_deg / sigma_angle_deg) ** 2 + torch.log(sigma_angle_deg)
@@ -983,8 +1007,9 @@ def _quality_targets_from_reconstruction(
     loge_delta = pred[:, 0] - target[:, 0]
     energy_score = torch.abs(torch.exp(loge_delta * math.log(10.0)) - 1.0) / max(float(energy_scale), 1.0e-6)
     core_score = torch.linalg.vector_norm(pred[:, 1:3] - target[:, 1:3], dim=1) / max(float(core_scale_km), 1.0e-6)
-    pred_dir = F.normalize(pred[:, 4:7], dim=1, eps=1.0e-8)
-    target_dir = F.normalize(target[:, 4:7], dim=1, eps=1.0e-8)
+    direction_slice = direction_columns_for_dim(pred.shape[1])
+    pred_dir = F.normalize(pred[:, direction_slice], dim=1, eps=1.0e-8)
+    target_dir = F.normalize(target[:, direction_slice], dim=1, eps=1.0e-8)
     dot = torch.sum(pred_dir * target_dir, dim=1).clamp(-1.0 + 1.0e-7, 1.0 - 1.0e-7)
     angle_score = torch.acos(dot) / math.radians(max(float(angular_scale_deg), 1.0e-6))
     score = (energy_score + core_score + angle_score) / 3.0
@@ -1034,8 +1059,9 @@ def _reconstruction_error_targets(
     loge_delta = pred[:, 0] - target[:, 0]
     energy_error = torch.abs(torch.exp(loge_delta * math.log(10.0)) - 1.0)
     core_error = torch.linalg.vector_norm(pred[:, 1:3] - target[:, 1:3], dim=1)
-    pred_dir = F.normalize(pred[:, 4:7], dim=1, eps=1.0e-8)
-    target_dir = F.normalize(target[:, 4:7], dim=1, eps=1.0e-8)
+    direction_slice = direction_columns_for_dim(pred.shape[1])
+    pred_dir = F.normalize(pred[:, direction_slice], dim=1, eps=1.0e-8)
+    target_dir = F.normalize(target[:, direction_slice], dim=1, eps=1.0e-8)
     dot = torch.sum(pred_dir * target_dir, dim=1).clamp(-1.0 + 1.0e-7, 1.0 - 1.0e-7)
     angle_error_deg = torch.rad2deg(torch.acos(dot))
     return torch.stack(
@@ -1187,7 +1213,7 @@ def _predict_numpy(
     mass_classification: bool = False,
     quality_prediction: bool = False,
     error_prediction: bool = False,
-    target_dim: int = 7,
+    target_dim: int = 6,
     mass_logit_offset: float = 0.0,
     error_angular_scale_deg: float = 1.0,
     error_core_scale_km: float = 0.05,

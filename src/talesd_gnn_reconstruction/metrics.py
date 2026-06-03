@@ -3,8 +3,18 @@ from __future__ import annotations
 import numpy as np
 
 
+def direction_columns_for_dim(target_dim: int) -> slice:
+    target_dim = int(target_dim)
+    if target_dim >= 7:
+        return slice(4, 7)
+    if target_dim >= 6:
+        return slice(3, 6)
+    raise ValueError("reconstruction targets must contain logE, core_x, core_y, dir_x, dir_y, dir_z")
+
+
 def normalize_directions(values: np.ndarray) -> np.ndarray:
-    direction = values[:, 4:7].astype(np.float64)
+    values = np.asarray(values)
+    direction = values[:, direction_columns_for_dim(values.shape[1])].astype(np.float64)
     norm = np.linalg.norm(direction, axis=1, keepdims=True)
     return direction / np.clip(norm, 1.0e-12, None)
 
@@ -18,8 +28,8 @@ def angular_error_deg(pred: np.ndarray, target: np.ndarray) -> np.ndarray:
 
 def reconstruction_metrics(pred: np.ndarray, target: np.ndarray) -> dict[str, float]:
     energy_delta = pred[:, 0] - target[:, 0]
-    core_delta = pred[:, 1:4] - target[:, 1:4]
     core_xy_delta = pred[:, 1:3] - target[:, 1:3]
+    core_delta = core_xy_delta
     rel_energy_delta = np.power(10.0, energy_delta) - 1.0
     rel_energy_q16, rel_energy_q84 = np.percentile(rel_energy_delta, [16.0, 84.0])
     angular = angular_error_deg(pred, target)

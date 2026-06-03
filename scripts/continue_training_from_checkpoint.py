@@ -46,6 +46,8 @@ def _base_epoch(history: list[dict[str, Any]]) -> int:
 
 
 def _parse_target_weights(raw: str, target_dim: int) -> np.ndarray:
+    if str(raw).strip().lower() in {"", "auto", "none"}:
+        return np.ones(int(target_dim), dtype=np.float32)
     values = [float(part.strip()) for part in raw.split(",") if part.strip()]
     if len(values) != target_dim:
         raise SystemExit(f"--target-weights needs {target_dim} comma-separated values")
@@ -67,8 +69,8 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=3.0e-4)
     parser.add_argument(
         "--target-weights",
-        default="1,1,1,1,1,1,1",
-        help="scaled target MSE weights for logE,core_x,core_y,core_z,dir_x,dir_y,dir_z. Normalized to mean 1.",
+        default="auto",
+        help="scaled target MSE weights. Current schema is logE,core_x,core_y,dir_x,dir_y,dir_z; legacy checkpoints may include core_z. Normalized to mean 1.",
     )
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--device", default="auto")

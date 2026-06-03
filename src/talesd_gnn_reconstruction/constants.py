@@ -77,7 +77,6 @@ TARGET_COLUMNS = [
     "log10_energy_eV",
     "core_x_km",
     "core_y_km",
-    "core_z_km",
     "dir_x",
     "dir_y",
     "dir_z",

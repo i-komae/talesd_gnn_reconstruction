@@ -12,7 +12,7 @@ import numpy as np
 
 from talesd_gnn_reconstruction.cli import _expand_h5_graph_paths
 from talesd_gnn_reconstruction.dataset import H5GraphDataset
-from talesd_gnn_reconstruction.metrics import direction_to_angles
+from talesd_gnn_reconstruction.metrics import direction_columns_for_dim, direction_to_angles
 from talesd_gnn_reconstruction.progress import progress
 from talesd_gnn_reconstruction.train import split_indices_by_stratified_source_path
 
@@ -69,7 +69,7 @@ def _add(bucket: dict[str, Any], *, source_path: str, target: np.ndarray | None,
     bucket["sources"].add(source_path)
     if particle_label is not None and math.isfinite(float(particle_label)):
         bucket["particle_labels"].append(float(particle_label))
-    if target is None or target.shape[0] < 7 or not np.all(np.isfinite(target[:7])):
+    if target is None or target.shape[0] < 6 or not np.all(np.isfinite(target)):
         return
     log10_energy = float(target[0])
     core_x = float(target[1])
@@ -78,7 +78,8 @@ def _add(bucket: dict[str, Any], *, source_path: str, target: np.ndarray | None,
     bucket["core_x_km"].append(core_x)
     bucket["core_y_km"].append(core_y)
     bucket["core_radius_km"].append(math.hypot(core_x, core_y))
-    zenith, azimuth = direction_to_angles(target[None, 4:7])
+    direction_slice = direction_columns_for_dim(target.shape[0])
+    zenith, azimuth = direction_to_angles(target[None, direction_slice])
     bucket["zenith_deg"].append(float(zenith[0]))
     bucket["azimuth_deg"].append(float(azimuth[0]))
     if n_nodes is not None:

@@ -517,10 +517,11 @@ $w_{\mathrm{ising}}$ は、正の接続次数 $D_i,D_j$ を用いて
 再構成の教師ラベルは
 \[
 \mathbf{y}_{\mathrm{reco}}=
-(\log_{10}E,\ x_c,y_c,z_c,\ n_x,n_y,n_z)\in\R^7
+(\log_{10}E,\ x_c,y_c,\ n_x,n_y,n_z)\in\R^6
 \]
 である。
-$E$ は eV 単位のエネルギー、$(x_c,y_c,z_c)$ は km 単位のコア位置、$(n_x,n_y,n_z)$ はシャワー到来方向の単位ベクトルである。
+$E$ は eV 単位のエネルギー、$(x_c,y_c)$ は km 単位の地表面上のコア位置である。
+到来方向の自由度は 2 であるが、方位角の周期境界を避けるため、実装では $(n_x,n_y,n_z)$ という 3 成分単位ベクトルで表す。
 
 質量分類の教師ラベルは、\code{rusdmc} に記録された CORSIKA（COsmic Ray SImulations for KAscade）粒子番号から作る。
 陽子は粒子番号 14 であり、ラベル 0 とする。
@@ -726,10 +727,10 @@ $[h_j,\overline{m}_j,m^{\max}_j]\in\R^{3H}$
 
 \subsection{出力}
 
-再構成出力は、標準化された 7 つのターゲット座標である。
+再構成出力は、標準化された 6 つのターゲット座標である。
 \[
   \hat{\mathbf{y}} =
-  (\widehat{\log_{10}E},\hat{x}_c,\hat{y}_c,\hat{z}_c,\hat{n}_x,\hat{n}_y,\hat{n}_z).
+  (\widehat{\log_{10}E},\hat{x}_c,\hat{y}_c,\hat{n}_x,\hat{n}_y,\hat{n}_z).
 \]
 エネルギー出力層は、共有事象表現から 1 次元を出力する線形層である。
 コア出力層と方向出力層は、同じ共有事象表現を入力とする 2 層の MLP である。

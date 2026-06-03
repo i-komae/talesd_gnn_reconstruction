@@ -429,8 +429,7 @@ def _target_from_sim(sim: dict[str, Any] | None) -> np.ndarray | None:
     azimuth_deg = _finite_float(sim.get("primaryAzimuth"))
     core_x_m = _finite_float(sim.get("primaryCorePosX"))
     core_y_m = _finite_float(sim.get("primaryCorePosY"))
-    core_z_m = _finite_float(sim.get("primaryCorePosZ"), 0.0)
-    values = [energy, cos_zenith, azimuth_deg, core_x_m, core_y_m, core_z_m]
+    values = [energy, cos_zenith, azimuth_deg, core_x_m, core_y_m]
     if not all(math.isfinite(v) for v in values) or energy <= 0.0:
         return None
 
@@ -450,7 +449,6 @@ def _target_from_sim(sim: dict[str, Any] | None) -> np.ndarray | None:
             math.log10(energy),
             core_x_m / 1.0e3,
             core_y_m / 1.0e3,
-            core_z_m / 1.0e3,
             direction[0],
             direction[1],
             direction[2],

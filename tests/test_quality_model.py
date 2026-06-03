@@ -19,7 +19,7 @@ class QualityModelTest(unittest.TestCase):
             node_dim=5,
             edge_dim=7,
             pulse_dim=0,
-            target_dim=7,
+            target_dim=6,
             classification_dim=1,
             quality_dim=1,
             hidden_dim=16,
@@ -36,14 +36,14 @@ class QualityModelTest(unittest.TestCase):
 
         out = model(batch)
 
-        self.assertEqual(tuple(out.shape), (1, 9))
+        self.assertEqual(tuple(out.shape), (1, 8))
 
     def test_physics_model_outputs_eventwise_error_head_when_enabled(self) -> None:
         model = PhysicsTaleSdGNN(
             node_dim=5,
             edge_dim=7,
             pulse_dim=0,
-            target_dim=7,
+            target_dim=6,
             classification_dim=1,
             quality_dim=1,
             error_dim=3,
@@ -61,7 +61,7 @@ class QualityModelTest(unittest.TestCase):
 
         out = model(batch)
 
-        self.assertEqual(tuple(out.shape), (1, 12))
+        self.assertEqual(tuple(out.shape), (1, 11))
 
     def test_physics_mass_only_model_omits_reconstruction_heads(self) -> None:
         model = PhysicsTaleSdGNN(
@@ -118,9 +118,9 @@ class QualityModelTest(unittest.TestCase):
 
     def test_angular_loss_is_not_cosine_small_angle_suppressed(self) -> None:
         angle_rad = math.radians(1.0)
-        target = torch.tensor([[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]], dtype=torch.float32)
+        target = torch.tensor([[0.0, 0.0, 0.0, 0.0, 0.0, 1.0]], dtype=torch.float32)
         pred = torch.tensor(
-            [[0.0, 0.0, 0.0, 0.0, math.sin(angle_rad), 0.0, math.cos(angle_rad)]],
+            [[0.0, 0.0, 0.0, math.sin(angle_rad), 0.0, math.cos(angle_rad)]],
             dtype=torch.float32,
         )
 
@@ -162,11 +162,11 @@ class QualityModelTest(unittest.TestCase):
         self.assertLess(float(separated_loss), float(flat_loss.detach()))
 
     def test_gaussian_reconstruction_nll_uses_predicted_errors(self) -> None:
-        target_mean = torch.zeros(7, dtype=torch.float32)
-        target_std = torch.ones(7, dtype=torch.float32)
-        target = torch.tensor([[16.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]], dtype=torch.float32)
+        target_mean = torch.zeros(6, dtype=torch.float32)
+        target_std = torch.ones(6, dtype=torch.float32)
+        target = torch.tensor([[16.0, 0.0, 0.0, 0.0, 0.0, 1.0]], dtype=torch.float32)
         perfect = target.clone().requires_grad_(True)
-        shifted = torch.tensor([[16.1, 0.05, 0.0, 0.0, 0.1, 0.0, 0.995]], dtype=torch.float32)
+        shifted = torch.tensor([[16.1, 0.05, 0.0, 0.1, 0.0, 0.995]], dtype=torch.float32)
         error_raw = torch.zeros(1, 3, dtype=torch.float32, requires_grad=True)
 
         perfect_loss = _gaussian_reconstruction_nll(

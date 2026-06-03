@@ -56,7 +56,7 @@ The HDF5 graph representation contains the tensors in Table~\ref{tab:tensors}.
     $\mathbf{A}$ & $N_e\times13$ & Directed-edge scalar features. \\
     $\mathbf{P}_{\mathrm{raw}}$ & $N_p\times1$ & Pulse-to-node index only. \\
     $\mathbf{W}$ & $N_v\times4\times128$ & Four waveform channels per pulse node. \\
-    $\mathbf{y}_{\mathrm{reco}}$ & $7$ & Reconstruction target. \\
+    $\mathbf{y}_{\mathrm{reco}}$ & $6$ & Reconstruction target. \\
     $y_{\mathrm{mass}}$ & $1$ & Proton/iron label when MC truth is available. \\
     \bottomrule
   \end{tabular}
@@ -171,9 +171,10 @@ Older graph PDFs from other checks or analyses are intentionally not used as fig
 The reconstruction target is
 \[
 \mathbf{y}_{\mathrm{reco}}=
-(\log_{10}E,\ x_c,y_c,z_c,\ n_x,n_y,n_z)\in\R^7 .
+(\log_{10}E,\ x_c,y_c,\ n_x,n_y,n_z)\in\R^6 .
 \]
-Energy is in eV, the core position is in km, and the direction is a unit vector.
+Energy is in eV and the core position is the ground-plane position in km.
+The arrival direction has two physical degrees of freedom, but it is represented as a three-component unit vector to avoid angular periodicity and range constraints.
 For mass classification, CORSIKA particle type 14 is mapped to proton label 0, and particle type 5626 is mapped to iron label 1.
 
 Node, edge, and reconstruction-target scalers are fitted on the training split only.

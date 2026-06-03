@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 
 from .dataset import H5GraphDataset, StandardScaler, collate_graphs
-from .metrics import angular_error_deg, direction_to_angles, normalize_directions
+from .metrics import angular_error_deg, direction_columns_for_dim, direction_to_angles, normalize_directions
 from .model import build_model_from_config
 from .train import resolve_device
 
@@ -36,8 +36,9 @@ def predict_graphs(
     model = build_model_from_config(model_config).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
-    target_dim = int(model_config.get("target_dim", 7))
-    has_reconstruction_output = target_dim >= 7
+    target_dim = int(model_config.get("target_dim", 6))
+    has_reconstruction_output = target_dim >= 6
+    has_core_z = target_dim >= 7
     classification_dim = int(model_config.get("classification_dim", 0))
     quality_dim = int(model_config.get("quality_dim", 0))
     error_dim = int(model_config.get("error_dim", 0))
@@ -68,10 +69,11 @@ def predict_graphs(
         "energy_eV",
         "core_x_km",
         "core_y_km",
-        "core_z_km",
         "zenith_deg",
         "azimuth_deg",
     ]
+    if has_core_z:
+        reconstruction_fields.insert(4, "core_z_km")
     if has_reconstruction_output:
         fieldnames.extend(reconstruction_fields)
     if classification_dim > 0:
@@ -84,7 +86,6 @@ def predict_graphs(
         "true_log10_energy_eV",
         "true_core_x_km",
         "true_core_y_km",
-        "true_core_z_km",
         "true_zenith_deg",
         "true_azimuth_deg",
         "delta_log10_energy",
@@ -95,10 +96,12 @@ def predict_graphs(
         "true_log10_energy_eV",
         "true_core_x_km",
         "true_core_y_km",
-        "true_core_z_km",
         "true_zenith_deg",
         "true_azimuth_deg",
     ]
+    if has_core_z:
+        truth_reconstruction_fields.insert(3, "true_core_z_km")
+        truth_only_fields.insert(3, "true_core_z_km")
     truth_fields = list(truth_reconstruction_fields if has_reconstruction_output else truth_only_fields)
     if classification_dim > 0:
         truth_fields.extend(["true_parttype", "true_particle_label", "mass_correct"])
@@ -121,7 +124,7 @@ def predict_graphs(
                     pred = scalers["target"].inverse_transform(pred_scaled)
                     direction = normalize_directions(pred)
                     zenith, azimuth = direction_to_angles(direction)
-                    pred[:, 4:7] = direction
+                    pred[:, direction_columns_for_dim(target_dim)] = direction
                 p_iron = None
                 pred_is_iron = None
                 quality = None
@@ -161,11 +164,12 @@ def predict_graphs(
                                 "energy_eV": float(10.0 ** pred[row_idx, 0]),
                                 "core_x_km": float(pred[row_idx, 1]),
                                 "core_y_km": float(pred[row_idx, 2]),
-                                "core_z_km": float(pred[row_idx, 3]),
                                 "zenith_deg": float(zenith[row_idx]),
                                 "azimuth_deg": float(azimuth[row_idx]),
                             }
                         )
+                        if has_core_z:
+                            row["core_z_km"] = float(pred[row_idx, 3])
                     if classification_dim > 0 and p_iron is not None and pred_is_iron is not None:
                         row.update(
                             {
@@ -192,15 +196,16 @@ def predict_graphs(
                             "true_log10_energy_eV": float(target[0]),
                             "true_core_x_km": float(target[1]),
                             "true_core_y_km": float(target[2]),
-                            "true_core_z_km": float(target[3]),
                             "true_zenith_deg": float(true_zenith[0]),
                             "true_azimuth_deg": float(true_azimuth[0]),
                         }
+                        if has_core_z and target.shape[0] >= 7:
+                            truth_row["true_core_z_km"] = float(target[3])
                         if has_reconstruction_output and pred is not None:
                             truth_row.update(
                                 {
                                     "delta_log10_energy": float(pred[row_idx, 0] - target[0]),
-                                    "core_error_km": float(np.linalg.norm(pred[row_idx, 1:4] - target[1:4])),
+                                    "core_error_km": float(np.linalg.norm(pred[row_idx, 1:3] - target[1:3])),
                                     "angular_error_deg": float(angular_error_deg(pred[row_idx : row_idx + 1], target[None, :])[0]),
                                 }
                             )

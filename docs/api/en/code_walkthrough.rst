@@ -89,7 +89,8 @@ Main fields in ``GraphEvent`` : ``event_graph.py:41``:
 - ``edge_features``: distance, time difference, spatial weight, causal direction, signal weight, and normalization terms.
 - ``pulse_features``: the ``node_index`` mapping for the corresponding accepted-pulse node. Additional pulse-level scalar inputs are disabled in the current schema.
 - ``waveform_features``: waveform inputs for the waveform encoder; currently upper/lower rise-aligned raw windows plus accepted-pulse masks.
-- ``target``: MC truth targets for energy, core, and direction.
+- ``target``: MC truth targets ``log10_energy_eV, core_x_km, core_y_km, dir_x, dir_y, dir_z``.
+  The core target is two-dimensional on the ground plane; the arrival direction is stored as a three-component unit vector.
 - ``particle_label``: label for mass classification.
 - ``metadata``: ``source_path``, ``source_index``, part type, and related split/diagnostic metadata.
 

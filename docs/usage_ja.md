@@ -5,9 +5,10 @@
 このプロジェクトは、TALE-SDのいびつな検出器配置を2次元画像ではなくグラフとして表現し、GNNで以下を直接回帰するための土台です。
 
 - `log10_energy_eV`
-- `core_x_km`, `core_y_km`, `core_z_km`
+- `core_x_km`, `core_y_km`
 - 到来方向ベクトル `dir_x`, `dir_y`, `dir_z`
 
+到来方向の自由度は2ですが、角度の周期境界を避けるため、実装では3成分の単位ベクトルで表します。
 推論CSVでは方向ベクトルを `zenith_deg`, `azimuth_deg` に戻して出力します。
 
 ## 入力DST
@@ -305,7 +306,7 @@ uv run talesd-gnn predict \
 | --- | --- |
 | `event_id` | `date_time_usec_index` 形式のイベントID |
 | `log10_energy_eV`, `energy_eV` | 推定エネルギー |
-| `core_x_km`, `core_y_km`, `core_z_km` | 推定コア位置 |
+| `core_x_km`, `core_y_km` | 推定コア位置 |
 | `zenith_deg`, `azimuth_deg` | 推定到来方向 |
 | `n_nodes`, `n_edges` | GNN入力に使ったグラフサイズ |
 

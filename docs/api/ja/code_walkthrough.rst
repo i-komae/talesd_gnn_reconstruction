@@ -105,7 +105,7 @@ GraphEvent作成
    * - ``waveform_features``
      - waveform encoderへ渡す波形特徴量。現行仕様では上下層の rise-aligned raw window と accepted-pulse mask。
    * - ``target``
-     - MC truth由来のlog energy、core、directionなど。
+     - MC truth由来の ``log10_energy_eV, core_x_km, core_y_km, dir_x, dir_y, dir_z``。coreは地表面上の2次元位置で、到来方向は3成分単位ベクトルとして保存する。
    * - ``particle_label``
      - mass分類用label。現在の二値分類ではproton/ironを区別する。
    * - ``metadata``
