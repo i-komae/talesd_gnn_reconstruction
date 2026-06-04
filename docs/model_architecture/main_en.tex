@@ -35,6 +35,74 @@ The goal is to describe what enters the model, what the model predicts, and how 
 The current baseline is a joint reconstruction and mass-classification model.
 It reconstructs the shower energy, core position, and arrival direction, predicts a reconstruction-quality score, and can classify the primary particle as proton or iron.
 
+\section{Implementation Map}
+
+This section maps the model description to the source code.
+The production workflow has two distinct stages: exporting DST events into HDF5 graphs, and training from those HDF5 graphs.
+The overall data flow is
+\[
+\mathrm{DST}
+\rightarrow
+\code{talesd-gnn export}
+\rightarrow
+\mathrm{HDF5\ graph}
+\rightarrow
+\code{H5GraphDataset}
+\rightarrow
+\code{train\_model}
+\rightarrow
+\code{PhysicsTaleSdGNN}
+\rightarrow
+\mathrm{loss/metrics/diagnostics}.
+\]
+
+\begin{table}[htbp]
+  \centering
+  \caption{Main implementation stages and source files.}
+  \label{tab:en-implementation-map}
+  {\small
+  \begin{tabular}{p{30mm}p{58mm}p{72mm}}
+    \toprule
+    Stage & Main file & Role \\
+    \midrule
+    CLI entry point &
+    \code{src/talesd\_gnn\_reconstruction/cli.py} &
+    Parses \code{talesd-gnn} subcommands and maps command-line options to Python API arguments. \\
+    DST reading &
+    \code{src/talesd\_gnn\_reconstruction/dst\_reader.py} &
+    Iterates DST banks and produces records for graph construction. \\
+    Event graph creation &
+    \code{src/talesd\_gnn\_reconstruction/event\_graph.py} &
+    Builds accepted-pulse nodes, edges, waveforms, targets, and metadata. \\
+    HDF5 writing &
+    \code{src/talesd\_gnn\_reconstruction/graph\_io.py} &
+    Writes graph shards and stores schema attributes such as \code{columns\_json} and \code{waveform\_schema}. \\
+    HDF5 loading &
+    \code{src/talesd\_gnn\_reconstruction/dataset.py} &
+    Presents one file or many shards as a PyTorch-compatible dataset. \\
+    Training workflow &
+    \code{src/talesd\_gnn\_reconstruction/train.py} &
+    Handles split, scalers, DataLoaders, epoch loop, losses, best checkpoint, and final evaluation. \\
+    Model &
+    \code{src/talesd\_gnn\_reconstruction/model.py} &
+    Embeds node, edge, and waveform inputs, applies message passing and graph readout, and returns task heads. \\
+    Diagnostics &
+    \code{src/talesd\_gnn\_reconstruction/diagnostics.py} &
+    Writes learning curves, energy-dependence plots, quality-cut plots, and mass diagnostics. \\
+    Feature analysis &
+    \code{src/talesd\_gnn\_reconstruction/feature\_analysis.py} &
+    Writes input distributions and post-hoc feature-group ablation results. \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+The command-line interface is a thin wrapper.
+For example, \code{cli.\_cmd\_train} calls \code{train.train\_model}; the heavy work is not implemented in the parser itself.
+The central training function creates the dataset, constructs the train/validation/test split, fits scalers on the training split, builds DataLoaders, runs the epoch loop, saves the best validation checkpoint, and performs final validation/test evaluation.
+The neural network class \code{PhysicsTaleSdGNN} only performs the forward pass.
+Losses are computed in \code{train.py}, which keeps reconstruction, quality, mass, and bias-penalty terms separate from the model architecture.
+
 \section{Event Graph Input}
 
 One air-shower event is represented as one directed graph.
@@ -129,30 +197,30 @@ where $D_i$ and $D_j$ are positive connection counts.
 
 \section{Input Distribution Diagnostics}
 
-Figures~\ref{fig:en-input-node}, \ref{fig:en-input-edge}, and~\ref{fig:en-input-pulse-waveform-target} show input distributions generated from an older downloaded \code{flat50000} HDF5 shard.
-The shard contains 29509 events; the plots use a 2000-event sample with 1018 proton events and 982 iron events.
-These plots are diagnostics for the old schema, not distributions of the current 28-column node schema.
+Figures~\ref{fig:en-input-node}, \ref{fig:en-input-edge}, and~\ref{fig:en-input-pulse-waveform-target} show input distributions generated from the current \code{flat50000\_wfmask\_target6\_20260603\_102418} HDF5 export.
+This export contains 2,839,184 events in 29 shards: 1,455,815 proton events and 1,383,369 iron events.
+The plots use a 100,000-event sample.
 In the current schema, pulse-level quantities such as \code{log10\_pulse\_rho} are separated from detector-level accepted-pulse aggregates such as \code{log10\_detector\_sum\_pulse\_rho} and \code{detector\_accepted\_pulse\_count}.
-Therefore the current-schema distributions must be regenerated with \code{talesd-gnn input-distributions} after re-exporting the HDF5 graph files.
-The density column is not independent: it is exactly the same information as \code{neighbor\_count\_1p5km}/\((\pi\times1.5^2)\).
-The old six pulse-scalar columns duplicate accepted-pulse node features; the current schema keeps only \code{node\_index} and disables the pulse encoder.
-The old \code{n\_wf\_segments} and \code{wf\_length\_usec} columns correspond to \code{detector\_wf\_segments} and \code{detector\_wf\_length\_usec} in the current naming.
-They are dominated by one value in this shard, but their tails represent longer waveforms or multiple waveform segments, so they are retained until feature-importance or reduced-feature checks justify dropping them.
+The waveform channels are \code{upper\_raw\_window\_vem}, \code{lower\_raw\_window\_vem}, \code{upper\_accepted\_mask}, and \code{lower\_accepted\_mask}.
+The current \code{pulse\_features} tensor keeps only \code{node\_index}, so no additional pulse-scalar distribution is shown.
+Figure~\ref{fig:en-split-distributions} shows the train/validation/test distributions for the same HDF5 export.
+The realized event fractions are 81.0\%, 7.37\%, and 11.6\%, while the source-path fractions are 69.3\%, 10.1\%, and 20.6\%.
+The event fractions differ from the nominal target because the split preserves source-path separation.
 These plots are input diagnostics, not trained-model performance metrics.
-No event-level graph topology figure is included here because no current-analysis graph PDF has been generated from this HDF5 shard.
+No event-level graph topology figure is included here because no current-analysis graph PDF has been generated from this HDF5 export.
 Older graph PDFs from other checks or analyses are intentionally not used as figures for this model description.
 
 \begin{figure}[p]
   \centering
   \includegraphics[width=0.95\linewidth]{fig/input_distributions/node_features.pdf}
-  \caption{Accepted-pulse node-feature distributions from the older downloaded \code{flat50000} HDF5 shard. These are not distributions of the current 28-column schema.}
+  \caption{Accepted-pulse node-feature distributions from the current \code{flat50000\_wfmask\_target6\_20260603\_102418} HDF5 export.}
   \label{fig:en-input-node}
 \end{figure}
 
 \begin{figure}[p]
   \centering
   \includegraphics[width=0.95\linewidth]{fig/input_distributions/edge_features.pdf}
-  \caption{Edge-feature distributions from the older downloaded \code{flat50000} HDF5 shard. In the current schema, the charge-ratio column is named \code{dlog10\_pulse\_rho}.}
+  \caption{Edge-feature distributions from the current \code{flat50000\_wfmask\_target6\_20260603\_102418} HDF5 export.}
   \label{fig:en-input-edge}
 \end{figure}
 
@@ -161,8 +229,17 @@ Older graph PDFs from other checks or analyses are intentionally not used as fig
   \includegraphics[width=0.95\linewidth]{fig/input_distributions/waveform_features.pdf}
   \vspace{2mm}
   \includegraphics[width=0.95\linewidth]{fig/input_distributions/target_features.pdf}
-  \caption{Waveform-feature and reconstruction-target distributions from the older downloaded \code{flat50000} HDF5 shard. The current model does not use additional pulse-scalar inputs.}
+  \caption{Waveform-feature and reconstruction-target distributions from the current \code{flat50000\_wfmask\_target6\_20260603\_102418} HDF5 export.}
   \label{fig:en-input-pulse-waveform-target}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig/split_distributions/split_energy_bin_counts.pdf}
+  \vspace{2mm}
+  \includegraphics[width=0.95\linewidth]{fig/split_distributions/split_parameter_distributions.pdf}
+  \caption{Train/validation/test distributions for the current \code{flat50000\_wfmask\_target6\_20260603\_102418} HDF5 export. Source-path separation is preserved, so the realized event fractions do not exactly match the nominal target fractions.}
+  \label{fig:en-split-distributions}
 \end{figure}
 
 \clearpage
@@ -252,10 +329,11 @@ For reconstruction and quality prediction, this vector is passed through a share
 
 The reconstruction heads predict
 \[
-(\widehat{\log_{10}E},\hat{x}_c,\hat{y}_c,\hat{z}_c,\hat{n}_x,\hat{n}_y,\hat{n}_z).
+(\widehat{\log_{10}E},\hat{x}_c,\hat{y}_c,\hat{n}_x,\hat{n}_y,\hat{n}_z).
 \]
 The energy head is linear.
-The core and direction heads are two-layer MLPs.
+The core head predicts the horizontal ground-plane core coordinates.
+The direction head predicts a three-component direction vector.
 When angular residuals are computed, the predicted and true direction vectors are normalized internally.
 
 The quality head outputs one logit $q_{\mathrm{logit}}$.
