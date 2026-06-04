@@ -1,0 +1,1282 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="ja" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>コード詳細 walkthrough &mdash; TALE-SD GNN Reconstruction 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=751d28fa" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=98e9f989"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../_static/translations.js?v=4755f45a"></script>
+      <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-mml-chtml.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="検索" href="../search.html" />
+    <link rel="next" title="Python API" href="python_api.html" />
+    <link rel="prev" title="CLI API" href="cli.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            TALE-SD GNN Reconstruction
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">日本語</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">日本語 API 利用ガイド</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="cli.html">CLI API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">コード詳細 walkthrough</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id1">このページの読み方</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#gnn">GNNを読むための基礎</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id2">基本用語</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#loss">非線形関数とloss関数</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#gnn-message-passing">GNNの中心: message passing</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#id3">全体の入口</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#hdf5-graph-export">HDF5 graph export</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#dst">DST読み込み</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#graphevent">GraphEvent作成</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#node">node特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#edge">edge特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#hdf5">HDF5書き込み</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#energy-flat-samplingshard">energy-flat samplingとshard</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#dataset">学習用dataset読み込み</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#h5graphdataset-dataset-py-181"><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:181</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#getitem-sample"><code class="docutils literal notranslate"><span class="pre">__getitem__</span></code> が返すsample</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#scaler-fitting">Scaler fitting</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#collate">collate</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#train-val-test-split">train/val/test split</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id4">学習本体</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#epoch-loop">epoch loop</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#checkpoint">checkpoint</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#id5">モデル構造</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id6">入力</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#node-encoder">node encoder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#waveform-encoder">waveform encoder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#detector-embedding">detector embedding</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#time-edge-encoder">time-edge encoder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#message-passing">message passing</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#readouthead">readoutとhead</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id7">GNNがしていること、していないこと</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#id8">loss</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#reconstruction-loss">reconstruction loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#energy-bias-loss">energy bias loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#quality-loss">quality loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#mass-loss">mass loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#total-loss">total loss</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#id9">診断と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#feature-importance">入力分布とfeature importance</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id10">入力分布</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#feature-group">feature group重要度</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#id11">変更したい時に読む場所</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id12">コードを読む推奨順</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="python_api.html">Python API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="python_api.html#id1">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="python_api.html#hdf5-dataset">HDF5 datasetの読み込み</a></li>
+<li class="toctree-l3"><a class="reference internal" href="python_api.html#id2">推論</a></li>
+<li class="toctree-l3"><a class="reference internal" href="python_api.html#id3">入力分布</a></li>
+<li class="toctree-l3"><a class="reference internal" href="python_api.html#group">特徴量group重要度</a></li>
+<li class="toctree-l3"><a class="reference internal" href="python_api.html#hdf5-graph">HDF5 graphの手動作成</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="server_workflow.html">サーバー実行フロー</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#submitter">標準submitter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#quality-only">再構成quality-onlyの例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#mass-focal">mass focalの例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#id2">注意点</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">English</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../en/index.html">English API Usage Guide</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../en/cli.html">CLI API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#input-distributions">Input distributions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/code_walkthrough.html">Code walkthrough</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#top-level-entry-point">Top-level entry point</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#hdf5-graph-export">HDF5 graph export</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#dst-reading">DST reading</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#graphevent-creation">GraphEvent creation</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#node-and-edge-features">Node and edge features</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#hdf5-schema">HDF5 schema</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#energy-flat-sampling-and-shards">Energy-flat sampling and shards</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#dataset-and-batching">Dataset and batching</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#train-validation-test-split">Train/validation/test split</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#training">Training</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#epoch-loop">Epoch loop</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#checkpoint-contents">Checkpoint contents</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#model">Model</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#loss-functions">Loss functions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#diagnostics">Diagnostics</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#input-distributions-and-feature-importance">Input distributions and feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#where-to-read-when-changing-code">Where to read when changing code</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#recommended-reading-order">Recommended reading order</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/python_api.html">Python API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#hdf5-dataset-loading">HDF5 dataset loading</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#input-distributions">Input distributions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#feature-group-importance">Feature group importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#manual-hdf5-graph-writing">Manual HDF5 graph writing</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/server_workflow.html">Server Workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#standard-submitters">Standard submitters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#mass-focal-example">Mass focal example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#rules">Rules</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../reference.html">Python Reference</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.train">Training</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.dataset">Dataset</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.predict">Prediction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.feature_analysis">Feature analysis</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.event_graph">Graph construction and I/O</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.model">Model</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../reference.html#talesd_gnn_reconstruction.model.PhysicsTaleSdGNN"><code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../reference.html#talesd_gnn_reconstruction.model.PhysicsTaleSdGNN.forward"><code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN.forward()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TALE-SD GNN Reconstruction</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">日本語 API 利用ガイド</a></li>
+      <li class="breadcrumb-item active">コード詳細 walkthrough</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/ja/code_walkthrough.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="walkthrough">
+<h1>コード詳細 walkthrough<a class="headerlink" href="#walkthrough" title="Link to this heading"></a></h1>
+<p>このページは、HDF5作成、学習、推論、診断で「どのファイルのどの関数が何をしているか」を読むための案内です。
+実行コマンドの使い方だけでなく、コードを追う順番と、各段階で作られるデータ構造を明示します。</p>
+<section id="id1">
+<h2>このページの読み方<a class="headerlink" href="#id1" title="Link to this heading"></a></h2>
+<p>このリポジトリの処理は、大きく分けると次の順番で進みます。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>DST event
+  -&gt; accepted pulseをnodeにしたHDF5 graph
+  -&gt; HDF5 graph dataset
+  -&gt; scalerで標準化されたmini-batch
+  -&gt; PhysicsTaleSdGNN
+  -&gt; reconstruction / quality / mass prediction
+  -&gt; loss
+  -&gt; checkpointとdiagnostics
+</pre></div>
+</div>
+<p>この順番は、コードを読む時にも有効です。
+先にmodelだけを見ると、<code class="docutils literal notranslate"><span class="pre">edge_index</span></code> や <code class="docutils literal notranslate"><span class="pre">batch</span></code> の意味が分かりにくくなります。
+逆に、DST exportだけを見ると、GNNがその情報をどう使うのかが見えません。
+したがって、まず「1 eventを1 graphへ変換する」、次に「graphをbatchへまとめる」、最後に「GNNがgraphをどう変換する」という順で読むと、入力、モデル、loss、diagnosticsの対応が追いやすくなります。</p>
+</section>
+<section id="gnn">
+<h2>GNNを読むための基礎<a class="headerlink" href="#gnn" title="Link to this heading"></a></h2>
+<p>Graph Neural Network（GNN）は、graph形式の入力を扱うニューラルネットワークです。
+ここでいうgraphは、点と線からなるデータ構造です。
+点をnode、線をedgeと呼びます。
+本解析では、1つの空気シャワーeventを1つのgraphとして扱います。</p>
+<p>本解析での対応は次の通りです。</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>一般的なGNN用語</p></th>
+<th class="head"><p>本解析での意味</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>graph</p></td>
+<td><p>1つの空気シャワーevent。</p></td>
+</tr>
+<tr class="row-odd"><td><p>node</p></td>
+<td><p>Ising noise filter後に残ったaccepted pulse。detectorそのものではない。</p></td>
+</tr>
+<tr class="row-even"><td><p>edge</p></td>
+<td><p>異なるdetectorに属するaccepted pulse間の時空間的な関係。</p></td>
+</tr>
+<tr class="row-odd"><td><p>node feature</p></td>
+<td><p>accepted pulseに付く数値ベクトル。pulse自身、detector由来量、event文脈を含む。</p></td>
+</tr>
+<tr class="row-even"><td><p>edge feature</p></td>
+<td><p>2つのnode間の距離、時刻差、信号量差、Ising weightなど。</p></td>
+</tr>
+<tr class="row-odd"><td><p>graph-level prediction</p></td>
+<td><p>event全体のenergy、core、arrival direction、quality、massを予測すること。</p></td>
+</tr>
+</tbody>
+</table>
+<p>画像ではpixelが規則格子上に並ぶため、近傍の定義はほぼ固定です。
+一方、TALE-SDのeventでは、hitしたdetector数も位置もeventごとに変わります。
+そのため、固定サイズの画像として扱うより、node数とedge数がeventごとに変わるgraphとして扱う方が自然です。</p>
+<p>tensorとして見ると、1 eventは概ね次の形を持ちます。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>node_features:     [N_v, F_node]
+edge_index:        [2, N_e]
+edge_features:     [N_e, F_edge]
+waveform_features: [N_v, 4, T]
+target:            [F_target]
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">N_v</span></code> はnode数、<code class="docutils literal notranslate"><span class="pre">N_e</span></code> はdirected edge数です。
+<code class="docutils literal notranslate"><span class="pre">edge_index</span></code> の1行目はedgeの始点node、2行目は終点nodeを表します。
+例えば <code class="docutils literal notranslate"><span class="pre">edge_index[:,</span> <span class="pre">k]</span> <span class="pre">=</span> <span class="pre">[3,</span> <span class="pre">8]</span></code> なら、k番目のedgeはnode 3からnode 8へ向かうdirected edgeです。</p>
+<p>mini-batchでは複数eventのnodeを縦に連結します。
+そのため、各nodeがどのeventに属するかを示す <code class="docutils literal notranslate"><span class="pre">batch</span></code> 配列が必要になります。
+後でgraph-level predictionを作る時、<code class="docutils literal notranslate"><span class="pre">batch</span></code> を使ってnode表現をeventごとに集約します。</p>
+<section id="id2">
+<h3>基本用語<a class="headerlink" href="#id2" title="Link to this heading"></a></h3>
+<dl>
+<dt>特徴量</dt><dd><p>モデルへ入力する数値です。
+位置、時刻、信号量、波形、edgeの時刻差などが特徴量です。</p>
+</dd>
+<dt>表現、埋め込み、embedding</dt><dd><p>ニューラルネットワーク内部で作られるベクトルです。
+入力特徴量そのものではなく、予測に使いやすい形へ変換された中間表現です。
+本モデルでは、各nodeを最初に192次元のnode表現へ変換します。</p>
+</dd>
+<dt>MLP</dt><dd><p>Multi-Layer Perceptronの略です。
+線形変換と非線形関数を重ねた小さなニューラルネットワークです。
+本モデルでは、node encoder、message生成、出力headなどで使います。</p>
+</dd>
+<dt>標準化</dt><dd><p>学習データの平均を引き、標準偏差で割る変換です。</p>
+<div class="math notranslate nohighlight">
+\[x' = \frac{x-\mu_{\mathrm{train}}}{\sigma_{\mathrm{train}}}\]</div>
+<p>大きさの違う特徴量を同じ程度の数値範囲へそろえ、最適化を安定させます。
+<code class="docutils literal notranslate"><span class="pre">\mu</span></code> と <code class="docutils literal notranslate"><span class="pre">\sigma</span></code> はtrain splitだけから推定します。
+validation/testの統計を混ぜると、評価データの情報を学習側へ漏らすことになるためです。</p>
+</dd>
+</dl>
+</section>
+<section id="loss">
+<h3>非線形関数とloss関数<a class="headerlink" href="#loss" title="Link to this heading"></a></h3>
+<p>ニューラルネットワークは線形変換だけでは複雑な関係を表せません。
+そのため、層の間に非線形関数を入れます。
+また、予測と正解のずれを数値化するためにloss関数を使います。</p>
+<dl>
+<dt>Sigmoid</dt><dd><p>実数を0から1へ写す関数です。</p>
+<div class="math notranslate nohighlight">
+\[\sigma(z)=\frac{1}{1+\exp(-z)}\]</div>
+<p><code class="docutils literal notranslate"><span class="pre">z=0</span></code> で <code class="docutils literal notranslate"><span class="pre">0.5</span></code> になり、<code class="docutils literal notranslate"><span class="pre">z</span></code> が大きいほど1に近づきます。
+mass分類では、modelが出すlogit <code class="docutils literal notranslate"><span class="pre">z</span></code> を <code class="docutils literal notranslate"><span class="pre">p(Fe)=\sigma(z)</span></code> として確率のように解釈します。
+quality headでも、quality logitを0から1のscoreへ変換する時に使います。</p>
+</dd>
+<dt>Logit</dt><dd><p>確率 <code class="docutils literal notranslate"><span class="pre">p</span></code> を実数へ戻す変換です。</p>
+<div class="math notranslate nohighlight">
+\[\mathrm{logit}(p)=\log\frac{p}{1-p}\]</div>
+<p>ニューラルネットワークでは、sigmoidに入れる前の生の出力もlogitと呼びます。
+mass headの出力がlogitである、という時はこの意味です。</p>
+</dd>
+<dt>SiLU</dt><dd><p>本モデルのMLPで使う活性化関数です。</p>
+<div class="math notranslate nohighlight">
+\[\mathrm{SiLU}(x)=x\sigma(x)\]</div>
+<p>負の入力を完全には切り捨てず、正の入力はほぼそのまま通します。
+ReLUより滑らかなため、回帰問題で扱いやすいことがあります。</p>
+</dd>
+<dt>Softplus</dt><dd><p>滑らかに正値を作る関数です。</p>
+<div class="math notranslate nohighlight">
+\[\mathrm{softplus}(x)=\log(1+\exp x)\]</div>
+<p>常に正で、<code class="docutils literal notranslate"><span class="pre">x</span></code> が大きい時はほぼ <code class="docutils literal notranslate"><span class="pre">x</span></code> になります。
+ranking lossや、誤差予測headの正値化で使います。</p>
+</dd>
+<dt>SmoothL1</dt><dd><p>小さい誤差では二乗誤差、大きい誤差では絶対値誤差に近い振る舞いをするlossです。</p>
+<div class="math notranslate nohighlight">
+\[\begin{split}\mathrm{SmoothL1}_{\beta}(r)=
+\begin{cases}
+  r^2/(2\beta), &amp; |r| &lt; \beta,\\
+  |r|-\beta/2, &amp; |r| \ge \beta.
+\end{cases}\end{split}\]</div>
+<p>二乗誤差だけを使うと、大きな外れ値がlossを強く支配します。
+SmoothL1は外れ値の影響を抑えつつ、小さい誤差では滑らかに学習できます。</p>
+</dd>
+<dt>BCEWithLogits</dt><dd><p>Binary Cross Entropyとsigmoidをまとめた二値分類用lossです。</p>
+<div class="math notranslate nohighlight">
+\[\mathrm{BCEWithLogits}(z,y)
+=
+-y\log\sigma(z) -(1-y)\log(1-\sigma(z)).\]</div>
+<p>入力 <code class="docutils literal notranslate"><span class="pre">z</span></code> は確率ではなくlogitです。
+<code class="docutils literal notranslate"><span class="pre">y</span></code> は0または1のlabelだけでなく、0から1のsoft targetでも使えます。
+本リポジトリでは、mass分類のproton/iron labelと、quality scoreのsoft targetの両方に使います。</p>
+</dd>
+</dl>
+</section>
+<section id="gnn-message-passing">
+<h3>GNNの中心: message passing<a class="headerlink" href="#gnn-message-passing" title="Link to this heading"></a></h3>
+<p>GNNの特徴は、nodeが周囲のnodeから情報を受け取って自分の表現を更新することです。
+この処理をmessage passingと呼びます。</p>
+<p>一般形は次のように書けます。</p>
+<div class="math notranslate nohighlight">
+\[h_i^{(k)}
+=
+\gamma^{(k)}
+\left(
+  h_i^{(k-1)},
+  \bigoplus_{j\in\mathcal{N}(i)}
+  \phi^{(k)}(h_i^{(k-1)},h_j^{(k-1)},e_{j,i})
+\right).\]</div>
+<p>ここで、<code class="docutils literal notranslate"><span class="pre">h_i</span></code> はnode <code class="docutils literal notranslate"><span class="pre">i</span></code> の表現、<code class="docutils literal notranslate"><span class="pre">e_{j,i}</span></code> はedge特徴量、<code class="docutils literal notranslate"><span class="pre">\phi</span></code> はmessageを作る関数、<code class="docutils literal notranslate"><span class="pre">\oplus</span></code> はmeanやmaxなどの集約、<code class="docutils literal notranslate"><span class="pre">\gamma</span></code> はnode表現を更新する関数です。</p>
+<p>本モデルでは、<code class="docutils literal notranslate"><span class="pre">GatedEdgeMessageLayer</span></code> がこの役割を担います。
+directed edge <code class="docutils literal notranslate"><span class="pre">i</span> <span class="pre">-&gt;</span> <span class="pre">j</span></code> について、次を連結してmessageの入力にします。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>[h_i, h_j, edge_attr_ij]
+</pre></div>
+</div>
+<p>その後、message MLPとgate MLPを使って</p>
+<div class="math notranslate nohighlight">
+\[m_{i\rightarrow j}
+=
+M_{\mathrm{msg}}([h_i,h_j,e_{ij}])
+\cdot
+\sigma(M_{\mathrm{gate}}([h_i,h_j,e_{ij}]))\]</div>
+<p>を作ります。
+gateは、そのedgeから来る情報をどの程度通すかを学習する重みです。
+物理的に自然な近傍だけを人間が完全に決めるのではなく、edge特徴量を見ながらmodelが通し方を調整します。</p>
+<p>node <code class="docutils literal notranslate"><span class="pre">j</span></code> は、入ってくるmessageをmeanとmaxで集約します。
+meanは周囲全体の平均的な状況を表し、maxは特に強い近傍の影響を拾います。
+更新後のnode表現は、元のnode表現と集約messageを組み合わせ、LayerNormとfeed-forward networkで整えます。</p>
+<p>本モデルではこの更新を5層繰り返します。
+1層目では直接つながったnodeの情報だけが入ります。
+2層目では、その近傍が受け取った情報も入ります。
+層を重ねるほど、各node表現はより広い範囲の時空間パターンを含むようになります。</p>
+<p>ただし、edgeがないnode pairの情報は直接は混ざりません。
+したがって、graphの作り方、つまりedge候補とedge特徴量は、GNNの性質を決める重要な設計です。</p>
+</section>
+</section>
+<section id="id3">
+<h2>全体の入口<a class="headerlink" href="#id3" title="Link to this heading"></a></h2>
+<p>CLIの入口は <code class="docutils literal notranslate"><span class="pre">pyproject.toml</span></code> の <code class="docutils literal notranslate"><span class="pre">[project.scripts]</span></code> で定義されています。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>talesd-gnn -&gt; talesd_gnn_reconstruction.cli:main
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/cli.py</span></code> の役割は、コマンドライン引数をPython APIへ渡すことです。
+主要なdispatch先は以下です。</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>処理</p></th>
+<th class="head"><p>CLI関数</p></th>
+<th class="head"><p>実処理の主な関数</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>HDF5 graph作成</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_export</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1227</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dst_reader.iter_dst_banks</span></code>、<code class="docutils literal notranslate"><span class="pre">event_graph.build_graph_event</span></code>、<code class="docutils literal notranslate"><span class="pre">graph_io.write_graph</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>学習</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_train</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1450</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">train.train_model</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:1173</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>推論CSV作成</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_predict</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1551</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">predict.predict_graphs</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>入力分布</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_input_distributions</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1566</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">feature_analysis.save_input_distributions</span></code> : <code class="docutils literal notranslate"><span class="pre">feature_analysis.py:133</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>feature group重要度</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_feature_importance</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1581</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">feature_analysis.save_feature_group_importance</span></code> : <code class="docutils literal notranslate"><span class="pre">feature_analysis.py:352</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>graph可視化</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_visualize</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">visualize.py</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="hdf5-graph-export">
+<h2>HDF5 graph export<a class="headerlink" href="#hdf5-graph-export" title="Link to this heading"></a></h2>
+<p>HDF5作成は、DSTを直接読む部分、eventをGNN graphへ変換する部分、HDF5へ書く部分に分かれています。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>talesd-gnn export
+  -&gt; cli._cmd_export()
+    -&gt; dst_reader.iter_dst_banks()
+    -&gt; event_graph.build_graph_event()
+    -&gt; graph_io.create_graph_file()
+    -&gt; graph_io.write_graph()
+</pre></div>
+</div>
+<section id="dst">
+<h3>DST読み込み<a class="headerlink" href="#dst" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/dst_reader.py</span></code> はDST bankを逐次読み込みます。
+主要入口は <code class="docutils literal notranslate"><span class="pre">iter_dst_banks</span></code> : <code class="docutils literal notranslate"><span class="pre">dst_reader.py:222</span></code> です。</p>
+<p><code class="docutils literal notranslate"><span class="pre">iter_dst_banks</span></code> が行うこと:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">dstio</span></code> を使ってDST fileを開く。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">kind</span></code>、<code class="docutils literal notranslate"><span class="pre">max_events</span></code>、trigger mode、source index、event dateなどの条件を適用する。</p></li>
+<li><p>MCの場合は <code class="docutils literal notranslate"><span class="pre">rusdraw</span></code> 系の情報をTALE-SD calibev相当の構造へ変換する。</p></li>
+<li><p>各eventを <code class="docutils literal notranslate"><span class="pre">BankRecord</span></code> としてyieldする。<code class="docutils literal notranslate"><span class="pre">BankRecord</span></code> には <code class="docutils literal notranslate"><span class="pre">bank</span></code>、<code class="docutils literal notranslate"><span class="pre">source_path</span></code>、<code class="docutils literal notranslate"><span class="pre">source_index</span></code>、<code class="docutils literal notranslate"><span class="pre">source_kind</span></code> が入る。</p></li>
+</ul>
+<p>この段階ではまだGNN用のnodeやedgeは作っていません。DST由来のevent単位データを、後段へ流すだけです。</p>
+</section>
+<section id="graphevent">
+<h3>GraphEvent作成<a class="headerlink" href="#graphevent" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/event_graph.py</span></code> はDST bankをGNN graphへ変換します。
+主要入口は <code class="docutils literal notranslate"><span class="pre">build_graph_event</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:688</span></code> です。</p>
+<p><code class="docutils literal notranslate"><span class="pre">build_graph_event</span></code> の流れ:</p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">_combine_sub_waveforms</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:159</span></code> で波形segmentをまとめる。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_extract_hit</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:293</span></code> でdetectorごとのhit、pulse、FADC波形、時刻、chargeを取り出す。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_merge_hits_by_lid</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:376</span></code> で同一detector IDのhitを統合する。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_build_node_features</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:471</span></code> でpulseをnodeとして扱い、node特徴量、pulse特徴量、waveform特徴量を作る。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_build_edges</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:610</span></code> でdetector間のdirected edgeとedge特徴量を作る。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_target_from_sim</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:419</span></code> でMC truthから再構成targetを作る。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_particle_label_from_sim</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:460</span></code> でmass分類用labelを作る。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> として返す。</p></li>
+</ol>
+<p><code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:41</span></code> に入る主要データ:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>field</p></th>
+<th class="head"><p>内容</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">node_features</span></code></p></td>
+<td><p>detector位置、barycenter相対位置、accepted pulse到着時刻、pulse自身のcharge、同一detector内のaccepted pulse合計charge、pulse数、波形長、FADC peakなど。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">edge_index</span></code></p></td>
+<td><p>directed edgeの始点・終点node index。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">edge_features</span></code></p></td>
+<td><p>detector間距離、時刻差、空間重み、因果方向、signal weightなど。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">pulse_features</span></code></p></td>
+<td><p>対応nodeを示す <code class="docutils literal notranslate"><span class="pre">node_index</span></code>。追加のpulse scalar入力は現行仕様では落とす。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">waveform_features</span></code></p></td>
+<td><p>waveform encoderへ渡す波形特徴量。現行仕様では上下層の rise-aligned raw window と accepted-pulse mask。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">target</span></code></p></td>
+<td><p>MC truth由来の <code class="docutils literal notranslate"><span class="pre">log10_energy_eV,</span> <span class="pre">core_x_km,</span> <span class="pre">core_y_km,</span> <span class="pre">dir_x,</span> <span class="pre">dir_y,</span> <span class="pre">dir_z</span></code>。coreは地表面上の2次元位置で、到来方向は3成分単位ベクトルとして保存する。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">particle_label</span></code></p></td>
+<td><p>mass分類用label。現在の二値分類ではproton/ironを区別する。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">metadata</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">source_path</span></code>、<code class="docutils literal notranslate"><span class="pre">source_index</span></code>、parttypeなど、splitや診断に使う情報。</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="node">
+<h3>node特徴量<a class="headerlink" href="#node" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">_build_node_features</span></code> は、accepted pulseを1 nodeとして扱います。
+同一detectorに複数pulseがある場合でも、pulse単位のnodeとして並ぶため、<code class="docutils literal notranslate"><span class="pre">node_lids</span></code> には同じdetector IDが複数回現れることがあります。</p>
+<p>ここで作られる特徴量群:</p>
+<ul class="simple">
+<li><p>detectorの位置 <code class="docutils literal notranslate"><span class="pre">x,</span> <span class="pre">y,</span> <span class="pre">z</span></code>。</p></li>
+<li><p>event内barycenterからの相対位置、半径。</p></li>
+<li><p>event内の最初のaccepted pulseから見た、そのpulse自身の相対時刻。</p></li>
+<li><p>detector trigger time。</p></li>
+<li><p>そのaccepted pulse自身のchargeの対数・平方根。</p></li>
+<li><p>同一detector内のaccepted pulse最大charge、合計charge、accepted pulse数、accepted pulse time span。</p></li>
+<li><p>detector waveform segment数、waveform length。</p></li>
+<li><p>FADC peak、pedestal、sigma。</p></li>
+<li><p>accepted pulse order、first accepted pulse flag。</p></li>
+</ul>
+<p>後でfeature selectionを変える場合は、まずこの関数と <code class="docutils literal notranslate"><span class="pre">graph_columns</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:755</span></code> を確認します。
+HDF5にはcolumn名も保存されるため、学習時の <code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> はcolumn名を見てschema互換性を確認します。
+現行schemaでは物理定義が変わっているため、旧HDF5を黙って現行列へ読み替えず、再exportを要求します。</p>
+</section>
+<section id="edge">
+<h3>edge特徴量<a class="headerlink" href="#edge" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">_build_edges</span></code> はnode pairを走査し、異なるdetector間のpairだけを候補にします。
+距離や時刻差が大きすぎるpairは落とし、残ったpairからbidirectional directed edgeを作ります。</p>
+<p>edge特徴量には次のような情報が入ります。</p>
+<ul class="simple">
+<li><p>detector間距離。</p></li>
+<li><p>到着時刻差。</p></li>
+<li><p>spatial weight。</p></li>
+<li><p>causal direction。</p></li>
+<li><p>pulse信号量差 <code class="docutils literal notranslate"><span class="pre">dlog10_pulse_rho</span></code> とsignal weight。</p></li>
+<li><p>degree normalization用の量。</p></li>
+</ul>
+<p>edge特徴量を変える場合は、<code class="docutils literal notranslate"><span class="pre">event_graph.py</span></code> だけでなく、モデル側の <code class="docutils literal notranslate"><span class="pre">edge_feature_dim</span></code> とcheckpoint互換性にも影響します。</p>
+</section>
+<section id="hdf5">
+<h3>HDF5書き込み<a class="headerlink" href="#hdf5" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/graph_io.py</span></code> がHDF5 schemaを管理します。</p>
+<p><code class="docutils literal notranslate"><span class="pre">create_graph_file</span></code> : <code class="docutils literal notranslate"><span class="pre">graph_io.py:14</span></code> が行うこと:</p>
+<ul class="simple">
+<li><p>HDF5 root attributesに <code class="docutils literal notranslate"><span class="pre">format=talesd_gnn_graphs</span></code>、<code class="docutils literal notranslate"><span class="pre">format_version</span></code>、特徴量column定義、configを保存する。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">events</span></code> groupを作る。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">metadata</span></code> groupに <code class="docutils literal notranslate"><span class="pre">event_id</span></code>、<code class="docutils literal notranslate"><span class="pre">source_path</span></code>、<code class="docutils literal notranslate"><span class="pre">source_index</span></code>、<code class="docutils literal notranslate"><span class="pre">parttype</span></code>、<code class="docutils literal notranslate"><span class="pre">particle_label</span></code> を保存できるdatasetを作る。</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">write_graph</span></code> : <code class="docutils literal notranslate"><span class="pre">graph_io.py:53</span></code> が行うこと:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">events/%08d</span></code> groupを作る。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">node_features</span></code>、<code class="docutils literal notranslate"><span class="pre">node_positions_km</span></code>、<code class="docutils literal notranslate"><span class="pre">node_lids</span></code>、<code class="docutils literal notranslate"><span class="pre">edge_index</span></code>、<code class="docutils literal notranslate"><span class="pre">edge_features</span></code>、<code class="docutils literal notranslate"><span class="pre">pulse_features</span></code>、<code class="docutils literal notranslate"><span class="pre">waveform_features</span></code> を書く。</p></li>
+<li><p>targetとparticle labelがある場合はそれも書く。</p></li>
+<li><p>metadata datasetへsource情報とparticle情報を追記する。</p></li>
+</ul>
+<p>このmetadataは、後の <code class="docutils literal notranslate"><span class="pre">source-stratified</span></code> splitで重要です。
+同じ <code class="docutils literal notranslate"><span class="pre">source_path</span></code> をtrain/val/testへまたがせないために使います。</p>
+</section>
+<section id="energy-flat-samplingshard">
+<h3>energy-flat samplingとshard<a class="headerlink" href="#energy-flat-samplingshard" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">cli._cmd_export</span></code> の内部には、energy binごとに候補を集め、指定数だけ選ぶ処理があります。
+関連関数は <code class="docutils literal notranslate"><span class="pre">cli.py</span></code> 内にあります。</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">_scan_energy_candidates_for_file</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:195</span></code> はfile内のenergy候補を数える。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_add_energy_sample</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1075</span></code> はbinごとのreservoirへcandidateを追加する。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_sampled_graphs_from_reservoirs</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1101</span></code> はreservoirから最終サンプルを作る。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_write_selected_graph_shard</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:439</span></code> は選ばれたeventをshardへ書く。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_write_ordered_selected_graph_shard</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:577</span></code> はshuffleされた書き込み計画に従って書く。</p></li>
+</ul>
+<p>ここでshuffleする対象は、graph本体ではなく、どのsourceのどのeventをどの順番で書くかという軽量な選択・書き込み計画です。
+graph本体を先に全部materializeするとI/Oとメモリが大きくなるためです。</p>
+</section>
+</section>
+<section id="dataset">
+<h2>学習用dataset読み込み<a class="headerlink" href="#dataset" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/dataset.py</span></code> はHDF5 graphをPyTorch DataLoaderへ渡すための層です。</p>
+<section id="h5graphdataset-dataset-py-181">
+<h3><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:181</span></code><a class="headerlink" href="#h5graphdataset-dataset-py-181" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">H5GraphDataset.__init__</span></code> が行うこと:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">graphs_path</span></code> がfileかdirectoryかを判定し、HDF5 shard一覧へ展開する。</p></li>
+<li><p>HDF5 attrsからformat、waveform schema、column定義を読む。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">particle_filter</span></code> や <code class="docutils literal notranslate"><span class="pre">max_graphs</span></code> を適用する。</p></li>
+<li><p>shardごとのgraph数を読み、global indexからlocal indexへ変換するための累積長を作る。</p></li>
+<li><p>metadata、target、particle labelの有無を確認する。</p></li>
+<li><p>node feature column selectionを解決する。</p></li>
+<li><p>progress label <code class="docutils literal notranslate"><span class="pre">initialize</span> <span class="pre">graph</span> <span class="pre">shards</span></code> を出す。</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">_handle</span></code> はHDF5 file handleのLRU cacheを持ちます。
+open file数は環境変数 <code class="docutils literal notranslate"><span class="pre">TALESD_GNN_H5_MAX_OPEN_FILES</span></code> で制御され、既定は4です。</p>
+</section>
+<section id="getitem-sample">
+<h3><code class="docutils literal notranslate"><span class="pre">__getitem__</span></code> が返すsample<a class="headerlink" href="#getitem-sample" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">H5GraphDataset.__getitem__</span></code> は、global indexを <code class="docutils literal notranslate"><span class="pre">(path_index,</span> <span class="pre">local_index,</span> <span class="pre">key)</span></code> へ変換し、HDF5から1 eventを読みます。
+返るdictには以下が入ります。</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">node_features</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">edge_index</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">edge_features</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">pulse_features</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">waveform_features</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">target</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">attrs</span></code></p></li>
+<li><p>必要な場合は <code class="docutils literal notranslate"><span class="pre">detector_lids</span></code>、<code class="docutils literal notranslate"><span class="pre">particle_label</span></code>、<code class="docutils literal notranslate"><span class="pre">node_positions</span></code></p></li>
+</ul>
+<p>この段階ではまだtorch tensorではありません。numpy配列中心のsampleです。</p>
+</section>
+<section id="scaler-fitting">
+<h3>Scaler fitting<a class="headerlink" href="#scaler-fitting" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">fit_scalers</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:549</span></code> はtrain splitだけからscalerを推定します。</p>
+<p>対象:</p>
+<ul class="simple">
+<li><p>node features。</p></li>
+<li><p>edge features。</p></li>
+<li><p>pulse featuresは、追加scalarがある旧仕様の場合だけ対象になる。現行仕様では <code class="docutils literal notranslate"><span class="pre">node_index</span></code> のみなのでpulse scalerは作らない。</p></li>
+<li><p>target。</p></li>
+</ul>
+<p>これはvalidation/testの情報を標準化へ混ぜないためです。
+<code class="docutils literal notranslate"><span class="pre">fit</span> <span class="pre">scalers</span></code> が長い場合、HDF5 shardのI/O、worker数、local cacheの状態を確認します。</p>
+</section>
+<section id="collate">
+<h3>collate<a class="headerlink" href="#collate" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">collate_graph_arrays</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:892</span></code> は複数event sampleを1 batchへまとめます。
+内部ではPython backendまたはC++ extension backendを使います。</p>
+<p>collateで行うこと:</p>
+<ul class="simple">
+<li><p>scalerを適用する。</p></li>
+<li><p>eventごとのnode配列を連結する。</p></li>
+<li><p>edge indexをnode offsetで付け替える。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">batch</span></code> 配列を作り、nodeがどのgraphに属するかを示す。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">waveform_features</span></code> を連結する。<code class="docutils literal notranslate"><span class="pre">pulse_features</span></code> は現行仕様では <code class="docutils literal notranslate"><span class="pre">node_index</span></code> だけなので、pulse scalar tensorは空になる。</p></li>
+<li><p>targetやmass labelをbatch配列にする。</p></li>
+<li><p>torch tensorへ変換する。</p></li>
+</ul>
+<p>DataLoader workerが落ちる場合は、この段階のHDF5読み込み、collate、メモリ使用量を優先して確認します。</p>
+</section>
+</section>
+<section id="train-val-test-split">
+<h2>train/val/test split<a class="headerlink" href="#train-val-test-split" title="Link to this heading"></a></h2>
+<p>splitは <code class="docutils literal notranslate"><span class="pre">train.py</span></code> にあります。</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>split mode</p></th>
+<th class="head"><p>関数</p></th>
+<th class="head"><p>内容</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">event</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">split_indices</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:167</span></code></p></td>
+<td><p>event index単位でrandom splitする。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">source-path</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">split_indices_by_source_path</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:194</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">source_path</span></code> 単位で分ける。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">source-stratified</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">split_indices_by_stratified_source_path</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:489</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">source_path</span></code> をまたがせず、particleやenergy分布も偏りにくくする。</p></td>
+</tr>
+</tbody>
+</table>
+<p>現在の既定は <code class="docutils literal notranslate"><span class="pre">source-stratified</span></code> です。
+validation fractionは0.05、test fractionは0.10、train fractionは0.85です。
+同じ <code class="docutils literal notranslate"><span class="pre">source_path</span></code> はtrain/val/testにまたがりません。</p>
+</section>
+<section id="id4">
+<h2>学習本体<a class="headerlink" href="#id4" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">train_model</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:1173</span></code> が学習の中心です。
+CLI、submitter、notebookから最終的にここへ入ります。</p>
+<p><code class="docutils literal notranslate"><span class="pre">train_model</span></code> の主な段階:</p>
+<ol class="arabic simple">
+<li><p>torchとmodel moduleをimportする。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">training_task</span></code>、loss mode、mass option、diagnostic optionを検証する。</p></li>
+<li><p>deviceを解決する。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> を作る。</p></li>
+<li><p>splitを作る。</p></li>
+<li><p>train splitでscalerをfitする。</p></li>
+<li><p>最初のsampleからinput dimensionを推定する。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">TaleSdGNN</span></code> または <code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN</span></code> を作る。</p></li>
+<li><p>optimizer、LR scheduler、DataLoaderを作る。</p></li>
+<li><p>epoch loopでtrainとvalidationを回す。</p></li>
+<li><p>validation lossが改善したらbest checkpointを保存する。</p></li>
+<li><p>最後にbest checkpointを読み戻し、validation/test predictionとdiagnosticsを作る。</p></li>
+</ol>
+<p>この流れはlogの <code class="docutils literal notranslate"><span class="pre">stage_seconds</span></code> と対応します。
+例えば <code class="docutils literal notranslate"><span class="pre">dataset_init</span></code>、<code class="docutils literal notranslate"><span class="pre">fit_scalers</span></code>、<code class="docutils literal notranslate"><span class="pre">model_and_loaders</span></code>、<code class="docutils literal notranslate"><span class="pre">epochs</span></code>、<code class="docutils literal notranslate"><span class="pre">diagnostics</span></code> は、この段階の所要時間です。</p>
+<section id="epoch-loop">
+<h3>epoch loop<a class="headerlink" href="#epoch-loop" title="Link to this heading"></a></h3>
+<p>各epochでは以下を行います。</p>
+<p>train側:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">model.train()</span></code> にする。</p></li>
+<li><p>DataLoaderからbatchを受け取る。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">batch_to_device</span></code> でGPUへ送る。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">pred_all</span> <span class="pre">=</span> <span class="pre">model(batch)</span></code> でforwardする。</p></li>
+<li><p>出力をreconstruction、mass、quality、error headへ分ける。</p></li>
+<li><p>有効なtaskに応じてlossを計算する。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">backward</span></code>、gradient clipping、optimizer stepを行う。</p></li>
+</ul>
+<p>validation側:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">model.eval()</span></code> と <code class="docutils literal notranslate"><span class="pre">torch.no_grad()</span></code> を使う。</p></li>
+<li><p>同じlossを計算するが、optimizer stepはしない。</p></li>
+<li><p>val lossをbest判定に使う。</p></li>
+</ul>
+</section>
+<section id="checkpoint">
+<h3>checkpoint<a class="headerlink" href="#checkpoint" title="Link to this heading"></a></h3>
+<p>checkpointにはmodel重みだけでなく、以下も入ります。</p>
+<ul class="simple">
+<li><p>model config。</p></li>
+<li><p>scaler。</p></li>
+<li><p>history。</p></li>
+<li><p>metrics。</p></li>
+<li><p>split index。</p></li>
+<li><p>runtime information。</p></li>
+<li><p>diagnostics summary。</p></li>
+</ul>
+<p>そのため、推論やfeature importanceではcheckpointからsplitやscalerを復元できます。</p>
+</section>
+</section>
+<section id="id5">
+<h2>モデル構造<a class="headerlink" href="#id5" title="Link to this heading"></a></h2>
+<p>現在の主モデルは <code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN</span></code> : <code class="docutils literal notranslate"><span class="pre">model.py:718</span></code> です。
+このモデルは、1つのevent graphを受け取り、event全体の物理量を出すgraph-level modelです。
+nodeごとの分類をするmodelではありません。
+最終的には、全nodeの情報を1つのevent vectorへ集約し、そのevent vectorからenergy、core、direction、quality、massを出します。</p>
+<section id="id6">
+<h3>入力<a class="headerlink" href="#id6" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN.forward</span></code> が受け取るbatchには、少なくとも以下があります。</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span></code>: 標準化済みnode scalar features。現行schemaでは28列。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">edge_index</span></code>: directed edgeの始点・終点node index。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">edge_attr</span></code>: 標準化済みedge features。現行schemaでは13列。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">batch</span></code>: 各nodeがどのevent graphに属するかを示すindex。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">waveform_x</span></code>: 各accepted pulse nodeに付いた4 channel waveform。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">detector_lids</span></code>: detector ID。detector embeddingを使う時だけ有効。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">pulse_x</span></code> と <code class="docutils literal notranslate"><span class="pre">pulse_node_index</span></code>: 旧schemaの追加pulse scalar用。現行schemaでは <code class="docutils literal notranslate"><span class="pre">pulse_features</span></code> は <code class="docutils literal notranslate"><span class="pre">node_index</span></code> のみで、pulse scalar encoderは無効。</p></li>
+</ul>
+<p>現行schemaでの主な次元は次の通りです。</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>tensor</p></th>
+<th class="head"><p>形</p></th>
+<th class="head"><p>意味</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">x</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[total_nodes,</span> <span class="pre">28]</span></code></p></td>
+<td><p>accepted pulse nodeのscalar features。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">edge_index</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[2,</span> <span class="pre">total_edges]</span></code></p></td>
+<td><p>directed edgeのsource/destination。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">edge_attr</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[total_edges,</span> <span class="pre">13]</span></code></p></td>
+<td><p>edgeごとの距離、時刻差、信号量差など。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">waveform_x</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[total_nodes,</span> <span class="pre">4,</span> <span class="pre">T]</span></code></p></td>
+<td><p>upper/lower raw windowとupper/lower accepted mask。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">batch</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[total_nodes]</span></code></p></td>
+<td><p>nodeが属するevent graphの番号。</p></td>
+</tr>
+</tbody>
+</table>
+<p>ここで <code class="docutils literal notranslate"><span class="pre">total_nodes</span></code> と <code class="docutils literal notranslate"><span class="pre">total_edges</span></code> は、mini-batch内の全event graphを連結した後の数です。</p>
+</section>
+<section id="node-encoder">
+<h3>node encoder<a class="headerlink" href="#node-encoder" title="Link to this heading"></a></h3>
+<p>最初に、各nodeのscalar featuresをニューラルネットワーク内部の表現へ変換します。
+現行モデルでは、node scalar featuresは28列です。
+これらはすでに人間が定義した物理量です。
+例えば、pulseの時刻とcharge、detectorの位置、detector内accepted pulse数、event内signal barycenterからの相対位置などです。</p>
+<p>この28次元の値をそのままmessage passingへ入れるのではなく、<code class="docutils literal notranslate"><span class="pre">node_encoder</span></code> でhidden dimensionへ写します。
+標準設定のhidden dimensionは192です。
+つまり、各accepted pulse nodeは最初に</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>28 scalar inputs + waveform embedding
+  -&gt; 192-dimensional node representation
+</pre></div>
+</div>
+<p>へ変換されます。</p>
+<p>この192次元表現は、個々の列の意味を保ったままの表ではありません。
+予測に使いやすいようにmodelが学習した内部表現です。
+以後のmessage passingでは、この192次元ベクトルを各nodeの状態として扱います。</p>
+</section>
+<section id="waveform-encoder">
+<h3>waveform encoder<a class="headerlink" href="#waveform-encoder" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">waveform_x</span></code> は各accepted pulse nodeに付いた4 channel waveformです。
+現行schemaは <code class="docutils literal notranslate"><span class="pre">rise_aligned_raw_plus_accepted_mask_v1</span></code> です。
+内容は次の4 channelです。</p>
+<ul class="simple">
+<li><p>upper raw window。</p></li>
+<li><p>lower raw window。</p></li>
+<li><p>upper accepted-pulse mask。</p></li>
+<li><p>lower accepted-pulse mask。</p></li>
+</ul>
+<p>raw windowは、accepted pulseのriseに合わせたFADC波形です。
+accepted maskは、同じ時間軸上でaccepted pulse区間を1、それ以外を0として表すmaskです。
+maskそのものはchargeではありません。
+model側では、必要に応じて <code class="docutils literal notranslate"><span class="pre">raw</span> <span class="pre">*</span> <span class="pre">mask</span></code> からaccepted pulse部分のshapeやcharge情報を作れます。</p>
+<p><code class="docutils literal notranslate"><span class="pre">WaveformEncoder</span></code> は、この4 channel時系列を短いベクトルへ圧縮します。
+標準の <code class="docutils literal notranslate"><span class="pre">cnn-gru</span></code> では、1次元CNNで局所的な波形形状を読み、その後GRUで時間方向の情報をまとめます。
+CNNは「近いbin同士の形」を見る処理、GRUは「時間順の変化」をまとめる処理です。</p>
+</section>
+<section id="detector-embedding">
+<h3>detector embedding<a class="headerlink" href="#detector-embedding" title="Link to this heading"></a></h3>
+<p>detector embeddingは、detector IDごとに学習される自由なベクトルです。
+しかし、現行の標準設定では <code class="docutils literal notranslate"><span class="pre">detector_embedding_dim=0</span></code> なので使いません。
+detectorごとの差は、IDそのものではなく、位置、局所配置、pedestal、waveform応答、edge関係から学習させます。</p>
+</section>
+<section id="time-edge-encoder">
+<h3>time-edge encoder<a class="headerlink" href="#time-edge-encoder" title="Link to this heading"></a></h3>
+<p>message passingの前に、<code class="docutils literal notranslate"><span class="pre">EdgeTimeDeltaEncoder</span></code> がedge特徴量のうち時刻差関連の列を処理します。
+現行実装では、edge featureの4列目から3列、すなわち</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>dt_usec, abs_dt_usec, dt_per_km
+</pre></div>
+</div>
+<p>をMLPへ入れ、destination nodeごとに平均してnode表現へ足します。
+これは、arrival time differenceを通常のedge messageよりも直接node表現へ入れるためです。
+空気シャワーの到来方向は時刻差に強く依存するため、この経路は物理的にも重要です。</p>
+</section>
+<section id="message-passing">
+<h3>message passing<a class="headerlink" href="#message-passing" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">GatedEdgeMessageLayer</span></code> がGNN本体です。
+directed edge <code class="docutils literal notranslate"><span class="pre">i</span> <span class="pre">-&gt;</span> <span class="pre">j</span></code> について、modelは次の3つを見ます。</p>
+<ul class="simple">
+<li><p>source node <code class="docutils literal notranslate"><span class="pre">i</span></code> の現在の表現 <code class="docutils literal notranslate"><span class="pre">h_i</span></code>。</p></li>
+<li><p>destination node <code class="docutils literal notranslate"><span class="pre">j</span></code> の現在の表現 <code class="docutils literal notranslate"><span class="pre">h_j</span></code>。</p></li>
+<li><p>edge feature <code class="docutils literal notranslate"><span class="pre">e_ij</span></code>。</p></li>
+</ul>
+<p>実装ではこれらを連結します。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>message_input = [h_i, h_j, e_ij]
+</pre></div>
+</div>
+<p>標準設定では <code class="docutils literal notranslate"><span class="pre">h_i</span></code> と <code class="docutils literal notranslate"><span class="pre">h_j</span></code> はそれぞれ192次元、edge featureは13次元です。
+したがって、message MLPの入力次元は</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>192 + 192 + 13 = 397
+</pre></div>
+</div>
+<p>です。</p>
+<p>messageは次の形で作られます。</p>
+<div class="math notranslate nohighlight">
+\[m_{i\rightarrow j}
+=
+M_{\mathrm{msg}}([h_i,h_j,e_{ij}])
+\cdot
+\sigma(M_{\mathrm{gate}}([h_i,h_j,e_{ij}])).\]</div>
+<p><code class="docutils literal notranslate"><span class="pre">M_msg</span></code> は「何を伝えるか」を作るMLPです。
+<code class="docutils literal notranslate"><span class="pre">M_gate</span></code> は「どれだけ通すか」を作るMLPです。
+sigmoidを通すため、gateは0から1に近い値になります。
+gateが小さければ、そのedgeから来るmessageは弱くなります。
+gateが大きければ、そのedgeのmessageは強く通ります。</p>
+<p>destination node <code class="docutils literal notranslate"><span class="pre">j</span></code> は、入ってくるmessageを2通りで集約します。</p>
+<ul class="simple">
+<li><p>mean aggregate: 入ってくるmessageの平均。周囲全体の平均的な状況を表す。</p></li>
+<li><p>max aggregate: 各成分について最大のmessage。強く特徴的な近傍を拾う。</p></li>
+</ul>
+<p>その後、現在のnode表現、mean aggregate、max aggregateを連結し、MLPで更新量を作ります。
+更新は残差接続を持ちます。</p>
+<div class="math notranslate nohighlight">
+\[h_j' =
+\mathrm{LayerNorm}
+\left(
+  h_j +
+  M_{\mathrm{update}}([h_j,\overline{m}_j,m_j^{\max}])
+\right).\]</div>
+<p>さらにfeed-forward network（FFN）をもう一度通して、</p>
+<div class="math notranslate nohighlight">
+\[h_j^{\mathrm{out}} = h_j' + \mathrm{FFN}(h_j')\]</div>
+<p>とします。
+残差接続は、元の情報を完全に消さずに新しい情報を足すための構造です。
+深いnetworkで勾配を流しやすくする役割もあります。</p>
+<p>このlayerを5回繰り返します。
+1回のmessage passingでは直接つながったnodeの情報だけが入ります。
+5回繰り返すと、edgeで5 step以内の範囲から情報が伝わります。
+つまり、各node表現は「そのpulse単体の情報」から「周囲のpulseとの時空間的整合性を含んだ情報」へ変わります。</p>
+</section>
+<section id="readouthead">
+<h3>readoutとhead<a class="headerlink" href="#readouthead" title="Link to this heading"></a></h3>
+<p>node表現はgraph単位にpoolingされます。
+ここでのpoolingは、node数がeventごとに違っても、固定次元のevent vectorを作るための処理です。</p>
+<p><code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN</span></code> は次を連結します。</p>
+<ul class="simple">
+<li><p>全nodeのmean pooling。</p></li>
+<li><p>全nodeのmax pooling。</p></li>
+<li><p>4個のattention readout head。</p></li>
+</ul>
+<p>mean poolingはevent全体の平均的な状態を表します。
+max poolingはevent内で最も強い特徴を拾います。
+attention readoutは、headごとにnodeへ重みを付けて加重平均します。
+どのnodeを重視するかは学習で決まります。</p>
+<p>hidden dimensionが192、attention headが4個なので、event vectorの次元は</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>192 * (2 + 4) = 1152
+</pre></div>
+</div>
+<p>です。</p>
+<p>この1152次元event vectorをshared MLPへ入れ、最終的なheadへ渡します。</p>
+<p>出力head:</p>
+<ul class="simple">
+<li><p>reconstruction head: <code class="docutils literal notranslate"><span class="pre">log10_energy_eV</span></code>、<code class="docutils literal notranslate"><span class="pre">core_x_km</span></code>、<code class="docutils literal notranslate"><span class="pre">core_y_km</span></code>、<code class="docutils literal notranslate"><span class="pre">dir_x</span></code>、<code class="docutils literal notranslate"><span class="pre">dir_y</span></code>、<code class="docutils literal notranslate"><span class="pre">dir_z</span></code> を出す。</p></li>
+<li><p>mass classification head: proton/iron分類用のmass logitを出す。</p></li>
+<li><p>quality head: reconstruction品質を表すquality logitを出す。</p></li>
+<li><p>error head: error prediction用のraw値を出す。現行標準では無効。</p></li>
+</ul>
+<p>どのheadを使うかは <code class="docutils literal notranslate"><span class="pre">training_task</span></code>、<code class="docutils literal notranslate"><span class="pre">mass_classification</span></code>、<code class="docutils literal notranslate"><span class="pre">quality_prediction</span></code>、<code class="docutils literal notranslate"><span class="pre">error_prediction</span></code> で決まります。</p>
+</section>
+<section id="id7">
+<h3>GNNがしていること、していないこと<a class="headerlink" href="#id7" title="Link to this heading"></a></h3>
+<p>GNNがしていること:</p>
+<ul class="simple">
+<li><p>accepted pulseごとの入力を192次元の内部表現へ変換する。</p></li>
+<li><p>edgeでつながった別detectorのpulseから、距離、時刻差、信号量差を考慮したmessageを受け取る。</p></li>
+<li><p>そのmessageを5層分繰り返し、node表現へ周囲の時空間的整合性を埋め込む。</p></li>
+<li><p>全nodeをevent vectorへまとめ、event全体の物理量を予測する。</p></li>
+</ul>
+<p>GNNがしていないこと:</p>
+<ul class="simple">
+<li><p>plane fitやLDF fitを明示的に解いているわけではない。</p></li>
+<li><p>detector平面を画像としてCNNに入れているわけではない。</p></li>
+<li><p>同一detector内のpulse node同士をedgeで直接つないでいるわけではない。</p></li>
+<li><p>detector ID embeddingを標準で使っているわけではない。</p></li>
+</ul>
+<p>したがって、このモデルは「物理式をそのまま実装した再構成器」ではありません。
+物理的に意味のある入力とedgeを与え、message passingによって、event全体の再構成に有用な表現を学習するmodelです。</p>
+</section>
+</section>
+<section id="id8">
+<h2>loss<a class="headerlink" href="#id8" title="Link to this heading"></a></h2>
+<p>loss定義は <code class="docutils literal notranslate"><span class="pre">train.py</span></code> にまとまっています。
+lossは、modelの予測と正解のずれを1つの数値にしたものです。
+学習では、このlossを小さくするようにmodelの重みを更新します。</p>
+<p>ここで重要なのは、lossは評価指標そのものではないという点です。
+例えばcore lossは <code class="docutils literal notranslate"><span class="pre">core_loss_scale_km</span></code> で正規化され、direction lossは角度scaleで正規化されます。
+これは学習を安定させ、energy、core、directionの寄与を調整するためです。
+最終的な性能は、diagnosticsで出すenergy resolution、core resolution、angular resolution、mass accuracyなどで確認します。</p>
+<section id="reconstruction-loss">
+<h3>reconstruction loss<a class="headerlink" href="#reconstruction-loss" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">_reconstruction_loss</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py</span></code> が再構成lossです。
+<code class="docutils literal notranslate"><span class="pre">loss_mode=physics</span></code> では、targetを物理量へ戻してから、energy、core、directionを別々に評価します。</p>
+<p>現行targetは6成分です。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>y = [log10_energy_eV, core_x_km, core_y_km, dir_x, dir_y, dir_z]
+</pre></div>
+</div>
+<p>modelは標準化されたtarget空間で値を出しますが、<code class="docutils literal notranslate"><span class="pre">loss_mode=physics</span></code> では、いったん物理単位へ戻してからlossを計算します。
+これは、<code class="docutils literal notranslate"><span class="pre">log10E</span></code>、km単位のcore、unit vectorのdirectionを、それぞれ物理的に意味のある誤差として扱うためです。</p>
+<p>physics reconstruction lossは、概念的には次の形です。</p>
+<div class="math notranslate nohighlight">
+\[L_{\mathrm{reco}}
+=
+w_E L_E
++ w_c L_c
++ w_{\theta} L_{\theta}.\]</div>
+<p>energy termは <code class="docutils literal notranslate"><span class="pre">log10E</span></code> の差です。</p>
+<div class="math notranslate nohighlight">
+\[L_E
+=
+\mathrm{SmoothL1}_{\beta=0.05}
+(\widehat{\log_{10}E}-\log_{10}E).\]</div>
+<p><code class="docutils literal notranslate"><span class="pre">log10E</span></code> を使う理由は、宇宙線energyが桁で広がる量だからです。
+絶対energy差ではなく対数差を見ることで、低energyと高energyを同じ相対的な意味で扱いやすくなります。</p>
+<p>core termは、地表面上のxy core誤差です。</p>
+<div class="math notranslate nohighlight">
+\[L_c
+=
+\left\langle
+  \left(\frac{\hat{x}_c-x_c}{s_c}\right)^2
+  +
+  \left(\frac{\hat{y}_c-y_c}{s_c}\right)^2
+\right\rangle.\]</div>
+<p><code class="docutils literal notranslate"><span class="pre">s_c</span></code> が <code class="docutils literal notranslate"><span class="pre">core_loss_scale_km</span></code> です。
+現在の標準値は <code class="docutils literal notranslate"><span class="pre">0.05</span> <span class="pre">km</span></code> です。
+これは「50 m程度のcore誤差をloss上でどれくらい重く見るか」を決めるscaleです。
+<code class="docutils literal notranslate"><span class="pre">s_c</span></code> を大きくすると、同じcore誤差でもlossへの寄与は小さくなります。</p>
+<p>direction termは、予測方向ベクトルと正解方向ベクトルのなす角を使います。
+到来方向は本質的には角度なので、単純な成分ごとの差より、角度誤差で評価する方が物理的に自然です。</p>
+<div class="math notranslate nohighlight">
+\[\alpha
+=
+\arccos
+\left(
+  \frac{\hat{\mathbf{n}}\cdot\mathbf{n}}
+       {|\hat{\mathbf{n}}||\mathbf{n}|}
+\right),
+\qquad
+L_{\theta}
+=
+\mathrm{SmoothL1}_{\beta=1}
+\left(
+  \frac{\alpha}{s_{\theta}}
+\right).\]</div>
+<p><code class="docutils literal notranslate"><span class="pre">s_theta</span></code> は <code class="docutils literal notranslate"><span class="pre">angular_loss_scale_deg</span></code> で、現在の標準値は1度です。</p>
+</section>
+<section id="energy-bias-loss">
+<h3>energy bias loss<a class="headerlink" href="#energy-bias-loss" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">_energy_bin_bias_loss</span></code> は、true energy binごとの平均energy residualを0へ寄せます。</p>
+<div class="math notranslate nohighlight">
+\[b_k
+=
+\left\langle
+  \widehat{\log_{10}E}-\log_{10}E
+\right\rangle_{\mathrm{bin}\ k},
+\qquad
+L_{\mathrm{energy\ bias}}
+=
+\left\langle b_k^2 \right\rangle_k.\]</div>
+<p>これは、全体のRMSEだけでなく、特定のenergy binで系統的に高く予測する、または低く予測する傾向を抑えるためです。
+<code class="docutils literal notranslate"><span class="pre">ENERGY_BIAS_WEIGHT</span></code> が正の時だけtotal lossへ足されます。</p>
+<p><code class="docutils literal notranslate"><span class="pre">_energy_particle_bias_loss</span></code> は、同じtrue energy bin内でprotonとironの平均energy residual差を小さくします。</p>
+<div class="math notranslate nohighlight">
+\[\Delta b_k
+=
+\left\langle r_E \right\rangle_{k,\mathrm{Fe}}
+-
+\left\langle r_E \right\rangle_{k,\mathrm{p}},
+\qquad
+r_E = \widehat{\log_{10}E}-\log_{10}E.\]</div>
+<p>massによってenergy再構成が系統的にずれると、reconstruction結果を物理的に解釈しにくくなります。
+このlossは、その粒子種依存のbiasを抑えるための項です。</p>
+<p>core scaleを変えると、同じcore誤差でもloss上の重みが変わります。
+現在の既定は <code class="docutils literal notranslate"><span class="pre">0.05</span> <span class="pre">km</span></code> です。</p>
+</section>
+<section id="quality-loss">
+<h3>quality loss<a class="headerlink" href="#quality-loss" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">_quality_targets_from_reconstruction</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py</span></code> が、再構成誤差からsoft quality targetを作ります。
+<code class="docutils literal notranslate"><span class="pre">_quality_prediction_loss</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py</span></code> はquality logitとsoft targetのBCEWithLogitsです。</p>
+<p>ここでのtargetはmass labelではありません。
+再構成がどの程度良いかを表す連続値です。</p>
+<p>quality targetは、energy、core、directionの再構成誤差から作ります。</p>
+<div class="math notranslate nohighlight">
+\[q_{\mathrm{target}}
+=
+\exp
+\left[
+  -\frac{1}{3}
+  \left(
+    s_E + s_c + s_{\theta}
+  \right)
+\right].\]</div>
+<p>ここで、<code class="docutils literal notranslate"><span class="pre">s_E</span></code>、<code class="docutils literal notranslate"><span class="pre">s_c</span></code>、<code class="docutils literal notranslate"><span class="pre">s_theta</span></code> は、それぞれenergy、core、directionの誤差を設定scaleで割ったものです。
+誤差が小さいeventでは <code class="docutils literal notranslate"><span class="pre">q_target</span></code> は1に近くなります。
+誤差が大きいeventでは0に近くなります。</p>
+<p>quality headは <code class="docutils literal notranslate"><span class="pre">q_target</span></code> を直接出すのではなく、quality logitを出します。
+そのlogitとsoft targetに対してBCEWithLogitsを計算します。
+quality targetは予測から作られますが、<code class="docutils literal notranslate"><span class="pre">detach</span></code> されるため、quality lossがreconstruction predictionそのものを直接変えるわけではありません。
+quality headに「このeventの再構成は良さそうか」を学習させるための補助lossです。</p>
+</section>
+<section id="mass-loss">
+<h3>mass loss<a class="headerlink" href="#mass-loss" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">_mass_classification_loss</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py</span></code> がmass分類lossです。
+<code class="docutils literal notranslate"><span class="pre">bce</span></code> と <code class="docutils literal notranslate"><span class="pre">focal</span></code> を扱います。
+必要ならranking lossも足します。</p>
+<p>mass-onlyではreconstruction targetを答えとして使うのではなく、<code class="docutils literal notranslate"><span class="pre">particle_label</span></code> だけで分類します。
+mass accuracyが頭打ちになる場合は、score separation、energy bin別accuracy、input feature group寄与、classification head容量を確認します。</p>
+<p>mass headは1つのlogit <code class="docutils literal notranslate"><span class="pre">z</span></code> を出します。
+sigmoidを通した</p>
+<div class="math notranslate nohighlight">
+\[p(\mathrm{Fe}) = \sigma(z)\]</div>
+<p>をironらしさのscoreとして扱います。
+labelはprotonが0、ironが1です。</p>
+<p>BCE modeでは、各eventについて</p>
+<div class="math notranslate nohighlight">
+\[L_{\mathrm{BCE}}
+=
+-y\log\sigma(z)
+-(1-y)\log(1-\sigma(z))\]</div>
+<p>を計算し、batch平均を取ります。</p>
+<p>focal modeでは、分類しやすいeventの寄与を弱め、分類しにくいeventを相対的に重くします。</p>
+<div class="math notranslate nohighlight">
+\[L_{\mathrm{focal}}
+=
+(1-p_t)^\gamma L_{\mathrm{BCE}},\]</div>
+<p>where <code class="docutils literal notranslate"><span class="pre">p_t</span></code> は正解classに対する予測確率です。
+正解に自信を持っているeventでは <code class="docutils literal notranslate"><span class="pre">p_t</span></code> が1に近くなり、<code class="docutils literal notranslate"><span class="pre">(1-p_t)^\gamma</span></code> が小さくなります。</p>
+<p>ranking lossは、iron logitがproton logitより十分大きくなるように促します。</p>
+<div class="math notranslate nohighlight">
+\[L_{\mathrm{rank}}
+=
+\left\langle
+  \mathrm{softplus}
+  \left(
+    m - (z_{\mathrm{Fe}}-z_{\mathrm{p}})
+  \right)
+\right\rangle.\]</div>
+<p><code class="docutils literal notranslate"><span class="pre">m</span></code> はmarginです。
+ironとprotonのscore separationを広げたい時に使います。</p>
+</section>
+<section id="total-loss">
+<h3>total loss<a class="headerlink" href="#total-loss" title="Link to this heading"></a></h3>
+<p>reconstructionとmassを同時に学習する時は、複数のlossを重み付きで足します。</p>
+<div class="math notranslate nohighlight">
+\[L_{\mathrm{total}}
+=
+L_{\mathrm{reco}}
++ w_q L_q
++ w_m L_{\mathrm{mass}}
++ w_b L_{\mathrm{energy\ bias}}
++ w_{pb} L_{\mathrm{particle\ bias}}.\]</div>
+<p>有効になる項は設定で変わります。
+例えば、<code class="docutils literal notranslate"><span class="pre">quality_prediction=0</span></code> ならquality lossは入りません。
+<code class="docutils literal notranslate"><span class="pre">mass_classification=0</span></code> ならmass lossは入りません。</p>
+<p>lossの重みは、どの物理量をどれだけ重視して学習させるかを決めます。
+ただし、重みを変えると最適化問題そのものが変わるため、過去runとの比較では必ず設定を記録します。</p>
+</section>
+</section>
+<section id="id9">
+<h2>診断と評価<a class="headerlink" href="#id9" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/diagnostics.py</span></code> は学習後の図とsummaryを作ります。
+主要入口は <code class="docutils literal notranslate"><span class="pre">save_training_diagnostics</span></code> : <code class="docutils literal notranslate"><span class="pre">diagnostics.py:2463</span></code> です。</p>
+<p>主な出力:</p>
+<ul class="simple">
+<li><p>learning curve。</p></li>
+<li><p>reconstruction精度のenergy dependence。</p></li>
+<li><p>angular/core/energy resolution。</p></li>
+<li><p>quality cut performance。</p></li>
+<li><p>mass ROC、confusion matrix、score distribution。</p></li>
+<li><p>JSON summary。</p></li>
+</ul>
+<p>best validation checkpointを読み戻してからvalidation/testの評価を行うため、最後のepochではなくbest epochの性能がdiagnosticsに反映されます。</p>
+</section>
+<section id="feature-importance">
+<h2>入力分布とfeature importance<a class="headerlink" href="#feature-importance" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/feature_analysis.py</span></code> は、再学習を大量に回さず入力特徴量の確認をするためのmoduleです。</p>
+<section id="id10">
+<h3>入力分布<a class="headerlink" href="#id10" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">save_input_distributions</span></code> : <code class="docutils literal notranslate"><span class="pre">feature_analysis.py:133</span></code> はHDF5 graphを読み、node、edge、pulse、targetなどの分布をPDF/JSONへ出します。
+featureを削る前に、まずここで分布、外れ値、energy/particleとの関係を見ます。</p>
+</section>
+<section id="feature-group">
+<h3>feature group重要度<a class="headerlink" href="#feature-group" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">save_feature_group_importance</span></code> : <code class="docutils literal notranslate"><span class="pre">feature_analysis.py:352</span></code> はcheckpointを読み、validation/test split上でfeature group ablationを行います。</p>
+<p>流れ:</p>
+<ol class="arabic simple">
+<li><p>checkpointからmodel config、scaler、splitを復元する。</p></li>
+<li><p>通常入力でbaseline metricsを計算する。</p></li>
+<li><p>feature groupごとに値を平均置換またはzero化する。</p></li>
+<li><p>metricsの悪化量を計算する。</p></li>
+<li><p>JSON/PDFへ保存する。</p></li>
+</ol>
+<p>これは再学習を伴わないpost-hoc評価です。
+相関の強い入力群がすべて必要かを調べる時は、まずこの結果を見ます。
+ただし、ablationは「その学習済みモデルにとっての使用度」を見るもので、特徴量を削って再学習した時の最終性能を直接保証するものではありません。</p>
+</section>
+</section>
+<section id="id11">
+<h2>変更したい時に読む場所<a class="headerlink" href="#id11" title="Link to this heading"></a></h2>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>変更したい内容</p></th>
+<th class="head"><p>最初に読む場所</p></th>
+<th class="head"><p>注意</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>node特徴量を増減する</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">event_graph._build_node_features</span></code>、<code class="docutils literal notranslate"><span class="pre">event_graph.graph_columns</span></code></p></td>
+<td><p>HDF5 schemaとcheckpoint互換性に影響する。</p></td>
+</tr>
+<tr class="row-odd"><td><p>edge特徴量を変える</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">event_graph._build_edges</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">edge_feature_dim</span></code> とmodel入力に影響する。</p></td>
+</tr>
+<tr class="row-even"><td><p>waveformの扱いを変える</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">event_graph</span></code> のwaveform抽出、<code class="docutils literal notranslate"><span class="pre">model.WaveformEncoder</span></code></p></td>
+<td><p>collateの <code class="docutils literal notranslate"><span class="pre">waveform_features</span></code> shapeも確認する。</p></td>
+</tr>
+<tr class="row-odd"><td><p>splitを変える</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">train.split_indices*</span></code></p></td>
+<td><p>旧runとの比較ではsplit modeを必ず記録する。</p></td>
+</tr>
+<tr class="row-even"><td><p>lossを変える</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">train._reconstruction_loss</span></code>、<code class="docutils literal notranslate"><span class="pre">train._quality_prediction_loss</span></code>、<code class="docutils literal notranslate"><span class="pre">train._mass_classification_loss</span></code></p></td>
+<td><p>full training前に小さいbatchでforward/loss smokeを通す。</p></td>
+</tr>
+<tr class="row-odd"><td><p>model headを変える</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">model.PhysicsTaleSdGNN</span></code></p></td>
+<td><p>checkpoint config、出力分割、loss側も同時に確認する。</p></td>
+</tr>
+<tr class="row-even"><td><p>diagnostics図を変える</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">diagnostics.save_training_diagnostics</span></code> と周辺のplot関数</p></td>
+<td><p>学習本体に影響しないが、評価解釈に影響する。</p></td>
+</tr>
+<tr class="row-odd"><td><p>Slurm投入条件を変える</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">scripts/submit_server_*</span></code></p></td>
+<td><p>graph、task、loss、epochを意図せず変えない。</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id12">
+<h2>コードを読む推奨順<a class="headerlink" href="#id12" title="Link to this heading"></a></h2>
+<p>初めて読む場合は、次の順で読むと依存関係を追いやすいです。</p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">cli.py</span></code> の <code class="docutils literal notranslate"><span class="pre">build_parser</span></code> と <code class="docutils literal notranslate"><span class="pre">_cmd_train</span></code> を読む。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">train.py</span></code> の <code class="docutils literal notranslate"><span class="pre">train_model</span></code> のstage順を読む。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">dataset.py</span></code> の <code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> と <code class="docutils literal notranslate"><span class="pre">collate_graph_arrays</span></code> を読む。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">model.py</span></code> の <code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN</span></code> を読む。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">train.py</span></code> のloss関数を読む。</p></li>
+<li><p>HDF5作成を理解するために <code class="docutils literal notranslate"><span class="pre">dst_reader.py</span></code>、<code class="docutils literal notranslate"><span class="pre">event_graph.py</span></code>、<code class="docutils literal notranslate"><span class="pre">graph_io.py</span></code> を読む。</p></li>
+<li><p>評価図を理解するために <code class="docutils literal notranslate"><span class="pre">diagnostics.py</span></code> と <code class="docutils literal notranslate"><span class="pre">feature_analysis.py</span></code> を読む。</p></li>
+</ol>
+<p>この順番なら、学習で使われる入力、モデル、loss、出力、diagnosticsの対応が見えます。</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="cli.html" class="btn btn-neutral float-left" title="CLI API" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="python_api.html" class="btn btn-neutral float-right" title="Python API" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright .</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,354 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="ja" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Python API &mdash; TALE-SD GNN Reconstruction 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=751d28fa" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=98e9f989"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../_static/translations.js?v=4755f45a"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="検索" href="../search.html" />
+    <link rel="next" title="サーバー実行フロー" href="server_workflow.html" />
+    <link rel="prev" title="コード詳細 walkthrough" href="code_walkthrough.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            TALE-SD GNN Reconstruction
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">日本語</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">日本語 API 利用ガイド</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="cli.html">CLI API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html">コード詳細 walkthrough</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id1">全体の入口</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#hdf5-graph-export">HDF5 graph export</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#dst">DST読み込み</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#graphevent">GraphEvent作成</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#node">node特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#edge">edge特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#hdf5">HDF5書き込み</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#energy-flat-samplingshard">energy-flat samplingとshard</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#dataset">学習用dataset読み込み</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#h5graphdataset-dataset-py-181"><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:181</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#getitem-sample"><code class="docutils literal notranslate"><span class="pre">__getitem__</span></code> が返すsample</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#scaler-fitting">Scaler fitting</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#collate">collate</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#train-val-test-split">train/val/test split</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id2">学習本体</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#epoch-loop">epoch loop</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#checkpoint">checkpoint</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id3">モデル構造</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id4">入力</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#node-pulse-waveform">node / pulse / waveform</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#message-passing">message passing</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#readouthead">readoutとhead</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#loss">loss</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#reconstruction-loss">reconstruction loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#quality-loss">quality loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#mass-loss">mass loss</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id5">診断と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#feature-importance">入力分布とfeature importance</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id6">入力分布</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#feature-group">feature group重要度</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id7">変更したい時に読む場所</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id8">コードを読む推奨順</a></li>
+</ul>
+</li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Python API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id1">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#hdf5-dataset">HDF5 datasetの読み込み</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id2">推論</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id3">入力分布</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#group">特徴量group重要度</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#hdf5-graph">HDF5 graphの手動作成</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="server_workflow.html">サーバー実行フロー</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#submitter">標準submitter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#quality-only">再構成quality-onlyの例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#mass-focal">mass focalの例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#id2">注意点</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">English</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../en/index.html">English API Usage Guide</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../en/cli.html">CLI API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#input-distributions">Input distributions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/code_walkthrough.html">Code walkthrough</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#top-level-entry-point">Top-level entry point</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#hdf5-graph-export">HDF5 graph export</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#dst-reading">DST reading</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#graphevent-creation">GraphEvent creation</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#node-and-edge-features">Node and edge features</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#hdf5-schema">HDF5 schema</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#energy-flat-sampling-and-shards">Energy-flat sampling and shards</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#dataset-and-batching">Dataset and batching</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#train-validation-test-split">Train/validation/test split</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#training">Training</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#epoch-loop">Epoch loop</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#checkpoint-contents">Checkpoint contents</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#model">Model</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#loss-functions">Loss functions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#diagnostics">Diagnostics</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#input-distributions-and-feature-importance">Input distributions and feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#where-to-read-when-changing-code">Where to read when changing code</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#recommended-reading-order">Recommended reading order</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/python_api.html">Python API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#hdf5-dataset-loading">HDF5 dataset loading</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#input-distributions">Input distributions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#feature-group-importance">Feature group importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#manual-hdf5-graph-writing">Manual HDF5 graph writing</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/server_workflow.html">Server Workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#standard-submitters">Standard submitters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#mass-focal-example">Mass focal example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#rules">Rules</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../reference.html">Python Reference</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.train">Training</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.dataset">Dataset</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.predict">Prediction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.feature_analysis">Feature analysis</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.event_graph">Graph construction and I/O</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.model">Model</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../reference.html#talesd_gnn_reconstruction.model.PhysicsTaleSdGNN"><code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../reference.html#talesd_gnn_reconstruction.model.PhysicsTaleSdGNN.forward"><code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN.forward()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TALE-SD GNN Reconstruction</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">日本語 API 利用ガイド</a></li>
+      <li class="breadcrumb-item active">Python API</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/ja/python_api.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="python-api">
+<h1>Python API<a class="headerlink" href="#python-api" title="Link to this heading"></a></h1>
+<p>CLIではなくPythonから直接呼ぶ場合の主要入口です。大量学習ではSlurm submitterを使い、notebookや小規模検証ではここに示すAPIを使います。</p>
+<section id="id1">
+<h2>学習<a class="headerlink" href="#id1" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">talesd_gnn_reconstruction.train</span><span class="w"> </span><span class="kn">import</span> <span class="n">train_model</span>
+
+<span class="n">result</span> <span class="o">=</span> <span class="n">train_model</span><span class="p">(</span>
+    <span class="n">graphs_path</span><span class="o">=</span><span class="s2">&quot;/path/to/graphs/flat50000&quot;</span><span class="p">,</span>
+    <span class="n">output_path</span><span class="o">=</span><span class="s2">&quot;/path/to/checkpoints/reconstruction.pt&quot;</span><span class="p">,</span>
+    <span class="n">epochs</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span>
+    <span class="n">batch_size</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
+    <span class="n">training_task</span><span class="o">=</span><span class="s2">&quot;reconstruction&quot;</span><span class="p">,</span>
+    <span class="n">model_architecture</span><span class="o">=</span><span class="s2">&quot;physics&quot;</span><span class="p">,</span>
+    <span class="n">waveform_encoder</span><span class="o">=</span><span class="s2">&quot;cnn-gru&quot;</span><span class="p">,</span>
+    <span class="n">loss_mode</span><span class="o">=</span><span class="s2">&quot;physics&quot;</span><span class="p">,</span>
+    <span class="n">quality_prediction</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">split_mode</span><span class="o">=</span><span class="s2">&quot;source-stratified&quot;</span><span class="p">,</span>
+    <span class="n">val_fraction</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>
+    <span class="n">test_fraction</span><span class="o">=</span><span class="mf">0.10</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">train_model</span></code> はdataset初期化、split、scaler fitting、DataLoader作成、学習、validation、best checkpoint保存、test評価、diagnostics作成までをまとめて実行します。</p>
+</section>
+<section id="hdf5-dataset">
+<h2>HDF5 datasetの読み込み<a class="headerlink" href="#hdf5-dataset" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">talesd_gnn_reconstruction.dataset</span><span class="w"> </span><span class="kn">import</span> <span class="n">H5GraphDataset</span>
+
+<span class="n">dataset</span> <span class="o">=</span> <span class="n">H5GraphDataset</span><span class="p">(</span>
+    <span class="s2">&quot;/path/to/graphs/flat50000&quot;</span><span class="p">,</span>
+    <span class="n">require_target</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">load_particle_label</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">sample</span> <span class="o">=</span> <span class="n">dataset</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">dataset</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">sample</span></code> には <code class="docutils literal notranslate"><span class="pre">node_features</span></code>、<code class="docutils literal notranslate"><span class="pre">edge_features</span></code>、<code class="docutils literal notranslate"><span class="pre">waveform_features</span></code>、<code class="docutils literal notranslate"><span class="pre">target</span></code>、metadataが入ります。</p>
+</section>
+<section id="id2">
+<h2>推論<a class="headerlink" href="#id2" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">talesd_gnn_reconstruction.predict</span><span class="w"> </span><span class="kn">import</span> <span class="n">predict_graphs</span>
+
+<span class="n">csv_path</span> <span class="o">=</span> <span class="n">predict_graphs</span><span class="p">(</span>
+    <span class="n">graphs_path</span><span class="o">=</span><span class="s2">&quot;/path/to/graphs/data_graphs.h5&quot;</span><span class="p">,</span>
+    <span class="n">checkpoint_path</span><span class="o">=</span><span class="s2">&quot;/path/to/checkpoints/reconstruction.pt&quot;</span><span class="p">,</span>
+    <span class="n">output_csv</span><span class="o">=</span><span class="s2">&quot;/path/to/predictions.csv&quot;</span><span class="p">,</span>
+    <span class="n">batch_size</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="id3">
+<h2>入力分布<a class="headerlink" href="#id3" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">talesd_gnn_reconstruction.feature_analysis</span><span class="w"> </span><span class="kn">import</span> <span class="n">save_input_distributions</span>
+
+<span class="n">summary</span> <span class="o">=</span> <span class="n">save_input_distributions</span><span class="p">(</span>
+    <span class="n">graphs_path</span><span class="o">=</span><span class="s2">&quot;/path/to/graphs/flat50000&quot;</span><span class="p">,</span>
+    <span class="n">output_dir</span><span class="o">=</span><span class="s2">&quot;/path/to/input_distributions&quot;</span><span class="p">,</span>
+    <span class="n">max_graphs</span><span class="o">=</span><span class="mi">100000</span><span class="p">,</span>
+    <span class="n">show_progress</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="group">
+<h2>特徴量group重要度<a class="headerlink" href="#group" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">talesd_gnn_reconstruction.feature_analysis</span><span class="w"> </span><span class="kn">import</span> <span class="n">save_feature_group_importance</span>
+
+<span class="n">result</span> <span class="o">=</span> <span class="n">save_feature_group_importance</span><span class="p">(</span>
+    <span class="n">graphs_path</span><span class="o">=</span><span class="s2">&quot;/path/to/graphs/flat50000&quot;</span><span class="p">,</span>
+    <span class="n">checkpoint_path</span><span class="o">=</span><span class="s2">&quot;/path/to/checkpoints/reconstruction.pt&quot;</span><span class="p">,</span>
+    <span class="n">output_dir</span><span class="o">=</span><span class="s2">&quot;/path/to/feature_importance&quot;</span><span class="p">,</span>
+    <span class="n">split</span><span class="o">=</span><span class="s2">&quot;validation&quot;</span><span class="p">,</span>
+    <span class="n">max_graphs</span><span class="o">=</span><span class="mi">50000</span><span class="p">,</span>
+    <span class="n">batch_size</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="hdf5-graph">
+<h2>HDF5 graphの手動作成<a class="headerlink" href="#hdf5-graph" title="Link to this heading"></a></h2>
+<p>通常は <code class="docutils literal notranslate"><span class="pre">talesd-gnn</span> <span class="pre">export</span></code> を使います。手動でgraphを書き込む場合の低レベルAPIは以下です。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">talesd_gnn_reconstruction.graph_io</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_graph_file</span><span class="p">,</span> <span class="n">write_graph</span>
+
+<span class="k">with</span> <span class="n">create_graph_file</span><span class="p">(</span><span class="s2">&quot;/path/to/graphs.h5&quot;</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;kind&quot;</span><span class="p">:</span> <span class="s2">&quot;mc&quot;</span><span class="p">})</span> <span class="k">as</span> <span class="n">handle</span><span class="p">:</span>
+    <span class="n">write_graph</span><span class="p">(</span><span class="n">handle</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">graph_event</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">graph_event</span></code> は <code class="docutils literal notranslate"><span class="pre">event_graph.build_graph_event</span></code> が返す <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> です。</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="code_walkthrough.html" class="btn btn-neutral float-left" title="コード詳細 walkthrough" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="server_workflow.html" class="btn btn-neutral float-right" title="サーバー実行フロー" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright .</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
