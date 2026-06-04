@@ -18,11 +18,12 @@
       <script src="../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
       <script src="../_static/translations.js?v=4755f45a"></script>
+      <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-mml-chtml.js"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="検索" href="../search.html" />
     <link rel="next" title="Python API" href="python_api.html" />
-    <link rel="prev" title="CLI API" href="cli.html" /> 
+    <link rel="prev" title="Code Reading Map" href="code_map.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -56,6 +57,18 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="../ja/code_map.html">コード読解マップ</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#id2">読む順番</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#cli-wrapper">CLI は薄い wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#dataset">Dataset 読み込み</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#split-scaler">Split と scaler</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#model">Model の入力と出力</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#loss">Loss と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#server-submitter">Server submitter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#diagnostics">Diagnostics と後処理</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="../ja/code_walkthrough.html">コード詳細 walkthrough</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id1">このページの読み方</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#gnn">GNNを読むための基礎</a><ul>
@@ -68,52 +81,69 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#hdf5-graph-export">HDF5 graph export</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#dst">DST読み込み</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#graphevent">GraphEvent作成</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#graphevent-build-graph-event">実コード抜粋: <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> と <code class="docutils literal notranslate"><span class="pre">build_graph_event</span></code></a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#node">node特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#accepted-pulsenode">実コード抜粋: accepted pulseをnodeへ展開する部分</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#edge">edge特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#edgeedge">実コード抜粋: edge候補とedge特徴量</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#hdf5">HDF5書き込み</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#energy-flat-samplingshard">energy-flat samplingとshard</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#dataset">学習用dataset読み込み</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#h5graphdataset-dataset-py-181"><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:181</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#h5graphdataset-dataset-py-202"><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:202</span></code></a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#getitem-sample"><code class="docutils literal notranslate"><span class="pre">__getitem__</span></code> が返すsample</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#hdf51-event">実コード抜粋: HDF5から1 eventを読む部分</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#scaler-fitting">Scaler fitting</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#collate">collate</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#graph-samplemini-batch">実コード抜粋: graph sampleをmini-batchへ連結する部分</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#train-val-test-split">train/val/test split</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id4">学習本体</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#train-model-split-scaler">実コード抜粋: <code class="docutils literal notranslate"><span class="pre">train_model</span></code> の入口からsplit/scalerまで</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#epoch-loop">epoch loop</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#epochtrain-loop">実コード抜粋: 1 epoch内のtrain loop</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#checkpoint">checkpoint</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id5">モデル構造</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id6">入力</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id6">GNNとして何を近似しているか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id7">物理量との対応</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id8">入力</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#node-encoder">node encoder</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#waveform-encoder">waveform encoder</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#detector-embedding">detector embedding</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#time-edge-encoder">time-edge encoder</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#message-passing">message passing</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#readouthead">readoutとhead</a></li>
-<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id7">GNNがしていること、していないこと</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#physicstalesdgnn-forward">実コード抜粋: <code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN.forward</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id9">GNNがしていること、していないこと</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id8">loss</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id10">数学関数の補足</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#smoothl1">SmoothL1</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#sigmoid-logit-bcewithlogits">sigmoid, logit, BCEWithLogits</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id11">loss</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#reconstruction-loss">reconstruction loss</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#energy-bias-loss">energy bias loss</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#quality-loss">quality loss</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#mass-loss">mass loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id12">実コード抜粋: loss関数</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#total-loss">total loss</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id9">診断と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id13">診断と評価</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#feature-importance">入力分布とfeature importance</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id10">入力分布</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id14">入力分布</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#feature-group">feature group重要度</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#feature-group-ablation">実コード抜粋: feature group ablation</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id11">変更したい時に読む場所</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id12">コードを読む推奨順</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id15">変更したい時に読む場所</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id16">コードを読む推奨順</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../ja/python_api.html">Python API</a><ul>
@@ -147,6 +177,18 @@
 <li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html">Code Reading Map</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#recommended-reading-order">Recommended reading order</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#cli-as-a-thin-wrapper">CLI as a thin wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#dataset-loading">Dataset loading</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#split-and-scalers">Split and scalers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#model-inputs-and-outputs">Model inputs and outputs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#losses-and-evaluation">Losses and evaluation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#server-submitters">Server submitters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#diagnostics-and-post-processing">Diagnostics and post-processing</a></li>
+</ul>
+</li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Code walkthrough</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#top-level-entry-point">Top-level entry point</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#hdf5-graph-export">HDF5 graph export</a><ul>
@@ -164,8 +206,19 @@
 <li class="toctree-l4"><a class="reference internal" href="#checkpoint-contents">Checkpoint contents</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#model">Model</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#loss-functions">Loss functions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#model">Model</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#what-the-gnn-approximates">What the GNN approximates</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#relation-to-shower-reconstruction">Relation to shower reconstruction</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#node-waveform-and-edge-encoders">Node, waveform, and edge encoders</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#message-passing">Message passing</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#readout-and-heads">Readout and heads</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#implementation-excerpts">Implementation excerpts</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#loss-functions">Loss functions</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#mathematical-helpers">Mathematical helpers</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="#diagnostics">Diagnostics</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#input-distributions-and-feature-importance">Input distributions and feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#where-to-read-when-changing-code">Where to read when changing code</a></li>
@@ -260,19 +313,19 @@ It is intended as a reading guide for the code, not only as a command reference.
 </tr>
 <tr class="row-odd"><td><p>Training</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_train</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1450</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">train.train_model</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:1173</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">train.train_model</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:1385</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>Prediction CSV</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_predict</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1551</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_predict</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1557</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">predict.predict_graphs</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>Input distributions</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_input_distributions</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1566</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">feature_analysis.save_input_distributions</span></code> : <code class="docutils literal notranslate"><span class="pre">feature_analysis.py:133</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_input_distributions</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1572</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">feature_analysis.save_input_distributions</span></code> : <code class="docutils literal notranslate"><span class="pre">feature_analysis.py:139</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>Feature-group importance</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_feature_importance</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1581</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">feature_analysis.save_feature_group_importance</span></code> : <code class="docutils literal notranslate"><span class="pre">feature_analysis.py:352</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_feature_importance</span></code> : <code class="docutils literal notranslate"><span class="pre">cli.py:1587</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">feature_analysis.save_feature_group_importance</span></code> : <code class="docutils literal notranslate"><span class="pre">feature_analysis.py:369</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>Graph visualization</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">cli._cmd_visualize</span></code></p></td>
@@ -303,16 +356,16 @@ For MC input, <code class="docutils literal notranslate"><span class="pre">rusdr
 <section id="graphevent-creation">
 <h3>GraphEvent creation<a class="headerlink" href="#graphevent-creation" title="Link to this heading"></a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/event_graph.py</span></code> converts one DST event into one GNN graph.
-The main entry point is <code class="docutils literal notranslate"><span class="pre">build_graph_event</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:688</span></code>.</p>
+The main entry point is <code class="docutils literal notranslate"><span class="pre">build_graph_event</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:697</span></code>.</p>
 <p>The function does the following:</p>
 <ol class="arabic simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">_combine_sub_waveforms</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:159</span></code> merges waveform segments.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">_extract_hit</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:293</span></code> extracts detector hits, pulses, FADC waveforms, timing, and charge.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">_merge_hits_by_lid</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:376</span></code> merges records with the same detector ID.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">_build_node_features</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:471</span></code> treats accepted pulses as nodes and builds node, pulse, and waveform features.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">_build_edges</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:610</span></code> builds directed edges and edge features between detectors.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">_target_from_sim</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:419</span></code> builds reconstruction targets from MC truth.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">_particle_label_from_sim</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:460</span></code> builds the mass-classification label.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_extract_hit</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:298</span></code> extracts detector hits, pulses, FADC waveforms, timing, and charge.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_merge_hits_by_lid</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:381</span></code> merges records with the same detector ID.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_build_node_features</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:474</span></code> treats accepted pulses as nodes and builds node, pulse, and waveform features.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_build_edges</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:619</span></code> builds directed edges and edge features between detectors.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_target_from_sim</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:424</span></code> builds reconstruction targets from MC truth.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_particle_label_from_sim</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:463</span></code> builds the mass-classification label.</p></li>
 <li><p>A <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> object is returned.</p></li>
 </ol>
 <p>Main fields in <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:41</span></code>:</p>
@@ -334,7 +387,7 @@ The core target is two-dimensional on the ground plane; the arrival direction is
 The same detector ID may appear multiple times if a detector contributes multiple pulses.
 The node columns deliberately separate pulse-level quantities, detector-level accepted-pulse aggregates, and event-context quantities.
 Examples are <code class="docutils literal notranslate"><span class="pre">log10_pulse_rho</span></code> for the pulse itself, <code class="docutils literal notranslate"><span class="pre">log10_detector_sum_pulse_rho</span></code> for the accepted-pulse charge sum in the same detector, and <code class="docutils literal notranslate"><span class="pre">dx_from_signal_bary_km</span></code> for the event context.
-The column definitions are exposed by <code class="docutils literal notranslate"><span class="pre">graph_columns</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:755</span></code> and are written into the HDF5 file.
+The column definitions are exposed by <code class="docutils literal notranslate"><span class="pre">graph_columns</span></code> : <code class="docutils literal notranslate"><span class="pre">event_graph.py:764</span></code> and are written into the HDF5 file.
 Because the physical meaning of several columns has changed, old HDF5 files are not silently migrated to the current schema; they must be re-exported.</p>
 <p><code class="docutils literal notranslate"><span class="pre">_build_edges</span></code> scans node pairs from different detectors, removes pairs outside the distance and timing cuts, and writes bidirectional directed edges.
 Changing edge features affects the HDF5 schema, <code class="docutils literal notranslate"><span class="pre">edge_feature_dim</span></code>, and checkpoint compatibility.</p>
@@ -365,13 +418,13 @@ This avoids reading and storing all graph contents before writing.</p>
 <section id="dataset-and-batching">
 <h2>Dataset and batching<a class="headerlink" href="#dataset-and-batching" title="Link to this heading"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/dataset.py</span></code> adapts HDF5 graphs to PyTorch DataLoaders.</p>
-<p><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:181</span></code> expands file or directory inputs into HDF5 shards, validates schema, reads column definitions, applies particle filtering and max-graph limits, builds global-to-local index mapping, and checks target/metadata availability.
+<p><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:202</span></code> expands file or directory inputs into HDF5 shards, validates schema, reads column definitions, applies particle filtering and max-graph limits, builds global-to-local index mapping, and checks target/metadata availability.
 The progress label <code class="docutils literal notranslate"><span class="pre">initialize</span> <span class="pre">graph</span> <span class="pre">shards</span></code> corresponds to this initialization step.</p>
 <p><code class="docutils literal notranslate"><span class="pre">__getitem__</span></code> reads one event group and returns NumPy arrays for node features, edge index, edge features, pulse-to-node index mapping, waveform features, target, attributes, and optional detector IDs or particle labels.
 It does not return torch tensors yet.</p>
-<p><code class="docutils literal notranslate"><span class="pre">fit_scalers</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:549</span></code> fits feature and target scalers using the training split only.
+<p><code class="docutils literal notranslate"><span class="pre">fit_scalers</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:599</span></code> fits feature and target scalers using the training split only.
 This avoids leaking validation/test statistics into the training normalization.</p>
-<p><code class="docutils literal notranslate"><span class="pre">collate_graph_arrays</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:892</span></code> merges graph samples into one batch.
+<p><code class="docutils literal notranslate"><span class="pre">collate_graph_arrays</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:942</span></code> merges graph samples into one batch.
 It applies scalers, concatenates node arrays, remaps edge indices by node offsets, builds the graph <code class="docutils literal notranslate"><span class="pre">batch</span></code> vector, merges pulse/waveform arrays, and prepares target and mass-label arrays.
 The wrapper <code class="docutils literal notranslate"><span class="pre">collate_graphs</span></code> converts the arrays into torch tensors.</p>
 </section>
@@ -387,15 +440,15 @@ The wrapper <code class="docutils literal notranslate"><span class="pre">collate
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">event</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">split_indices</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:167</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">split_indices</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:173</span></code></p></td>
 <td><p>Random event-index split.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">source-path</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">split_indices_by_source_path</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:194</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">split_indices_by_source_path</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:200</span></code></p></td>
 <td><p>Splits by <code class="docutils literal notranslate"><span class="pre">source_path</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">source-stratified</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">split_indices_by_stratified_source_path</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:489</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">split_indices_by_stratified_source_path</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:564</span></code></p></td>
 <td><p>Keeps the same <code class="docutils literal notranslate"><span class="pre">source_path</span></code> out of multiple splits and also tries to reduce particle/energy imbalance.</p></td>
 </tr>
 </tbody>
@@ -405,7 +458,7 @@ Therefore the effective fractions are 0.85 train, 0.05 validation, and 0.10 test
 </section>
 <section id="training">
 <h2>Training<a class="headerlink" href="#training" title="Link to this heading"></a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">train_model</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:1173</span></code> is the central training function.
+<p><code class="docutils literal notranslate"><span class="pre">train_model</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:1385</span></code> is the central training function.
 CLI commands, submitter scripts, and notebooks ultimately call this function.</p>
 <p>Its main stages are:</p>
 <ol class="arabic simple">
@@ -438,9 +491,344 @@ Prediction and feature-importance runs rely on these saved scalers and split ind
 </section>
 <section id="model">
 <h2>Model<a class="headerlink" href="#model" title="Link to this heading"></a></h2>
-<p>The current main model is <code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN</span></code> : <code class="docutils literal notranslate"><span class="pre">model.py:718</span></code>.</p>
+<p>The current main model is <code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN</span></code> : <code class="docutils literal notranslate"><span class="pre">model.py:730</span></code>.</p>
 <p>Inputs include node features, edge index, edge features, graph batch IDs, waveform features, and optionally detector IDs.
 The model combines a node encoder, waveform encoder, optional detector embedding, edge-aware message passing, graph-level readout, and task-specific heads. The pulse encoder is inactive in the current schema because <code class="docutils literal notranslate"><span class="pre">pulse_features</span></code> contains only <code class="docutils literal notranslate"><span class="pre">node_index</span></code>.</p>
+<section id="what-the-gnn-approximates">
+<h3>What the GNN approximates<a class="headerlink" href="#what-the-gnn-approximates" title="Link to this heading"></a></h3>
+<p>The model learns a graph-level function</p>
+<div class="math notranslate nohighlight">
+\[f_{\theta}(G)
+=
+(\log_{10}E,\ x_c,\ y_c,\ n_x,\ n_y,\ n_z,\ \ldots),
+\qquad
+G=(V,E).\]</div>
+<p><code class="docutils literal notranslate"><span class="pre">V</span></code> is the set of accepted-pulse nodes and <code class="docutils literal notranslate"><span class="pre">E</span></code> is the set of directed edges between pulses on different detectors.
+The node order has no physical meaning, so the model must depend on pulse features and pairwise relations rather than on an arbitrary array order.
+This is why the implementation uses message passing followed by permutation-invariant graph readout.</p>
+<p>Conceptually, the learned mapping is</p>
+<div class="math notranslate nohighlight">
+\[\{x_i\}_{i\in V},\ \{e_{ij}\}_{(i,j)\in E}
+\longrightarrow
+\hat{y}_{\mathrm{event}}.\]</div>
+<p><code class="docutils literal notranslate"><span class="pre">x_i</span></code> contains the accepted-pulse, detector, and event-context features for node <code class="docutils literal notranslate"><span class="pre">i</span></code>.
+<code class="docutils literal notranslate"><span class="pre">e_ij</span></code> contains the distance, timing, signal-difference, and edge-weight features for the directed relation <code class="docutils literal notranslate"><span class="pre">i</span> <span class="pre">-&gt;</span> <span class="pre">j</span></code>.
+The output is one prediction per event graph, not one prediction per node.</p>
+</section>
+<section id="relation-to-shower-reconstruction">
+<h3>Relation to shower reconstruction<a class="headerlink" href="#relation-to-shower-reconstruction" title="Link to this heading"></a></h3>
+<p>The network does not explicitly solve a plane fit or an LDF fit.
+However, the inputs expose the information those procedures depend on:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Physical information</p></th>
+<th class="head"><p>Code-level input</p></th>
+<th class="head"><p>Main affected outputs</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Relative arrival timing</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">pulse_arrival_usec_rel</span></code>, edge <code class="docutils literal notranslate"><span class="pre">dt_usec</span></code>, <code class="docutils literal notranslate"><span class="pre">dt_per_km</span></code></p></td>
+<td><p>Direction, core</p></td>
+</tr>
+<tr class="row-odd"><td><p>Detector geometry</p></td>
+<td><p>Node positions, barycenter-relative position, edge distance</p></td>
+<td><p>Core, direction</p></td>
+</tr>
+<tr class="row-even"><td><p>Signal size and lateral pattern</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">log10_pulse_rho</span></code>, detector sum/max rho, edge signal differences</p></td>
+<td><p>Energy, core, mass</p></td>
+</tr>
+<tr class="row-odd"><td><p>Waveform shape</p></td>
+<td><p>Raw waveform windows, accepted masks, waveform encoder output</p></td>
+<td><p>Mass, quality, reconstruction support</p></td>
+</tr>
+</tbody>
+</table>
+<p>Message passing lets each pulse representation depend on whether neighboring pulses are consistent in time, distance, and signal size.
+A large charge at one detector is not enough by itself; the surrounding pattern tells the model whether it is close to the core, consistent with the shower front, or an outlying contribution.</p>
+</section>
+<section id="node-waveform-and-edge-encoders">
+<h3>Node, waveform, and edge encoders<a class="headerlink" href="#node-waveform-and-edge-encoders" title="Link to this heading"></a></h3>
+<p>The initial node state is</p>
+<div class="math notranslate nohighlight">
+\[h_i^{(0)}
+=
+\phi_{\mathrm{node}}([x_i,\ w_i,\ d_i,\ p_i]).\]</div>
+<p><code class="docutils literal notranslate"><span class="pre">x_i</span></code> is the scalar node feature vector, <code class="docutils literal notranslate"><span class="pre">w_i</span></code> is the waveform embedding, <code class="docutils literal notranslate"><span class="pre">d_i</span></code> is the detector-ID embedding, and <code class="docutils literal notranslate"><span class="pre">p_i</span></code> is the pulse-scalar summary.
+In the current default, detector embedding and pulse-scalar encoding are disabled, so the active inputs are mostly <code class="docutils literal notranslate"><span class="pre">x_i</span></code> and <code class="docutils literal notranslate"><span class="pre">w_i</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">WaveformEncoder</span></code> compresses the four-channel waveform into a node embedding.
+For <code class="docutils literal notranslate"><span class="pre">cnn-gru</span></code>, the code applies Conv1D to local waveform shapes, then a GRU to summarize time ordering, and finally projects the recurrent last state together with mean and max pooled encoded features.
+The current waveform schema keeps raw upper/lower windows and accepted-pulse masks on the same time axis, so the model can use both the raw waveform shape and the accepted-pulse region.</p>
+<p><code class="docutils literal notranslate"><span class="pre">EdgeTimeDeltaEncoder</span></code> separately encodes</p>
+<div class="math notranslate nohighlight">
+\[\tau_{ij}
+=
+(\Delta t_{ij},\ |\Delta t_{ij}|,\ \Delta t_{ij}/r_{ij})\]</div>
+<p>and averages the encoded timing messages into each destination node before the main message-passing layers.
+This keeps arrival-time information from being diluted among many other edge columns.</p>
+</section>
+<section id="message-passing">
+<h3>Message passing<a class="headerlink" href="#message-passing" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">GatedEdgeMessageLayer</span></code> builds a directed message from source node state, destination node state, and edge features:</p>
+<div class="math notranslate nohighlight">
+\[m_{i\rightarrow j}
+=
+M_{\mathrm{msg}}([h_i,h_j,e_{ij}])
+\cdot
+\sigma(M_{\mathrm{gate}}([h_i,h_j,e_{ij}])).\]</div>
+<p>The message MLP controls what information is sent.
+The gate MLP controls how strongly that edge contributes.
+The destination node state is included because the same source pulse can have a different meaning depending on the pulse that receives the message.</p>
+<p>For each destination node, messages are aggregated by both mean and max.
+Mean captures the typical neighborhood trend, while max preserves strong local evidence that would be diluted by averaging.
+The update is residual and layer-normalized:</p>
+<div class="math notranslate nohighlight">
+\[h_j' =
+\mathrm{LayerNorm}
+\left(
+  h_j + M_{\mathrm{update}}([h_j,\overline{m}_j,m_j^{\max}])
+\right).\]</div>
+<p>This layer is repeated five times in the standard configuration.
+After repeated message passing, a node representation no longer describes only one pulse; it also contains information from nearby pulses connected through the edge graph.</p>
+</section>
+<section id="readout-and-heads">
+<h3>Readout and heads<a class="headerlink" href="#readout-and-heads" title="Link to this heading"></a></h3>
+<p>After message passing, the model still has node-level vectors.
+Energy, core, direction, quality, and mass are event-level quantities, so the node vectors must be pooled into a graph vector.
+The implementation concatenates mean pooling, max pooling, and multi-head attentive readout.</p>
+<p>For attention head <code class="docutils literal notranslate"><span class="pre">h</span></code>,</p>
+<div class="math notranslate nohighlight">
+\[a_{ih}
+=
+\frac{\exp s_h(h_i)}
+     {\sum_{k\in G}\exp s_h(h_k)},
+\qquad
+g_h
+=
+\sum_{i\in G} a_{ih} h_i.\]</div>
+<p>Different heads can learn to emphasize different parts of the event.
+These heads are not automatically labeled by physics meaning; interpretation requires feature importance or attention diagnostics.</p>
+</section>
+<section id="implementation-excerpts">
+<h3>Implementation excerpts<a class="headerlink" href="#implementation-excerpts" title="Link to this heading"></a></h3>
+<p>The following classes are the main model components described above.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="linenos">  1</span><span class="k">class</span><span class="w"> </span><span class="nc">WaveformEncoder</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+<span class="linenos">  2</span>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+<span class="linenos">  3</span>        <span class="bp">self</span><span class="p">,</span>
+<span class="linenos">  4</span>        <span class="n">waveform_channels</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="linenos">  5</span>        <span class="n">waveform_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="linenos">  6</span>        <span class="n">embedding_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="linenos">  7</span>        <span class="n">mode</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;cnn-gru&quot;</span><span class="p">,</span>
+<span class="linenos">  8</span>        <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.05</span><span class="p">,</span>
+<span class="linenos">  9</span>        <span class="n">transformer_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+<span class="linenos"> 10</span>        <span class="n">transformer_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+<span class="linenos"> 11</span>    <span class="p">):</span>
+<span class="linenos"> 12</span>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+<span class="linenos"> 13</span>        <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">mode</span><span class="p">)</span>
+<span class="linenos"> 14</span>        <span class="bp">self</span><span class="o">.</span><span class="n">waveform_channels</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">waveform_channels</span><span class="p">),</span> <span class="mi">0</span><span class="p">)</span>
+<span class="linenos"> 15</span>        <span class="bp">self</span><span class="o">.</span><span class="n">waveform_length</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">waveform_length</span><span class="p">),</span> <span class="mi">0</span><span class="p">)</span>
+<span class="linenos"> 16</span>        <span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">embedding_dim</span><span class="p">),</span> <span class="mi">0</span><span class="p">)</span>
+<span class="linenos"> 17</span>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;none&quot;</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+<span class="linenos"> 18</span>            <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">=</span> <span class="s2">&quot;none&quot;</span>
+<span class="linenos"> 19</span>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">!=</span> <span class="s2">&quot;none&quot;</span> <span class="ow">and</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">waveform_channels</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">waveform_length</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">):</span>
+<span class="linenos"> 20</span>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;waveform encoder requires waveform_channels &gt; 0 and waveform_length &gt; 0&quot;</span><span class="p">)</span>
+<span class="linenos"> 21</span>
+<span class="linenos"> 22</span>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;none&quot;</span><span class="p">:</span>
+<span class="linenos"> 23</span>            <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="linenos"> 24</span>            <span class="bp">self</span><span class="o">.</span><span class="n">gru</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="linenos"> 25</span>            <span class="bp">self</span><span class="o">.</span><span class="n">proj</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="linenos"> 26</span>            <span class="bp">self</span><span class="o">.</span><span class="n">positional</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="linenos"> 27</span>            <span class="bp">self</span><span class="o">.</span><span class="n">transformer</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="linenos"> 28</span>            <span class="k">return</span>
+<span class="linenos"> 29</span>
+<span class="linenos"> 30</span>        <span class="n">conv_hidden</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span> <span class="o">//</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">16</span><span class="p">)</span>
+<span class="linenos"> 31</span>        <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span>
+<span class="linenos"> 32</span>            <span class="n">nn</span><span class="o">.</span><span class="n">Conv1d</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">waveform_channels</span><span class="p">,</span> <span class="n">conv_hidden</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span>
+<span class="linenos"> 33</span>            <span class="n">nn</span><span class="o">.</span><span class="n">SiLU</span><span class="p">(),</span>
+<span class="linenos"> 34</span>            <span class="n">nn</span><span class="o">.</span><span class="n">LayerNorm</span><span class="p">([</span><span class="n">conv_hidden</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">waveform_length</span><span class="p">]),</span>
+<span class="linenos"> 35</span>            <span class="n">nn</span><span class="o">.</span><span class="n">Conv1d</span><span class="p">(</span><span class="n">conv_hidden</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span>
+<span class="linenos"> 36</span>            <span class="n">nn</span><span class="o">.</span><span class="n">SiLU</span><span class="p">(),</span>
+<span class="linenos"> 37</span>        <span class="p">)</span>
+<span class="linenos"> 38</span>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;cnn-gru&quot;</span><span class="p">:</span>
+<span class="linenos"> 39</span>            <span class="n">gru_hidden</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span> <span class="o">//</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+<span class="linenos"> 40</span>            <span class="bp">self</span><span class="o">.</span><span class="n">gru</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">GRU</span><span class="p">(</span>
+<span class="linenos"> 41</span>                <span class="n">input_size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span><span class="p">,</span>
+<span class="linenos"> 42</span>                <span class="n">hidden_size</span><span class="o">=</span><span class="n">gru_hidden</span><span class="p">,</span>
+<span class="linenos"> 43</span>                <span class="n">num_layers</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+<span class="linenos"> 44</span>                <span class="n">batch_first</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="linenos"> 45</span>                <span class="n">bidirectional</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="linenos"> 46</span>            <span class="p">)</span>
+<span class="linenos"> 47</span>            <span class="bp">self</span><span class="o">.</span><span class="n">proj</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span>
+<span class="linenos"> 48</span>                <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">gru_hidden</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span> <span class="o">*</span> <span class="mi">2</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span><span class="p">),</span>
+<span class="linenos"> 49</span>                <span class="n">nn</span><span class="o">.</span><span class="n">SiLU</span><span class="p">(),</span>
+<span class="linenos"> 50</span>                <span class="n">nn</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">dropout</span><span class="p">),</span>
+<span class="linenos"> 51</span>            <span class="p">)</span>
+<span class="linenos"> 52</span>            <span class="bp">self</span><span class="o">.</span><span class="n">positional</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="linenos"> 53</span>            <span class="bp">self</span><span class="o">.</span><span class="n">transformer</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="linenos"> 54</span>        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;transformer&quot;</span><span class="p">:</span>
+<span class="linenos"> 55</span>            <span class="n">heads</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">transformer_heads</span><span class="p">),</span> <span class="mi">1</span><span class="p">)</span>
+<span class="linenos"> 56</span>            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span> <span class="o">%</span> <span class="n">heads</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+<span class="linenos"> 57</span>                <span class="n">heads</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="linenos"> 58</span>            <span class="n">layer</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">TransformerEncoderLayer</span><span class="p">(</span>
+<span class="linenos"> 59</span>                <span class="n">d_model</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span><span class="p">,</span>
+<span class="linenos"> 60</span>                <span class="n">nhead</span><span class="o">=</span><span class="n">heads</span><span class="p">,</span>
+<span class="linenos"> 61</span>                <span class="n">dim_feedforward</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span> <span class="o">*</span> <span class="mi">2</span><span class="p">,</span>
+<span class="linenos"> 62</span>                <span class="n">dropout</span><span class="o">=</span><span class="n">dropout</span><span class="p">,</span>
+<span class="linenos"> 63</span>                <span class="n">activation</span><span class="o">=</span><span class="s2">&quot;gelu&quot;</span><span class="p">,</span>
+<span class="linenos"> 64</span>                <span class="n">batch_first</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="linenos"> 65</span>                <span class="n">norm_first</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="linenos"> 66</span>            <span class="p">)</span>
+<span class="linenos"> 67</span>            <span class="bp">self</span><span class="o">.</span><span class="n">transformer</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">TransformerEncoder</span><span class="p">(</span><span class="n">layer</span><span class="p">,</span> <span class="n">num_layers</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">transformer_layers</span><span class="p">),</span> <span class="mi">1</span><span class="p">))</span>
+<span class="linenos"> 68</span>            <span class="bp">self</span><span class="o">.</span><span class="n">positional</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">waveform_length</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span><span class="p">))</span>
+<span class="linenos"> 69</span>            <span class="bp">self</span><span class="o">.</span><span class="n">proj</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span>
+<span class="linenos"> 70</span>                <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span> <span class="o">*</span> <span class="mi">2</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span><span class="p">),</span>
+<span class="linenos"> 71</span>                <span class="n">nn</span><span class="o">.</span><span class="n">SiLU</span><span class="p">(),</span>
+<span class="linenos"> 72</span>                <span class="n">nn</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">dropout</span><span class="p">),</span>
+<span class="linenos"> 73</span>            <span class="p">)</span>
+<span class="linenos"> 74</span>            <span class="bp">self</span><span class="o">.</span><span class="n">gru</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="linenos"> 75</span>        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;cnn&quot;</span><span class="p">:</span>
+<span class="linenos"> 76</span>            <span class="bp">self</span><span class="o">.</span><span class="n">proj</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span>
+<span class="linenos"> 77</span>                <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span> <span class="o">*</span> <span class="mi">2</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span><span class="p">),</span>
+<span class="linenos"> 78</span>                <span class="n">nn</span><span class="o">.</span><span class="n">SiLU</span><span class="p">(),</span>
+<span class="linenos"> 79</span>                <span class="n">nn</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">dropout</span><span class="p">),</span>
+<span class="linenos"> 80</span>            <span class="p">)</span>
+<span class="linenos"> 81</span>            <span class="bp">self</span><span class="o">.</span><span class="n">gru</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="linenos"> 82</span>            <span class="bp">self</span><span class="o">.</span><span class="n">positional</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="linenos"> 83</span>            <span class="bp">self</span><span class="o">.</span><span class="n">transformer</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="linenos"> 84</span>        <span class="k">else</span><span class="p">:</span>
+<span class="linenos"> 85</span>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;waveform_encoder must be &#39;none&#39;, &#39;cnn&#39;, &#39;cnn-gru&#39;, or &#39;transformer&#39;&quot;</span><span class="p">)</span>
+<span class="linenos"> 86</span>
+<span class="linenos"> 87</span>    <span class="nd">@property</span>
+<span class="linenos"> 88</span>    <span class="k">def</span><span class="w"> </span><span class="nf">output_dim</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="linenos"> 89</span>        <span class="k">return</span> <span class="mi">0</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;none&quot;</span> <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span>
+<span class="linenos"> 90</span>
+<span class="linenos"> 91</span>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">waveform_x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="n">num_nodes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">device</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="linenos"> 92</span>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;none&quot;</span><span class="p">:</span>
+<span class="linenos"> 93</span>            <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">num_nodes</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="linenos"> 94</span>        <span class="k">if</span> <span class="n">waveform_x</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<span class="linenos"> 95</span>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;waveform encoder is enabled, but batch has no waveform_x&quot;</span><span class="p">)</span>
+<span class="linenos"> 96</span>        <span class="n">waveform</span> <span class="o">=</span> <span class="n">waveform_x</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+<span class="linenos"> 97</span>        <span class="k">if</span> <span class="n">waveform</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">3</span> <span class="ow">or</span> <span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="n">num_nodes</span> <span class="ow">or</span> <span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">waveform_channels</span><span class="p">:</span>
+<span class="linenos"> 98</span>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;waveform_x shape does not match model waveform configuration&quot;</span><span class="p">)</span>
+<span class="linenos"> 99</span>        <span class="n">encoded</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span><span class="p">(</span><span class="n">waveform</span><span class="p">)</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+<span class="linenos">100</span>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;cnn-gru&quot;</span><span class="p">:</span>
+<span class="linenos">101</span>            <span class="n">recurrent</span><span class="p">,</span> <span class="n">_hidden</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gru</span><span class="p">(</span><span class="n">encoded</span><span class="p">)</span>
+<span class="linenos">102</span>            <span class="n">pooled</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">recurrent</span><span class="p">[:,</span> <span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">encoded</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">encoded</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+<span class="linenos">103</span>            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">proj</span><span class="p">(</span><span class="n">pooled</span><span class="p">)</span>
+<span class="linenos">104</span>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;transformer&quot;</span><span class="p">:</span>
+<span class="linenos">105</span>            <span class="n">transformed</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transformer</span><span class="p">(</span><span class="n">encoded</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">))</span>
+<span class="linenos">106</span>            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">proj</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">transformed</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">transformed</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">))</span>
+<span class="linenos">107</span>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">proj</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">encoded</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">encoded</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">))</span>
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="k">class</span><span class="w"> </span><span class="nc">EdgeTimeDeltaEncoder</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+<span class="linenos"> 2</span>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+<span class="linenos"> 3</span>        <span class="bp">self</span><span class="p">,</span>
+<span class="linenos"> 4</span>        <span class="n">hidden_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="linenos"> 5</span>        <span class="n">edge_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="linenos"> 6</span>        <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.05</span><span class="p">,</span>
+<span class="linenos"> 7</span>        <span class="o">*</span><span class="p">,</span>
+<span class="linenos"> 8</span>        <span class="n">enabled</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+<span class="linenos"> 9</span>        <span class="n">start_index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+<span class="linenos">10</span>        <span class="n">width</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span>
+<span class="linenos">11</span>    <span class="p">):</span>
+<span class="linenos">12</span>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+<span class="linenos">13</span>        <span class="bp">self</span><span class="o">.</span><span class="n">start_index</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">start_index</span><span class="p">)</span>
+<span class="linenos">14</span>        <span class="bp">self</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">width</span><span class="p">)</span>
+<span class="linenos">15</span>        <span class="bp">self</span><span class="o">.</span><span class="n">enabled</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">enabled</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">int</span><span class="p">(</span><span class="n">edge_dim</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_index</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">width</span>
+<span class="linenos">16</span>        <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span> <span class="o">=</span> <span class="n">_make_mlp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">width</span><span class="p">,</span> <span class="n">hidden_dim</span><span class="p">,</span> <span class="n">hidden_dim</span><span class="p">,</span> <span class="n">dropout</span><span class="p">)</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">enabled</span> <span class="k">else</span> <span class="kc">None</span>
+<span class="linenos">17</span>        <span class="bp">self</span><span class="o">.</span><span class="n">norm</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">LayerNorm</span><span class="p">(</span><span class="n">hidden_dim</span><span class="p">)</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">enabled</span> <span class="k">else</span> <span class="kc">None</span>
+<span class="linenos">18</span>
+<span class="linenos">19</span>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
+<span class="linenos">20</span>        <span class="bp">self</span><span class="p">,</span>
+<span class="linenos">21</span>        <span class="n">node</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+<span class="linenos">22</span>        <span class="n">edge_attr</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+<span class="linenos">23</span>        <span class="n">dst</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+<span class="linenos">24</span>        <span class="n">degree</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+<span class="linenos">25</span>    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="linenos">26</span>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">norm</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">dst</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">edge_attr</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+<span class="linenos">27</span>            <span class="k">return</span> <span class="n">node</span>
+<span class="linenos">28</span>        <span class="n">time_attr</span> <span class="o">=</span> <span class="n">edge_attr</span><span class="p">[:,</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_index</span> <span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_index</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">width</span><span class="p">]</span>
+<span class="linenos">29</span>        <span class="n">messages</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span><span class="p">(</span><span class="n">time_attr</span><span class="p">)</span>
+<span class="linenos">30</span>        <span class="n">aggregate</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+<span class="linenos">31</span>        <span class="n">aggregate</span><span class="o">.</span><span class="n">index_add_</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">dst</span><span class="p">,</span> <span class="n">messages</span><span class="p">)</span>
+<span class="linenos">32</span>        <span class="k">if</span> <span class="n">degree</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<span class="linenos">33</span>            <span class="n">degree</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">node</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">node</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">node</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+<span class="linenos">34</span>            <span class="n">degree</span><span class="o">.</span><span class="n">index_add_</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">dst</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">dst</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">node</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">node</span><span class="o">.</span><span class="n">device</span><span class="p">))</span>
+<span class="linenos">35</span>        <span class="n">aggregate</span> <span class="o">=</span> <span class="n">aggregate</span> <span class="o">/</span> <span class="n">degree</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">node</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">)</span>
+<span class="linenos">36</span>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">node</span> <span class="o">+</span> <span class="n">aggregate</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="k">class</span><span class="w"> </span><span class="nc">GatedEdgeMessageLayer</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+<span class="linenos"> 2</span>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hidden_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">edge_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.05</span><span class="p">):</span>
+<span class="linenos"> 3</span>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+<span class="linenos"> 4</span>        <span class="bp">self</span><span class="o">.</span><span class="n">message</span> <span class="o">=</span> <span class="n">_make_mlp</span><span class="p">(</span><span class="n">hidden_dim</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">+</span> <span class="n">edge_dim</span><span class="p">,</span> <span class="n">hidden_dim</span><span class="p">,</span> <span class="n">hidden_dim</span><span class="p">,</span> <span class="n">dropout</span><span class="p">)</span>
+<span class="linenos"> 5</span>        <span class="bp">self</span><span class="o">.</span><span class="n">gate</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">hidden_dim</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">+</span> <span class="n">edge_dim</span><span class="p">,</span> <span class="n">hidden_dim</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">SiLU</span><span class="p">(),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">hidden_dim</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+<span class="linenos"> 6</span>        <span class="bp">self</span><span class="o">.</span><span class="n">update</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span>
+<span class="linenos"> 7</span>            <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">hidden_dim</span> <span class="o">*</span> <span class="mi">3</span><span class="p">,</span> <span class="n">hidden_dim</span> <span class="o">*</span> <span class="mi">2</span><span class="p">),</span>
+<span class="linenos"> 8</span>            <span class="n">nn</span><span class="o">.</span><span class="n">SiLU</span><span class="p">(),</span>
+<span class="linenos"> 9</span>            <span class="n">nn</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">dropout</span><span class="p">),</span>
+<span class="linenos">10</span>            <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">hidden_dim</span> <span class="o">*</span> <span class="mi">2</span><span class="p">,</span> <span class="n">hidden_dim</span><span class="p">),</span>
+<span class="linenos">11</span>        <span class="p">)</span>
+<span class="linenos">12</span>        <span class="bp">self</span><span class="o">.</span><span class="n">ffn</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span>
+<span class="linenos">13</span>            <span class="n">nn</span><span class="o">.</span><span class="n">LayerNorm</span><span class="p">(</span><span class="n">hidden_dim</span><span class="p">),</span>
+<span class="linenos">14</span>            <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">hidden_dim</span><span class="p">,</span> <span class="n">hidden_dim</span> <span class="o">*</span> <span class="mi">2</span><span class="p">),</span>
+<span class="linenos">15</span>            <span class="n">nn</span><span class="o">.</span><span class="n">SiLU</span><span class="p">(),</span>
+<span class="linenos">16</span>            <span class="n">nn</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">dropout</span><span class="p">),</span>
+<span class="linenos">17</span>            <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">hidden_dim</span> <span class="o">*</span> <span class="mi">2</span><span class="p">,</span> <span class="n">hidden_dim</span><span class="p">),</span>
+<span class="linenos">18</span>        <span class="p">)</span>
+<span class="linenos">19</span>        <span class="bp">self</span><span class="o">.</span><span class="n">norm</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">LayerNorm</span><span class="p">(</span><span class="n">hidden_dim</span><span class="p">)</span>
+<span class="linenos">20</span>
+<span class="linenos">21</span>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
+<span class="linenos">22</span>        <span class="bp">self</span><span class="p">,</span>
+<span class="linenos">23</span>        <span class="n">node</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+<span class="linenos">24</span>        <span class="n">src</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+<span class="linenos">25</span>        <span class="n">dst</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+<span class="linenos">26</span>        <span class="n">edge_attr</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+<span class="linenos">27</span>        <span class="n">degree</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+<span class="linenos">28</span>    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="linenos">29</span>        <span class="k">if</span> <span class="n">src</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">dst</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">degree</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<span class="linenos">30</span>            <span class="n">mean_aggregate</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+<span class="linenos">31</span>            <span class="n">max_aggregate</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+<span class="linenos">32</span>        <span class="k">else</span><span class="p">:</span>
+<span class="linenos">33</span>            <span class="n">message_input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">node</span><span class="p">[</span><span class="n">src</span><span class="p">],</span> <span class="n">node</span><span class="p">[</span><span class="n">dst</span><span class="p">],</span> <span class="n">edge_attr</span><span class="p">],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+<span class="linenos">34</span>            <span class="n">messages</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">message</span><span class="p">(</span><span class="n">message_input</span><span class="p">)</span> <span class="o">*</span> <span class="n">torch</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gate</span><span class="p">(</span><span class="n">message_input</span><span class="p">))</span>
+<span class="linenos">35</span>            <span class="n">mean_aggregate</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+<span class="linenos">36</span>            <span class="n">mean_aggregate</span><span class="o">.</span><span class="n">index_add_</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">dst</span><span class="p">,</span> <span class="n">messages</span><span class="p">)</span>
+<span class="linenos">37</span>            <span class="n">mean_aggregate</span> <span class="o">=</span> <span class="n">mean_aggregate</span> <span class="o">/</span> <span class="n">degree</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">)</span>
+<span class="linenos">38</span>            <span class="n">max_aggregate</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">full_like</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="o">-</span><span class="n">torch</span><span class="o">.</span><span class="n">inf</span><span class="p">)</span>
+<span class="linenos">39</span>            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">max_aggregate</span><span class="p">,</span> <span class="s2">&quot;scatter_reduce_&quot;</span><span class="p">):</span>
+<span class="linenos">40</span>                <span class="n">index</span> <span class="o">=</span> <span class="n">dst</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">.</span><span class="n">expand</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">messages</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+<span class="linenos">41</span>                <span class="n">max_aggregate</span><span class="o">.</span><span class="n">scatter_reduce_</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">index</span><span class="p">,</span> <span class="n">messages</span><span class="p">,</span> <span class="n">reduce</span><span class="o">=</span><span class="s2">&quot;amax&quot;</span><span class="p">,</span> <span class="n">include_self</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="linenos">42</span>                <span class="n">max_aggregate</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">max_aggregate</span><span class="p">),</span> <span class="n">max_aggregate</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">max_aggregate</span><span class="p">))</span>
+<span class="linenos">43</span>            <span class="k">else</span><span class="p">:</span>
+<span class="linenos">44</span>                <span class="n">max_aggregate</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+<span class="linenos">45</span>                <span class="k">for</span> <span class="n">node_index</span> <span class="ow">in</span> <span class="n">torch</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">dst</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">():</span>
+<span class="linenos">46</span>                    <span class="n">mask</span> <span class="o">=</span> <span class="n">dst</span> <span class="o">==</span> <span class="nb">int</span><span class="p">(</span><span class="n">node_index</span><span class="p">)</span>
+<span class="linenos">47</span>                    <span class="n">max_aggregate</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">node_index</span><span class="p">)]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">messages</span><span class="p">[</span><span class="n">mask</span><span class="p">],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">values</span>
+<span class="linenos">48</span>        <span class="n">node</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">node</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">node</span><span class="p">,</span> <span class="n">mean_aggregate</span><span class="p">,</span> <span class="n">max_aggregate</span><span class="p">],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)))</span>
+<span class="linenos">49</span>        <span class="k">return</span> <span class="n">node</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">ffn</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="k">class</span><span class="w"> </span><span class="nc">AttentiveReadout</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+<span class="linenos"> 2</span>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hidden_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">):</span>
+<span class="linenos"> 3</span>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+<span class="linenos"> 4</span>        <span class="bp">self</span><span class="o">.</span><span class="n">heads</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">heads</span><span class="p">),</span> <span class="mi">1</span><span class="p">)</span>
+<span class="linenos"> 5</span>        <span class="bp">self</span><span class="o">.</span><span class="n">score</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">hidden_dim</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">heads</span><span class="p">)</span>
+<span class="linenos"> 6</span>
+<span class="linenos"> 7</span>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">batch</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">num_graphs</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="linenos"> 8</span>        <span class="n">scores</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">score</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+<span class="linenos"> 9</span>        <span class="n">weights</span> <span class="o">=</span> <span class="n">_scatter_softmax</span><span class="p">(</span><span class="n">scores</span><span class="p">,</span> <span class="n">batch</span><span class="p">,</span> <span class="n">num_graphs</span><span class="p">)</span>
+<span class="linenos">10</span>        <span class="n">outputs</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="linenos">11</span>        <span class="k">for</span> <span class="n">head</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">heads</span><span class="p">):</span>
+<span class="linenos">12</span>            <span class="n">weighted</span> <span class="o">=</span> <span class="n">node</span> <span class="o">*</span> <span class="n">weights</span><span class="p">[:,</span> <span class="n">head</span> <span class="p">:</span> <span class="n">head</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+<span class="linenos">13</span>            <span class="n">pooled</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">num_graphs</span><span class="p">,</span> <span class="n">node</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">node</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">node</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+<span class="linenos">14</span>            <span class="n">pooled</span><span class="o">.</span><span class="n">index_add_</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">batch</span><span class="p">,</span> <span class="n">weighted</span><span class="p">)</span>
+<span class="linenos">15</span>            <span class="n">outputs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">pooled</span><span class="p">)</span>
+<span class="linenos">16</span>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span><span class="n">outputs</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+</pre></div>
+</div>
 <p>Main heads:</p>
 <ul class="simple">
 <li><p>Reconstruction head: energy, core, and direction.</p></li>
@@ -450,9 +838,33 @@ The model combines a node encoder, waveform encoder, optional detector embedding
 </ul>
 <p>Which heads are active is controlled by <code class="docutils literal notranslate"><span class="pre">training_task</span></code>, <code class="docutils literal notranslate"><span class="pre">mass_classification</span></code>, <code class="docutils literal notranslate"><span class="pre">quality_prediction</span></code>, and <code class="docutils literal notranslate"><span class="pre">error_prediction</span></code>.</p>
 </section>
+</section>
 <section id="loss-functions">
 <h2>Loss functions<a class="headerlink" href="#loss-functions" title="Link to this heading"></a></h2>
 <p>Loss definitions are in <code class="docutils literal notranslate"><span class="pre">train.py</span></code>.</p>
+<section id="mathematical-helpers">
+<h3>Mathematical helpers<a class="headerlink" href="#mathematical-helpers" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">SmoothL1</span></code> behaves like a quadratic loss for small residuals and like an absolute-error loss for large residuals:</p>
+<div class="math notranslate nohighlight">
+\[\begin{split}\mathrm{SmoothL1}_{\beta}(r)
+=
+\begin{cases}
+  \frac{1}{2}r^2/\beta, &amp; |r| &lt; \beta,\\
+  |r|-\frac{1}{2}\beta, &amp; |r| \ge \beta.
+\end{cases}\end{split}\]</div>
+<p>This limits the influence of large outliers while keeping a smooth local gradient near zero residual.</p>
+<p>The mass and quality heads emit logits <code class="docutils literal notranslate"><span class="pre">z</span></code> rather than probabilities.
+The sigmoid</p>
+<div class="math notranslate nohighlight">
+\[\sigma(z)=\frac{1}{1+\exp(-z)}\]</div>
+<p>is used only when converting a logit to a probability-like score.
+<code class="docutils literal notranslate"><span class="pre">BCEWithLogits</span></code> combines sigmoid and binary cross entropy in a numerically stable form:</p>
+<div class="math notranslate nohighlight">
+\[\mathrm{BCEWithLogits}(z,y)
+=
+\mathrm{softplus}(z)-yz,
+\qquad
+\mathrm{softplus}(z)=\log(1+\exp z).\]</div>
 <p><code class="docutils literal notranslate"><span class="pre">_reconstruction_loss</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py</span></code> computes reconstruction loss.
 For <code class="docutils literal notranslate"><span class="pre">loss_mode=physics</span></code>, energy, core, and direction are evaluated in physical units.
 Energy uses SmoothL1 on log-energy difference, core uses SmoothL1 after division by <code class="docutils literal notranslate"><span class="pre">core_loss_scale_km</span></code>, and direction uses angular error.
@@ -463,6 +875,7 @@ This target is not the mass label.</p>
 <p><code class="docutils literal notranslate"><span class="pre">_mass_classification_loss</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py</span></code> computes mass-only or mass-head loss.
 It supports BCE, focal loss, and optional ranking loss.</p>
 </section>
+</section>
 <section id="diagnostics">
 <h2>Diagnostics<a class="headerlink" href="#diagnostics" title="Link to this heading"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/diagnostics.py</span></code> produces learning curves, reconstruction resolution plots, quality-cut plots, mass ROC/confusion/score plots, and JSON summaries.
@@ -472,8 +885,8 @@ The final diagnostics therefore correspond to the best validation epoch, not nec
 </section>
 <section id="input-distributions-and-feature-importance">
 <h2>Input distributions and feature importance<a class="headerlink" href="#input-distributions-and-feature-importance" title="Link to this heading"></a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">feature_analysis.save_input_distributions</span></code> : <code class="docutils literal notranslate"><span class="pre">feature_analysis.py:133</span></code> scans HDF5 graphs and writes feature distribution PDFs and JSON.</p>
-<p><code class="docutils literal notranslate"><span class="pre">feature_analysis.save_feature_group_importance</span></code> : <code class="docutils literal notranslate"><span class="pre">feature_analysis.py:352</span></code> restores the checkpoint, model config, scalers, and split indices, computes baseline metrics, replaces or zeros one feature group at a time, recomputes metrics, and reports the degradation.
+<p><code class="docutils literal notranslate"><span class="pre">feature_analysis.save_input_distributions</span></code> : <code class="docutils literal notranslate"><span class="pre">feature_analysis.py:139</span></code> scans HDF5 graphs and writes feature distribution PDFs and JSON.</p>
+<p><code class="docutils literal notranslate"><span class="pre">feature_analysis.save_feature_group_importance</span></code> : <code class="docutils literal notranslate"><span class="pre">feature_analysis.py:369</span></code> restores the checkpoint, model config, scalers, and split indices, computes baseline metrics, replaces or zeros one feature group at a time, recomputes metrics, and reports the degradation.
 This is a post-hoc ablation of the trained model, not a full retraining experiment.</p>
 </section>
 <section id="where-to-read-when-changing-code">
@@ -539,7 +952,7 @@ This is a post-hoc ablation of the trained model, not a full retraining experime
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="cli.html" class="btn btn-neutral float-left" title="CLI API" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="code_map.html" class="btn btn-neutral float-left" title="Code Reading Map" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="python_api.html" class="btn btn-neutral float-right" title="Python API" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

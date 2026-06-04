@@ -80,52 +80,69 @@
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#hdf5-graph-export">HDF5 graph export</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#dst">DST読み込み</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#graphevent">GraphEvent作成</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#graphevent-build-graph-event">実コード抜粋: <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> と <code class="docutils literal notranslate"><span class="pre">build_graph_event</span></code></a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#node">node特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#accepted-pulsenode">実コード抜粋: accepted pulseをnodeへ展開する部分</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#edge">edge特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#edgeedge">実コード抜粋: edge候補とedge特徴量</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#hdf5">HDF5書き込み</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#energy-flat-samplingshard">energy-flat samplingとshard</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#dataset">学習用dataset読み込み</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#h5graphdataset-dataset-py-181"><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:181</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#h5graphdataset-dataset-py-202"><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:202</span></code></a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#getitem-sample"><code class="docutils literal notranslate"><span class="pre">__getitem__</span></code> が返すsample</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#hdf51-event">実コード抜粋: HDF5から1 eventを読む部分</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#scaler-fitting">Scaler fitting</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#collate">collate</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#graph-samplemini-batch">実コード抜粋: graph sampleをmini-batchへ連結する部分</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#train-val-test-split">train/val/test split</a></li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id4">学習本体</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#train-model-split-scaler">実コード抜粋: <code class="docutils literal notranslate"><span class="pre">train_model</span></code> の入口からsplit/scalerまで</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#epoch-loop">epoch loop</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#epochtrain-loop">実コード抜粋: 1 epoch内のtrain loop</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#checkpoint">checkpoint</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id5">モデル構造</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id6">入力</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id6">GNNとして何を近似しているか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id7">物理量との対応</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id8">入力</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#node-encoder">node encoder</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#waveform-encoder">waveform encoder</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#detector-embedding">detector embedding</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#time-edge-encoder">time-edge encoder</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#message-passing">message passing</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#readouthead">readoutとhead</a></li>
-<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id7">GNNがしていること、していないこと</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#physicstalesdgnn-forward">実コード抜粋: <code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN.forward</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id9">GNNがしていること、していないこと</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id8">loss</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id10">数学関数の補足</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#smoothl1">SmoothL1</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#sigmoid-logit-bcewithlogits">sigmoid, logit, BCEWithLogits</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id11">loss</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#reconstruction-loss">reconstruction loss</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#energy-bias-loss">energy bias loss</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#quality-loss">quality loss</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#mass-loss">mass loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id12">実コード抜粋: loss関数</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#total-loss">total loss</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id9">診断と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id13">診断と評価</a></li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#feature-importance">入力分布とfeature importance</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id10">入力分布</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id14">入力分布</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#feature-group">feature group重要度</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#feature-group-ablation">実コード抜粋: feature group ablation</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id11">変更したい時に読む場所</a></li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id12">コードを読む推奨順</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id15">変更したい時に読む場所</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id16">コードを読む推奨順</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="python_api.html">Python API</a><ul>
@@ -297,11 +314,12 @@
 <li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#train-val-test-split">train/val/test split</a></li>
 <li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#id4">学習本体</a></li>
 <li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#id5">モデル構造</a></li>
-<li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#id8">loss</a></li>
-<li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#id9">診断と評価</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#id10">数学関数の補足</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#id11">loss</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#id13">診断と評価</a></li>
 <li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#feature-importance">入力分布とfeature importance</a></li>
-<li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#id11">変更したい時に読む場所</a></li>
-<li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#id12">コードを読む推奨順</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#id15">変更したい時に読む場所</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html#id16">コードを読む推奨順</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="python_api.html">Python API</a><ul>
