@@ -56,6 +56,18 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="../ja/code_map.html">コード読解マップ</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#id2">読む順番</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#cli-wrapper">CLI は薄い wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#dataset">Dataset 読み込み</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#split-scaler">Split と scaler</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#model">Model の入力と出力</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#loss">Loss と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#server-submitter">Server submitter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#diagnostics">Diagnostics と後処理</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="../ja/code_walkthrough.html">コード詳細 walkthrough</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id1">このページの読み方</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#gnn">GNNを読むための基礎</a><ul>
@@ -147,6 +159,18 @@
 <li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html">Code Reading Map</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#recommended-reading-order">Recommended reading order</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#cli-as-a-thin-wrapper">CLI as a thin wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#dataset-loading">Dataset loading</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#split-and-scalers">Split and scalers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#model-inputs-and-outputs">Model inputs and outputs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#losses-and-evaluation">Losses and evaluation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#server-submitters">Server submitters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#diagnostics-and-post-processing">Diagnostics and post-processing</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html">Code walkthrough</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#top-level-entry-point">Top-level entry point</a></li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#hdf5-graph-export">HDF5 graph export</a><ul>
@@ -236,7 +260,9 @@
              
   <section id="english-api-usage-guide">
 <h1>English API Usage Guide<a class="headerlink" href="#english-api-usage-guide" title="Link to this heading"></a></h1>
-<p>This section documents which command-line and Python APIs are used for HDF5 export, training, prediction, and diagnostics.</p>
+<p>This section documents which command-line and Python APIs are used for HDF5 export, training, prediction, and diagnostics.
+It also maps each workflow to the source files that implement it, so the generated HTML can be used as a guide for reading the code.</p>
+<p>For code study, start with <a class="reference internal" href="code_map.html"><span class="doc">Code Reading Map</span></a>, then read <a class="reference internal" href="code_walkthrough.html"><span class="doc">Code walkthrough</span></a> for the GNN model, message passing, and loss definitions.</p>
 <div class="toctree-wrapper compound">
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="cli.html">CLI API</a><ul>
@@ -246,6 +272,18 @@
 <li class="toctree-l2"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="code_map.html">Code Reading Map</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#recommended-reading-order">Recommended reading order</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#cli-as-a-thin-wrapper">CLI as a thin wrapper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#dataset-loading">Dataset loading</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#split-and-scalers">Split and scalers</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#model-inputs-and-outputs">Model inputs and outputs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#losses-and-evaluation">Losses and evaluation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#server-submitters">Server submitters</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#diagnostics-and-post-processing">Diagnostics and post-processing</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="code_walkthrough.html">Code walkthrough</a><ul>

@@ -21,7 +21,7 @@
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="検索" href="../search.html" />
-    <link rel="next" title="コード詳細 walkthrough" href="code_walkthrough.html" />
+    <link rel="next" title="コード読解マップ" href="code_map.html" />
     <link rel="prev" title="日本語 API 利用ガイド" href="index.html" /> 
 </head>
 
@@ -56,8 +56,27 @@
 <li class="toctree-l3"><a class="reference internal" href="#visualization">Visualization</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html">コード読解マップ</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#id2">読む順番</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#cli-wrapper">CLI は薄い wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#dataset">Dataset 読み込み</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#split-scaler">Split と scaler</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#model">Model の入力と出力</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#loss">Loss と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#server-submitter">Server submitter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#diagnostics">Diagnostics と後処理</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html">コード詳細 walkthrough</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id1">全体の入口</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id1">このページの読み方</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#gnn">GNNを読むための基礎</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id2">基本用語</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#loss">非線形関数とloss関数</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#gnn-message-passing">GNNの中心: message passing</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id3">全体の入口</a></li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#hdf5-graph-export">HDF5 graph export</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#dst">DST読み込み</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#graphevent">GraphEvent作成</a></li>
@@ -75,32 +94,38 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#train-val-test-split">train/val/test split</a></li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id2">学習本体</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id4">学習本体</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#epoch-loop">epoch loop</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#checkpoint">checkpoint</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id3">モデル構造</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id4">入力</a></li>
-<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#node-pulse-waveform">node / pulse / waveform</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id5">モデル構造</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id6">入力</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#node-encoder">node encoder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#waveform-encoder">waveform encoder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#detector-embedding">detector embedding</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#time-edge-encoder">time-edge encoder</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#message-passing">message passing</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#readouthead">readoutとhead</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id7">GNNがしていること、していないこと</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#loss">loss</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id8">loss</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#reconstruction-loss">reconstruction loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#energy-bias-loss">energy bias loss</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#quality-loss">quality loss</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#mass-loss">mass loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#total-loss">total loss</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id5">診断と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id9">診断と評価</a></li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#feature-importance">入力分布とfeature importance</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id6">入力分布</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id10">入力分布</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#feature-group">feature group重要度</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id7">変更したい時に読む場所</a></li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id8">コードを読む推奨順</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id11">変更したい時に読む場所</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id12">コードを読む推奨順</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="python_api.html">Python API</a><ul>
@@ -132,6 +157,18 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/code_map.html">Code Reading Map</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#recommended-reading-order">Recommended reading order</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#cli-as-a-thin-wrapper">CLI as a thin wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#dataset-loading">Dataset loading</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#split-and-scalers">Split and scalers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#model-inputs-and-outputs">Model inputs and outputs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#losses-and-evaluation">Losses and evaluation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#server-submitters">Server submitters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#diagnostics-and-post-processing">Diagnostics and post-processing</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../en/code_walkthrough.html">Code walkthrough</a><ul>
@@ -225,10 +262,14 @@
   <section id="cli-api">
 <h1>CLI API<a class="headerlink" href="#cli-api" title="Link to this heading"></a></h1>
 <p>CLIの入口は <code class="docutils literal notranslate"><span class="pre">talesd-gnn</span></code> です。<code class="docutils literal notranslate"><span class="pre">pyproject.toml</span></code> では
-<code class="docutils literal notranslate"><span class="pre">talesd_gnn_reconstruction.cli:main</span></code> に対応しています。</p>
+<code class="docutils literal notranslate"><span class="pre">talesd_gnn_reconstruction.cli:main</span></code> に対応しています。
+各 command の実装上の位置づけは <a class="reference internal" href="code_map.html"><span class="doc">コード読解マップ</span></a> にまとめています。
+このページでは、実際に使う command、主な入力、出力、後段での使い道を確認します。</p>
 <section id="hdf5-graph-export">
 <h2>HDF5 graph export<a class="headerlink" href="#hdf5-graph-export" title="Link to this heading"></a></h2>
-<p>DSTを読み、GNN用HDF5 graph shardを作成します。</p>
+<p>DSTを読み、GNN用HDF5 graph shardを作成します。
+出力される HDF5 は学習、入力分布、可視化、feature importance の共通入力になります。
+MC 学習用の場合、<code class="docutils literal notranslate"><span class="pre">target</span></code> と <code class="docutils literal notranslate"><span class="pre">particle_label</span></code> を含むため、再構成と mass 分類の教師データとして使えます。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--input-dir<span class="w"> </span>/path/to/mc_dst<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--kind<span class="w"> </span>mc<span class="w"> </span><span class="se">\</span>
@@ -253,7 +294,8 @@
 </section>
 <section id="training">
 <h2>Training<a class="headerlink" href="#training" title="Link to this heading"></a></h2>
-<p>既存HDF5 graphを使って学習します。</p>
+<p>既存HDF5 graphを使って学習します。
+<code class="docutils literal notranslate"><span class="pre">train</span></code> は graph を直接変更しません。split、scaler、model、checkpoint、metrics、diagnostics を run directory 側に作ります。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>train<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/flat50000<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-o<span class="w"> </span>/path/to/output/checkpoints/reconstruction.pt<span class="w"> </span><span class="se">\</span>
@@ -281,7 +323,9 @@
 </section>
 <section id="prediction">
 <h2>Prediction<a class="headerlink" href="#prediction" title="Link to this heading"></a></h2>
-<p>学習済みcheckpointでCSVを作成します。</p>
+<p>学習済みcheckpointでCSVを作成します。
+<code class="docutils literal notranslate"><span class="pre">--no-truth</span></code> を使わない場合、MC graph では truth も CSV に含められます。
+実データ graph では、truth を使わず prediction だけを出す用途になります。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>predict<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/data_graphs.h5<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--checkpoint<span class="w"> </span>/path/to/checkpoints/reconstruction.pt<span class="w"> </span><span class="se">\</span>
@@ -291,7 +335,9 @@
 </section>
 <section id="input-distributions">
 <h2>Input distributions<a class="headerlink" href="#input-distributions" title="Link to this heading"></a></h2>
-<p>入力特徴量の分布をPDFとJSONに保存します。</p>
+<p>入力特徴量の分布をPDFとJSONに保存します。
+HDF5 の内容と split の偏りを確認するための診断です。
+学習ごとに変わるものではなく、基本的には HDF5 作成後に同じ graph に対して確認します。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>input-distributions<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/flat50000<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-o<span class="w"> </span>/path/to/input_distributions<span class="w"> </span><span class="se">\</span>
@@ -301,7 +347,9 @@
 </section>
 <section id="feature-importance">
 <h2>Feature importance<a class="headerlink" href="#feature-importance" title="Link to this heading"></a></h2>
-<p>checkpointに対してfeature group ablationを行います。</p>
+<p>checkpointに対してfeature group ablationを行います。
+これは再学習ではありません。学習済み model に対して、node/edge/waveform などの入力 group を置換し、
+metrics がどれだけ悪化するかを見ます。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>feature-importance<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/flat50000<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--checkpoint<span class="w"> </span>/path/to/checkpoints/reconstruction.pt<span class="w"> </span><span class="se">\</span>
@@ -313,7 +361,8 @@
 </section>
 <section id="visualization">
 <h2>Visualization<a class="headerlink" href="#visualization" title="Link to this heading"></a></h2>
-<p>HDF5 graphをevent displayとしてPDF出力します。</p>
+<p>HDF5 graphをevent displayとしてPDF出力します。
+graph schema、node/edge の作り方、waveform mask の妥当性を目で確認するために使います。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>visualize<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/flat50000<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--index<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
@@ -328,7 +377,7 @@
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="index.html" class="btn btn-neutral float-left" title="日本語 API 利用ガイド" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="code_walkthrough.html" class="btn btn-neutral float-right" title="コード詳細 walkthrough" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="code_map.html" class="btn btn-neutral float-right" title="コード読解マップ" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

@@ -56,8 +56,27 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="../ja/code_map.html">コード読解マップ</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#id2">読む順番</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#cli-wrapper">CLI は薄い wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#dataset">Dataset 読み込み</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#split-scaler">Split と scaler</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#model">Model の入力と出力</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#loss">Loss と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#server-submitter">Server submitter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#diagnostics">Diagnostics と後処理</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="../ja/code_walkthrough.html">コード詳細 walkthrough</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id1">全体の入口</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id1">このページの読み方</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#gnn">GNNを読むための基礎</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id2">基本用語</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#loss">非線形関数とloss関数</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#gnn-message-passing">GNNの中心: message passing</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id3">全体の入口</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#hdf5-graph-export">HDF5 graph export</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#dst">DST読み込み</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#graphevent">GraphEvent作成</a></li>
@@ -75,32 +94,38 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#train-val-test-split">train/val/test split</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id2">学習本体</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id4">学習本体</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#epoch-loop">epoch loop</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#checkpoint">checkpoint</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id3">モデル構造</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id4">入力</a></li>
-<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#node-pulse-waveform">node / pulse / waveform</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id5">モデル構造</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id6">入力</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#node-encoder">node encoder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#waveform-encoder">waveform encoder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#detector-embedding">detector embedding</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#time-edge-encoder">time-edge encoder</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#message-passing">message passing</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#readouthead">readoutとhead</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id7">GNNがしていること、していないこと</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#loss">loss</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id8">loss</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#reconstruction-loss">reconstruction loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#energy-bias-loss">energy bias loss</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#quality-loss">quality loss</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#mass-loss">mass loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#total-loss">total loss</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id5">診断と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id9">診断と評価</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#feature-importance">入力分布とfeature importance</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id6">入力分布</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#id10">入力分布</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../ja/code_walkthrough.html#feature-group">feature group重要度</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id7">変更したい時に読む場所</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id8">コードを読む推奨順</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id11">変更したい時に読む場所</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/code_walkthrough.html#id12">コードを読む推奨順</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../ja/python_api.html">Python API</a><ul>
@@ -132,6 +157,18 @@
 <li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html">Code Reading Map</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#recommended-reading-order">Recommended reading order</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#cli-as-a-thin-wrapper">CLI as a thin wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#dataset-loading">Dataset loading</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#split-and-scalers">Split and scalers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#model-inputs-and-outputs">Model inputs and outputs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#losses-and-evaluation">Losses and evaluation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#server-submitters">Server submitters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#diagnostics-and-post-processing">Diagnostics and post-processing</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html">Code walkthrough</a><ul>
@@ -224,7 +261,9 @@
              
   <section id="python-api">
 <h1>Python API<a class="headerlink" href="#python-api" title="Link to this heading"></a></h1>
-<p>Use the Python API for notebooks and small or medium checks. For large production training, use the Slurm submitters.</p>
+<p>Use the Python API for notebooks and small or medium checks. For large production training, use the Slurm submitters.
+The workflow map is in <a class="reference internal" href="code_map.html"><span class="doc">Code Reading Map</span></a>.
+Direct Python calls use the same dataset, model, loss, and diagnostics code as the CLI.</p>
 <section id="training">
 <h2>Training<a class="headerlink" href="#training" title="Link to this heading"></a></h2>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">talesd_gnn_reconstruction.train</span><span class="w"> </span><span class="kn">import</span> <span class="n">train_model</span>
@@ -246,7 +285,9 @@
 <span class="p">)</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">train_model</span></code> runs dataset initialization, splitting, scaler fitting, DataLoader setup, training, validation, best checkpoint saving, final test evaluation, and diagnostics.</p>
+<p><code class="docutils literal notranslate"><span class="pre">train_model</span></code> runs dataset initialization, splitting, scaler fitting, DataLoader setup, training, validation, best checkpoint saving, final test evaluation, and diagnostics.
+The returned dictionary includes checkpoint paths, metrics JSON paths, diagnostics directories, and stage timings.
+For notebooks, prefer small graphs or short checks instead of full production training.</p>
 </section>
 <section id="hdf5-dataset-loading">
 <h2>HDF5 dataset loading<a class="headerlink" href="#hdf5-dataset-loading" title="Link to this heading"></a></h2>
@@ -262,7 +303,8 @@
 <span class="n">dataset</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">sample</span></code> contains <code class="docutils literal notranslate"><span class="pre">node_features</span></code>, <code class="docutils literal notranslate"><span class="pre">edge_features</span></code>, <code class="docutils literal notranslate"><span class="pre">waveform_features</span></code>, <code class="docutils literal notranslate"><span class="pre">target</span></code>, and metadata.</p>
+<p><code class="docutils literal notranslate"><span class="pre">sample</span></code> contains <code class="docutils literal notranslate"><span class="pre">node_features</span></code>, <code class="docutils literal notranslate"><span class="pre">edge_features</span></code>, <code class="docutils literal notranslate"><span class="pre">waveform_features</span></code>, <code class="docutils literal notranslate"><span class="pre">target</span></code>, and metadata.
+This is the closest API to the tensors later consumed by the model, so it is the first place to inspect schema or input-debugging issues.</p>
 </section>
 <section id="prediction">
 <h2>Prediction<a class="headerlink" href="#prediction" title="Link to this heading"></a></h2>
@@ -290,6 +332,8 @@
 <span class="p">)</span>
 </pre></div>
 </div>
+<p><code class="docutils literal notranslate"><span class="pre">summary</span></code> includes output paths and basic statistics for each feature.
+For large HDF5 datasets, run this on the server and sync only the generated PDF/JSON outputs.</p>
 </section>
 <section id="feature-group-importance">
 <h2>Feature group importance<a class="headerlink" href="#feature-group-importance" title="Link to this heading"></a></h2>
@@ -306,6 +350,8 @@
 <span class="p">)</span>
 </pre></div>
 </div>
+<p><code class="docutils literal notranslate"><span class="pre">result</span></code> contains metric degradation by feature group.
+This estimates input-group contribution from a trained checkpoint without running many retraining jobs.</p>
 </section>
 <section id="manual-hdf5-graph-writing">
 <h2>Manual HDF5 graph writing<a class="headerlink" href="#manual-hdf5-graph-writing" title="Link to this heading"></a></h2>

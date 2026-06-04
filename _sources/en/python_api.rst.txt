@@ -2,6 +2,8 @@ Python API
 ==========
 
 Use the Python API for notebooks and small or medium checks. For large production training, use the Slurm submitters.
+The workflow map is in :doc:`code_map`.
+Direct Python calls use the same dataset, model, loss, and diagnostics code as the CLI.
 
 Training
 --------
@@ -27,6 +29,8 @@ Training
    )
 
 ``train_model`` runs dataset initialization, splitting, scaler fitting, DataLoader setup, training, validation, best checkpoint saving, final test evaluation, and diagnostics.
+The returned dictionary includes checkpoint paths, metrics JSON paths, diagnostics directories, and stage timings.
+For notebooks, prefer small graphs or short checks instead of full production training.
 
 HDF5 dataset loading
 --------------------
@@ -45,6 +49,7 @@ HDF5 dataset loading
    dataset.close()
 
 ``sample`` contains ``node_features``, ``edge_features``, ``waveform_features``, ``target``, and metadata.
+This is the closest API to the tensors later consumed by the model, so it is the first place to inspect schema or input-debugging issues.
 
 Prediction
 ----------
@@ -75,6 +80,9 @@ Input distributions
        show_progress=True,
    )
 
+``summary`` includes output paths and basic statistics for each feature.
+For large HDF5 datasets, run this on the server and sync only the generated PDF/JSON outputs.
+
 Feature group importance
 ------------------------
 
@@ -92,6 +100,9 @@ Feature group importance
        device="cuda",
    )
 
+``result`` contains metric degradation by feature group.
+This estimates input-group contribution from a trained checkpoint without running many retraining jobs.
+
 Manual HDF5 graph writing
 -------------------------
 
@@ -105,4 +116,3 @@ Normally use ``talesd-gnn export``. The low-level writer API is:
        write_graph(handle, 0, graph_event)
 
 ``graph_event`` is the ``GraphEvent`` returned by ``event_graph.build_graph_event``.
-

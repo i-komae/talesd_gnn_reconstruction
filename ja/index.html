@@ -56,6 +56,18 @@
 <li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html">コード読解マップ</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#id2">読む順番</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#cli-wrapper">CLI は薄い wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#dataset">Dataset 読み込み</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#split-scaler">Split と scaler</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#model">Model の入力と出力</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#loss">Loss と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#server-submitter">Server submitter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#diagnostics">Diagnostics と後処理</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html">コード詳細 walkthrough</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id1">このページの読み方</a></li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#gnn">GNNを読むための基礎</a><ul>
@@ -147,6 +159,18 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="../en/code_map.html">Code Reading Map</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#recommended-reading-order">Recommended reading order</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#cli-as-a-thin-wrapper">CLI as a thin wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#dataset-loading">Dataset loading</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#split-and-scalers">Split and scalers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#model-inputs-and-outputs">Model inputs and outputs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#losses-and-evaluation">Losses and evaluation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#server-submitters">Server submitters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#diagnostics-and-post-processing">Diagnostics and post-processing</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="../en/code_walkthrough.html">Code walkthrough</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#top-level-entry-point">Top-level entry point</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#hdf5-graph-export">HDF5 graph export</a><ul>
@@ -236,7 +260,11 @@
              
   <section id="api">
 <h1>日本語 API 利用ガイド<a class="headerlink" href="#api" title="Link to this heading"></a></h1>
-<p>この文書は、HDF5作成、学習、推論、診断を行う時に、どのコマンドとPython APIを使うかをまとめます。</p>
+<p>この文書は、HDF5作成、学習、推論、診断を行う時に、どのコマンドとPython APIを使うかをまとめます。
+単にコマンドを列挙するのではなく、実行した時にどのソースコードへ入り、どのデータ構造が作られ、
+どの出力が後段で使われるかを追えるようにしています。</p>
+<p>コードを読む場合は、まず <a class="reference internal" href="code_map.html"><span class="doc">コード読解マップ</span></a> で全体の流れを確認し、その後に
+<a class="reference internal" href="code_walkthrough.html"><span class="doc">コード詳細 walkthrough</span></a> でモデル、message passing、loss の実装を読むのが自然です。</p>
 <div class="toctree-wrapper compound">
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="cli.html">CLI API</a><ul>
@@ -246,6 +274,18 @@
 <li class="toctree-l2"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="code_map.html">コード読解マップ</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#id2">読む順番</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#cli-wrapper">CLI は薄い wrapper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#dataset">Dataset 読み込み</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#split-scaler">Split と scaler</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#model">Model の入力と出力</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#loss">Loss と評価</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#server-submitter">Server submitter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html#diagnostics">Diagnostics と後処理</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="code_walkthrough.html">コード詳細 walkthrough</a><ul>

@@ -3,11 +3,15 @@ CLI API
 
 CLIの入口は ``talesd-gnn`` です。``pyproject.toml`` では
 ``talesd_gnn_reconstruction.cli:main`` に対応しています。
+各 command の実装上の位置づけは :doc:`code_map` にまとめています。
+このページでは、実際に使う command、主な入力、出力、後段での使い道を確認します。
 
 HDF5 graph export
 -----------------
 
 DSTを読み、GNN用HDF5 graph shardを作成します。
+出力される HDF5 は学習、入力分布、可視化、feature importance の共通入力になります。
+MC 学習用の場合、``target`` と ``particle_label`` を含むため、再構成と mass 分類の教師データとして使えます。
 
 .. code-block:: bash
 
@@ -37,6 +41,7 @@ Training
 --------
 
 既存HDF5 graphを使って学習します。
+``train`` は graph を直接変更しません。split、scaler、model、checkpoint、metrics、diagnostics を run directory 側に作ります。
 
 .. code-block:: bash
 
@@ -69,6 +74,8 @@ Prediction
 ----------
 
 学習済みcheckpointでCSVを作成します。
+``--no-truth`` を使わない場合、MC graph では truth も CSV に含められます。
+実データ graph では、truth を使わず prediction だけを出す用途になります。
 
 .. code-block:: bash
 
@@ -81,6 +88,8 @@ Input distributions
 -------------------
 
 入力特徴量の分布をPDFとJSONに保存します。
+HDF5 の内容と split の偏りを確認するための診断です。
+学習ごとに変わるものではなく、基本的には HDF5 作成後に同じ graph に対して確認します。
 
 .. code-block:: bash
 
@@ -93,6 +102,8 @@ Feature importance
 ------------------
 
 checkpointに対してfeature group ablationを行います。
+これは再学習ではありません。学習済み model に対して、node/edge/waveform などの入力 group を置換し、
+metrics がどれだけ悪化するかを見ます。
 
 .. code-block:: bash
 
@@ -107,6 +118,7 @@ Visualization
 -------------
 
 HDF5 graphをevent displayとしてPDF出力します。
+graph schema、node/edge の作り方、waveform mask の妥当性を目で確認するために使います。
 
 .. code-block:: bash
 
@@ -114,4 +126,3 @@ HDF5 graphをevent displayとしてPDF出力します。
      --graphs /path/to/graphs/flat50000 \
      --index 0 \
      -o /path/to/graph_000000.pdf
-
