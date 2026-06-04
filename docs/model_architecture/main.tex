@@ -1,18 +1,20 @@
 \documentclass[lualatex,paper=a4,fontsize=9pt]{jlreq}
 
 \usepackage{amsmath,amssymb}
+\usepackage{array}
 \usepackage{booktabs}
 \usepackage{geometry}
 \usepackage{graphicx}
 \usepackage{longtable}
+\usepackage{tabularx}
 \usepackage{tikz}
+\usepackage{xurl}
 \usetikzlibrary{arrows.meta,positioning,fit,calc,backgrounds}
 
 \geometry{margin=14mm}
 \pagestyle{plain}
-\setlength{\parindent}{0pt}
-\setlength{\parskip}{0.55em}
 \sloppy
+\urlstyle{tt}
 
 \title{Telescope Array Low-energy Extension Surface Detector（TALE-SD）\\
 波形グラフニューラルネットワークモデル仕様}
@@ -20,6 +22,8 @@
 \date{}
 
 \newcommand{\code}[1]{\ifmmode\text{\ttfamily #1}\else\texttt{#1}\fi}
+\newcommand{\pathcode}[1]{\begingroup\footnotesize\url{#1}\endgroup}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
 \newcommand{\R}{\mathbb{R}}
 
 \begin{document}
@@ -32,13 +36,14 @@
 対象は、幾何とエネルギーの再構成、および陽子・鉄の二値分類である。
 本書の目的は、実装を逐一読まなくても、入力、グラフの作り方、ニューラルネットワークの層構成、出力、損失関数、学習設定を再現できるようにすることである。
 
-現行の実行入口は次の 2 つである。
+学習ジョブの標準入口は、タスクごとに分かれている。
 \begin{itemize}
   \item 再構成: \code{scripts/submit\_server\_waveform\_full\_training.sh}
   \item 質量分類のみ: \code{scripts/submit\_server\_mass\_only\_training.sh}
+  \item 再構成と質量分類の同時学習: \code{scripts/submit\_server\_reco\_mass\_training.sh}
 \end{itemize}
-どちらのスクリプトも、Hierarchical Data Format version 5（HDF5）形式で保存済みのグラフ片を読み込む。
-学習中に Data Summary Tape（DST）ファイルは読まない。
+これらは、Hierarchical Data Format version 5（HDF5）形式で保存済みのグラフ片を読み込んで学習する。
+Data Summary Tape（DST）ファイルを読むのは HDF5 graph export の段階であり、上記の学習ジョブでは DST を読まない。
 本書には、旧基準グラフでの比較結果と、2026 年 6 月 1 日に完了した旧 schema \code{flat50000} の結果を併記する。
 旧基準比較で用いたグラフ入力は次である。
 \begin{flushleft}
@@ -68,6 +73,7 @@ DST から作り直した energy-flat HDF5 は正常に完了している。
 本節は、実際のコードを読むための地図である。
 この PDF はモデル仕様を説明する文書だが、実装を追う場合には、DST から HDF5 グラフを作る段階と、HDF5 グラフを読んで学習する段階を明確に分けて読む必要がある。
 全体の流れは次の通りである。
+\begin{small}
 \[
 \mathrm{DST}
 \rightarrow
@@ -83,45 +89,46 @@ DST から作り直した energy-flat HDF5 は正常に完了している。
 \rightarrow
 \mathrm{loss/metrics/diagnostics}.
 \]
+\end{small}
 
 \begin{table}[htbp]
   \centering
   \caption{主要な処理段階と対応するソースコード。}
   \label{tab:implementation-map}
-  {\small
-  \begin{tabular}{p{30mm}p{58mm}p{72mm}}
+  {\footnotesize
+  \begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{28mm}Y Y}
     \toprule
     処理段階 & 主なファイル & ここで決まること \\
     \midrule
     CLI の入口 &
-    \code{src/talesd\_gnn\_reconstruction/cli.py} &
+    \pathcode{src/talesd_gnn_reconstruction/cli.py} &
     \code{talesd-gnn} の subcommand を解釈し、Python API の引数へ変換する。 \\
     DST 読み込み &
-    \code{src/talesd\_gnn\_reconstruction/dst\_reader.py} &
+    \pathcode{src/talesd_gnn_reconstruction/dst_reader.py} &
     DST bank を順に読み、event graph 作成に渡す record を作る。 \\
     event graph 作成 &
-    \code{src/talesd\_gnn\_reconstruction/event\_graph.py} &
+    \pathcode{src/talesd_gnn_reconstruction/event_graph.py} &
     accepted-pulse node、edge、waveform、教師ラベル、metadata を作る。 \\
     HDF5 書き込み &
-    \code{src/talesd\_gnn\_reconstruction/graph\_io.py} &
+    \pathcode{src/talesd_gnn_reconstruction/graph_io.py} &
     graph shard を書き、\code{columns\_json} や \code{waveform\_schema} を保存する。 \\
     HDF5 読み込み &
-    \code{src/talesd\_gnn\_reconstruction/dataset.py} &
+    \pathcode{src/talesd_gnn_reconstruction/dataset.py} &
     shard 群を 1 つの dataset として扱い、DataLoader 用の sample を返す。 \\
     学習全体 &
-    \code{src/talesd\_gnn\_reconstruction/train.py} &
+    \pathcode{src/talesd_gnn_reconstruction/train.py} &
     split、scaler、DataLoader、学習 loop、loss、best checkpoint、最終評価を管理する。 \\
     モデル本体 &
-    \code{src/talesd\_gnn\_reconstruction/model.py} &
+    \pathcode{src/talesd_gnn_reconstruction/model.py} &
     node、edge、waveform を埋め込み、message passing と graph readout で出力を作る。 \\
     診断図 &
-    \code{src/talesd\_gnn\_reconstruction/diagnostics.py} &
+    \pathcode{src/talesd_gnn_reconstruction/diagnostics.py} &
     learning curve、エネルギー依存性、quality cut、mass 診断を作る。 \\
     入力分布・重要度 &
-    \code{src/talesd\_gnn\_reconstruction/feature\_analysis.py} &
+    \pathcode{src/talesd_gnn_reconstruction/feature_analysis.py} &
     入力特徴量分布と post-hoc feature group ablation を作る。 \\
     \bottomrule
-  \end{tabular}
+  \end{tabularx}
   }
 \end{table}
 

@@ -1,11 +1,14 @@
 \documentclass[a4paper,10pt]{article}
 
 \usepackage{amsmath,amssymb}
+\usepackage{array}
 \usepackage{booktabs}
 \usepackage{geometry}
 \usepackage{graphicx}
 \usepackage{longtable}
+\usepackage{tabularx}
 \usepackage{tikz}
+\usepackage{xurl}
 \usetikzlibrary{arrows.meta,positioning,fit,calc,backgrounds}
 
 \geometry{margin=18mm}
@@ -13,6 +16,7 @@
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{0.6em}
 \sloppy
+\urlstyle{tt}
 
 \title{TALE-SD Waveform Graph Neural Network\\
 Physics and Model Specification}
@@ -20,6 +24,8 @@ Physics and Model Specification}
 \date{}
 
 \newcommand{\code}[1]{\ifmmode\text{\ttfamily #1}\else\texttt{#1}\fi}
+\newcommand{\pathcode}[1]{\begingroup\footnotesize\url{#1}\endgroup}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
 \newcommand{\R}{\mathbb{R}}
 
 \begin{document}
@@ -40,60 +46,65 @@ It reconstructs the shower energy, core position, and arrival direction, predict
 This section maps the model description to the source code.
 The production workflow has two distinct stages: exporting DST events into HDF5 graphs, and training from those HDF5 graphs.
 The overall data flow is
+\begin{footnotesize}
 \[
+\begin{aligned}
 \mathrm{DST}
-\rightarrow
+&\rightarrow
 \code{talesd-gnn export}
 \rightarrow
 \mathrm{HDF5\ graph}
 \rightarrow
 \code{H5GraphDataset}
-\rightarrow
+\\
+&\rightarrow
 \code{train\_model}
 \rightarrow
 \code{PhysicsTaleSdGNN}
 \rightarrow
 \mathrm{loss/metrics/diagnostics}.
+\end{aligned}
 \]
+\end{footnotesize}
 
 \begin{table}[htbp]
   \centering
   \caption{Main implementation stages and source files.}
   \label{tab:en-implementation-map}
-  {\small
-  \begin{tabular}{p{30mm}p{58mm}p{72mm}}
+  {\footnotesize
+  \begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{27mm}Y Y}
     \toprule
     Stage & Main file & Role \\
     \midrule
     CLI entry point &
-    \code{src/talesd\_gnn\_reconstruction/cli.py} &
+    \pathcode{src/talesd_gnn_reconstruction/cli.py} &
     Parses \code{talesd-gnn} subcommands and maps command-line options to Python API arguments. \\
     DST reading &
-    \code{src/talesd\_gnn\_reconstruction/dst\_reader.py} &
+    \pathcode{src/talesd_gnn_reconstruction/dst_reader.py} &
     Iterates DST banks and produces records for graph construction. \\
     Event graph creation &
-    \code{src/talesd\_gnn\_reconstruction/event\_graph.py} &
+    \pathcode{src/talesd_gnn_reconstruction/event_graph.py} &
     Builds accepted-pulse nodes, edges, waveforms, targets, and metadata. \\
     HDF5 writing &
-    \code{src/talesd\_gnn\_reconstruction/graph\_io.py} &
+    \pathcode{src/talesd_gnn_reconstruction/graph_io.py} &
     Writes graph shards and stores schema attributes such as \code{columns\_json} and \code{waveform\_schema}. \\
     HDF5 loading &
-    \code{src/talesd\_gnn\_reconstruction/dataset.py} &
+    \pathcode{src/talesd_gnn_reconstruction/dataset.py} &
     Presents one file or many shards as a PyTorch-compatible dataset. \\
     Training workflow &
-    \code{src/talesd\_gnn\_reconstruction/train.py} &
+    \pathcode{src/talesd_gnn_reconstruction/train.py} &
     Handles split, scalers, DataLoaders, epoch loop, losses, best checkpoint, and final evaluation. \\
     Model &
-    \code{src/talesd\_gnn\_reconstruction/model.py} &
+    \pathcode{src/talesd_gnn_reconstruction/model.py} &
     Embeds node, edge, and waveform inputs, applies message passing and graph readout, and returns task heads. \\
     Diagnostics &
-    \code{src/talesd\_gnn\_reconstruction/diagnostics.py} &
+    \pathcode{src/talesd_gnn_reconstruction/diagnostics.py} &
     Writes learning curves, energy-dependence plots, quality-cut plots, and mass diagnostics. \\
     Feature analysis &
-    \code{src/talesd\_gnn\_reconstruction/feature\_analysis.py} &
+    \pathcode{src/talesd_gnn_reconstruction/feature_analysis.py} &
     Writes input distributions and post-hoc feature-group ablation results. \\
     \bottomrule
-  \end{tabular}
+  \end{tabularx}
   }
 \end{table}
 
@@ -197,7 +208,7 @@ where $D_i$ and $D_j$ are positive connection counts.
 
 \section{Input Distribution Diagnostics}
 
-Figures~\ref{fig:en-input-node}, \ref{fig:en-input-edge}, and~\ref{fig:en-input-pulse-waveform-target} show input distributions generated from the current \code{flat50000\_wfmask\_target6\_20260603\_102418} HDF5 export.
+Figures~\ref{fig:en-input-node}, \ref{fig:en-input-edge}, and~\ref{fig:en-input-pulse-waveform-target} show input distributions generated from the current HDF5 export, \pathcode{flat50000_wfmask_target6_20260603_102418}.
 This export contains 2,839,184 events in 29 shards: 1,455,815 proton events and 1,383,369 iron events.
 The plots use a 100,000-event sample.
 In the current schema, pulse-level quantities such as \code{log10\_pulse\_rho} are separated from detector-level accepted-pulse aggregates such as \code{log10\_detector\_sum\_pulse\_rho} and \code{detector\_accepted\_pulse\_count}.
@@ -213,14 +224,14 @@ Older graph PDFs from other checks or analyses are intentionally not used as fig
 \begin{figure}[p]
   \centering
   \includegraphics[width=0.95\linewidth]{fig/input_distributions/node_features.pdf}
-  \caption{Accepted-pulse node-feature distributions from the current \code{flat50000\_wfmask\_target6\_20260603\_102418} HDF5 export.}
+  \caption{Accepted-pulse node-feature distributions from the current HDF5 export.}
   \label{fig:en-input-node}
 \end{figure}
 
 \begin{figure}[p]
   \centering
   \includegraphics[width=0.95\linewidth]{fig/input_distributions/edge_features.pdf}
-  \caption{Edge-feature distributions from the current \code{flat50000\_wfmask\_target6\_20260603\_102418} HDF5 export.}
+  \caption{Edge-feature distributions from the current HDF5 export.}
   \label{fig:en-input-edge}
 \end{figure}
 
@@ -229,7 +240,7 @@ Older graph PDFs from other checks or analyses are intentionally not used as fig
   \includegraphics[width=0.95\linewidth]{fig/input_distributions/waveform_features.pdf}
   \vspace{2mm}
   \includegraphics[width=0.95\linewidth]{fig/input_distributions/target_features.pdf}
-  \caption{Waveform-feature and reconstruction-target distributions from the current \code{flat50000\_wfmask\_target6\_20260603\_102418} HDF5 export.}
+  \caption{Waveform-feature and reconstruction-target distributions from the current HDF5 export.}
   \label{fig:en-input-pulse-waveform-target}
 \end{figure}
 
