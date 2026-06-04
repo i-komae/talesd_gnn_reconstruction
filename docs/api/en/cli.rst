@@ -3,11 +3,15 @@ CLI API
 
 The command-line entry point is ``talesd-gnn``. In ``pyproject.toml`` it maps to
 ``talesd_gnn_reconstruction.cli:main``.
+The implementation map is described in :doc:`code_map`.
+This page focuses on the commands, their inputs, their outputs, and how the outputs are used later.
 
 HDF5 graph export
 -----------------
 
 Read DST files and write GNN-ready HDF5 graph shards.
+The exported HDF5 files are the common input for training, input-distribution checks, visualization, and feature importance.
+For MC training, they contain targets and particle labels.
 
 .. code-block:: bash
 
@@ -37,6 +41,7 @@ Training
 --------
 
 Train from existing HDF5 graphs.
+``train`` does not modify the graph files. It writes split-dependent scalers, checkpoints, metrics, and diagnostics under the run output.
 
 .. code-block:: bash
 
@@ -69,6 +74,7 @@ Prediction
 ----------
 
 Create a CSV from a trained checkpoint.
+For MC graphs, truth columns can be included unless ``--no-truth`` is used. For data graphs, prediction-only output is the normal use.
 
 .. code-block:: bash
 
@@ -81,6 +87,8 @@ Input distributions
 -------------------
 
 Save input feature distributions as PDF and JSON.
+This is a dataset diagnostic used to inspect HDF5 content and split-dependent biases.
+It is normally tied to the HDF5 dataset, not to a particular training run.
 
 .. code-block:: bash
 
@@ -93,6 +101,7 @@ Feature importance
 ------------------
 
 Run feature group ablation against a trained checkpoint.
+This is post-hoc analysis, not retraining. It replaces input groups such as node, edge, or waveform features and measures metric degradation.
 
 .. code-block:: bash
 
@@ -107,6 +116,7 @@ Visualization
 -------------
 
 Render an HDF5 graph as an event-display PDF.
+Use this to inspect graph schema, node/edge construction, and waveform-mask behavior visually.
 
 .. code-block:: bash
 
@@ -114,4 +124,3 @@ Render an HDF5 graph as an event-display PDF.
      --graphs /path/to/graphs/flat50000 \
      --index 0 \
      -o /path/to/graph_000000.pdf
-
