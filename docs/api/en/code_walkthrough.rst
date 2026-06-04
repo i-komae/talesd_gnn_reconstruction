@@ -26,16 +26,16 @@ The command-line entry point is defined in ``pyproject.toml``.
      - ``dst_reader.iter_dst_banks``, ``event_graph.build_graph_event``, ``graph_io.write_graph``
    * - Training
      - ``cli._cmd_train`` : ``cli.py:1450``
-     - ``train.train_model`` : ``train.py:1173``
+     - ``train.train_model`` : ``train.py:1385``
    * - Prediction CSV
-     - ``cli._cmd_predict`` : ``cli.py:1551``
+     - ``cli._cmd_predict`` : ``cli.py:1557``
      - ``predict.predict_graphs``
    * - Input distributions
-     - ``cli._cmd_input_distributions`` : ``cli.py:1566``
-     - ``feature_analysis.save_input_distributions`` : ``feature_analysis.py:133``
+     - ``cli._cmd_input_distributions`` : ``cli.py:1572``
+     - ``feature_analysis.save_input_distributions`` : ``feature_analysis.py:139``
    * - Feature-group importance
-     - ``cli._cmd_feature_importance`` : ``cli.py:1581``
-     - ``feature_analysis.save_feature_group_importance`` : ``feature_analysis.py:352``
+     - ``cli._cmd_feature_importance`` : ``cli.py:1587``
+     - ``feature_analysis.save_feature_group_importance`` : ``feature_analysis.py:369``
    * - Graph visualization
      - ``cli._cmd_visualize``
      - ``visualize.py``
@@ -69,17 +69,17 @@ GraphEvent creation
 ~~~~~~~~~~~~~~~~~~~
 
 ``src/talesd_gnn_reconstruction/event_graph.py`` converts one DST event into one GNN graph.
-The main entry point is ``build_graph_event`` : ``event_graph.py:688``.
+The main entry point is ``build_graph_event`` : ``event_graph.py:697``.
 
 The function does the following:
 
 1. ``_combine_sub_waveforms`` : ``event_graph.py:159`` merges waveform segments.
-2. ``_extract_hit`` : ``event_graph.py:293`` extracts detector hits, pulses, FADC waveforms, timing, and charge.
-3. ``_merge_hits_by_lid`` : ``event_graph.py:376`` merges records with the same detector ID.
-4. ``_build_node_features`` : ``event_graph.py:471`` treats accepted pulses as nodes and builds node, pulse, and waveform features.
-5. ``_build_edges`` : ``event_graph.py:610`` builds directed edges and edge features between detectors.
-6. ``_target_from_sim`` : ``event_graph.py:419`` builds reconstruction targets from MC truth.
-7. ``_particle_label_from_sim`` : ``event_graph.py:460`` builds the mass-classification label.
+2. ``_extract_hit`` : ``event_graph.py:298`` extracts detector hits, pulses, FADC waveforms, timing, and charge.
+3. ``_merge_hits_by_lid`` : ``event_graph.py:381`` merges records with the same detector ID.
+4. ``_build_node_features`` : ``event_graph.py:474`` treats accepted pulses as nodes and builds node, pulse, and waveform features.
+5. ``_build_edges`` : ``event_graph.py:619`` builds directed edges and edge features between detectors.
+6. ``_target_from_sim`` : ``event_graph.py:424`` builds reconstruction targets from MC truth.
+7. ``_particle_label_from_sim`` : ``event_graph.py:463`` builds the mass-classification label.
 8. A ``GraphEvent`` object is returned.
 
 Main fields in ``GraphEvent`` : ``event_graph.py:41``:
@@ -101,7 +101,7 @@ Node and edge features
 The same detector ID may appear multiple times if a detector contributes multiple pulses.
 The node columns deliberately separate pulse-level quantities, detector-level accepted-pulse aggregates, and event-context quantities.
 Examples are ``log10_pulse_rho`` for the pulse itself, ``log10_detector_sum_pulse_rho`` for the accepted-pulse charge sum in the same detector, and ``dx_from_signal_bary_km`` for the event context.
-The column definitions are exposed by ``graph_columns`` : ``event_graph.py:755`` and are written into the HDF5 file.
+The column definitions are exposed by ``graph_columns`` : ``event_graph.py:764`` and are written into the HDF5 file.
 Because the physical meaning of several columns has changed, old HDF5 files are not silently migrated to the current schema; they must be re-exported.
 
 ``_build_edges`` scans node pairs from different detectors, removes pairs outside the distance and timing cuts, and writes bidirectional directed edges.
@@ -139,16 +139,16 @@ Dataset and batching
 
 ``src/talesd_gnn_reconstruction/dataset.py`` adapts HDF5 graphs to PyTorch DataLoaders.
 
-``H5GraphDataset`` : ``dataset.py:181`` expands file or directory inputs into HDF5 shards, validates schema, reads column definitions, applies particle filtering and max-graph limits, builds global-to-local index mapping, and checks target/metadata availability.
+``H5GraphDataset`` : ``dataset.py:202`` expands file or directory inputs into HDF5 shards, validates schema, reads column definitions, applies particle filtering and max-graph limits, builds global-to-local index mapping, and checks target/metadata availability.
 The progress label ``initialize graph shards`` corresponds to this initialization step.
 
 ``__getitem__`` reads one event group and returns NumPy arrays for node features, edge index, edge features, pulse-to-node index mapping, waveform features, target, attributes, and optional detector IDs or particle labels.
 It does not return torch tensors yet.
 
-``fit_scalers`` : ``dataset.py:549`` fits feature and target scalers using the training split only.
+``fit_scalers`` : ``dataset.py:599`` fits feature and target scalers using the training split only.
 This avoids leaking validation/test statistics into the training normalization.
 
-``collate_graph_arrays`` : ``dataset.py:892`` merges graph samples into one batch.
+``collate_graph_arrays`` : ``dataset.py:942`` merges graph samples into one batch.
 It applies scalers, concatenates node arrays, remaps edge indices by node offsets, builds the graph ``batch`` vector, merges pulse/waveform arrays, and prepares target and mass-label arrays.
 The wrapper ``collate_graphs`` converts the arrays into torch tensors.
 
@@ -164,13 +164,13 @@ Splitting is implemented in ``train.py``.
      - Function
      - Behavior
    * - ``event``
-     - ``split_indices`` : ``train.py:167``
+     - ``split_indices`` : ``train.py:173``
      - Random event-index split.
    * - ``source-path``
-     - ``split_indices_by_source_path`` : ``train.py:194``
+     - ``split_indices_by_source_path`` : ``train.py:200``
      - Splits by ``source_path``.
    * - ``source-stratified``
-     - ``split_indices_by_stratified_source_path`` : ``train.py:489``
+     - ``split_indices_by_stratified_source_path`` : ``train.py:564``
      - Keeps the same ``source_path`` out of multiple splits and also tries to reduce particle/energy imbalance.
 
 The current default is ``source-stratified`` with validation fraction 0.05 and test fraction 0.10.
@@ -179,7 +179,7 @@ Therefore the effective fractions are 0.85 train, 0.05 validation, and 0.10 test
 Training
 --------
 
-``train_model`` : ``train.py:1173`` is the central training function.
+``train_model`` : ``train.py:1385`` is the central training function.
 CLI commands, submitter scripts, and notebooks ultimately call this function.
 
 Its main stages are:
@@ -217,10 +217,176 @@ Prediction and feature-importance runs rely on these saved scalers and split ind
 Model
 -----
 
-The current main model is ``PhysicsTaleSdGNN`` : ``model.py:718``.
+The current main model is ``PhysicsTaleSdGNN`` : ``model.py:730``.
 
 Inputs include node features, edge index, edge features, graph batch IDs, waveform features, and optionally detector IDs.
 The model combines a node encoder, waveform encoder, optional detector embedding, edge-aware message passing, graph-level readout, and task-specific heads. The pulse encoder is inactive in the current schema because ``pulse_features`` contains only ``node_index``.
+
+What the GNN approximates
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The model learns a graph-level function
+
+.. math::
+
+   f_{\theta}(G)
+   =
+   (\log_{10}E,\ x_c,\ y_c,\ n_x,\ n_y,\ n_z,\ \ldots),
+   \qquad
+   G=(V,E).
+
+``V`` is the set of accepted-pulse nodes and ``E`` is the set of directed edges between pulses on different detectors.
+The node order has no physical meaning, so the model must depend on pulse features and pairwise relations rather than on an arbitrary array order.
+This is why the implementation uses message passing followed by permutation-invariant graph readout.
+
+Conceptually, the learned mapping is
+
+.. math::
+
+   \{x_i\}_{i\in V},\ \{e_{ij}\}_{(i,j)\in E}
+   \longrightarrow
+   \hat{y}_{\mathrm{event}}.
+
+``x_i`` contains the accepted-pulse, detector, and event-context features for node ``i``.
+``e_ij`` contains the distance, timing, signal-difference, and edge-weight features for the directed relation ``i -> j``.
+The output is one prediction per event graph, not one prediction per node.
+
+Relation to shower reconstruction
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The network does not explicitly solve a plane fit or an LDF fit.
+However, the inputs expose the information those procedures depend on:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Physical information
+     - Code-level input
+     - Main affected outputs
+   * - Relative arrival timing
+     - ``pulse_arrival_usec_rel``, edge ``dt_usec``, ``dt_per_km``
+     - Direction, core
+   * - Detector geometry
+     - Node positions, barycenter-relative position, edge distance
+     - Core, direction
+   * - Signal size and lateral pattern
+     - ``log10_pulse_rho``, detector sum/max rho, edge signal differences
+     - Energy, core, mass
+   * - Waveform shape
+     - Raw waveform windows, accepted masks, waveform encoder output
+     - Mass, quality, reconstruction support
+
+Message passing lets each pulse representation depend on whether neighboring pulses are consistent in time, distance, and signal size.
+A large charge at one detector is not enough by itself; the surrounding pattern tells the model whether it is close to the core, consistent with the shower front, or an outlying contribution.
+
+Node, waveform, and edge encoders
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The initial node state is
+
+.. math::
+
+   h_i^{(0)}
+   =
+   \phi_{\mathrm{node}}([x_i,\ w_i,\ d_i,\ p_i]).
+
+``x_i`` is the scalar node feature vector, ``w_i`` is the waveform embedding, ``d_i`` is the detector-ID embedding, and ``p_i`` is the pulse-scalar summary.
+In the current default, detector embedding and pulse-scalar encoding are disabled, so the active inputs are mostly ``x_i`` and ``w_i``.
+
+``WaveformEncoder`` compresses the four-channel waveform into a node embedding.
+For ``cnn-gru``, the code applies Conv1D to local waveform shapes, then a GRU to summarize time ordering, and finally projects the recurrent last state together with mean and max pooled encoded features.
+The current waveform schema keeps raw upper/lower windows and accepted-pulse masks on the same time axis, so the model can use both the raw waveform shape and the accepted-pulse region.
+
+``EdgeTimeDeltaEncoder`` separately encodes
+
+.. math::
+
+   \tau_{ij}
+   =
+   (\Delta t_{ij},\ |\Delta t_{ij}|,\ \Delta t_{ij}/r_{ij})
+
+and averages the encoded timing messages into each destination node before the main message-passing layers.
+This keeps arrival-time information from being diluted among many other edge columns.
+
+Message passing
+~~~~~~~~~~~~~~~
+
+``GatedEdgeMessageLayer`` builds a directed message from source node state, destination node state, and edge features:
+
+.. math::
+
+   m_{i\rightarrow j}
+   =
+   M_{\mathrm{msg}}([h_i,h_j,e_{ij}])
+   \cdot
+   \sigma(M_{\mathrm{gate}}([h_i,h_j,e_{ij}])).
+
+The message MLP controls what information is sent.
+The gate MLP controls how strongly that edge contributes.
+The destination node state is included because the same source pulse can have a different meaning depending on the pulse that receives the message.
+
+For each destination node, messages are aggregated by both mean and max.
+Mean captures the typical neighborhood trend, while max preserves strong local evidence that would be diluted by averaging.
+The update is residual and layer-normalized:
+
+.. math::
+
+   h_j' =
+   \mathrm{LayerNorm}
+   \left(
+     h_j + M_{\mathrm{update}}([h_j,\overline{m}_j,m_j^{\max}])
+   \right).
+
+This layer is repeated five times in the standard configuration.
+After repeated message passing, a node representation no longer describes only one pulse; it also contains information from nearby pulses connected through the edge graph.
+
+Readout and heads
+~~~~~~~~~~~~~~~~~
+
+After message passing, the model still has node-level vectors.
+Energy, core, direction, quality, and mass are event-level quantities, so the node vectors must be pooled into a graph vector.
+The implementation concatenates mean pooling, max pooling, and multi-head attentive readout.
+
+For attention head ``h``,
+
+.. math::
+
+   a_{ih}
+   =
+   \frac{\exp s_h(h_i)}
+        {\sum_{k\in G}\exp s_h(h_k)},
+   \qquad
+   g_h
+   =
+   \sum_{i\in G} a_{ih} h_i.
+
+Different heads can learn to emphasize different parts of the event.
+These heads are not automatically labeled by physics meaning; interpretation requires feature importance or attention diagnostics.
+
+Implementation excerpts
+~~~~~~~~~~~~~~~~~~~~~~~
+
+The following classes are the main model components described above.
+
+.. literalinclude:: ../../../src/talesd_gnn_reconstruction/model.py
+   :language: python
+   :pyobject: WaveformEncoder
+   :linenos:
+
+.. literalinclude:: ../../../src/talesd_gnn_reconstruction/model.py
+   :language: python
+   :pyobject: EdgeTimeDeltaEncoder
+   :linenos:
+
+.. literalinclude:: ../../../src/talesd_gnn_reconstruction/model.py
+   :language: python
+   :pyobject: GatedEdgeMessageLayer
+   :linenos:
+
+.. literalinclude:: ../../../src/talesd_gnn_reconstruction/model.py
+   :language: python
+   :pyobject: AttentiveReadout
+   :linenos:
 
 Main heads:
 
@@ -235,6 +401,40 @@ Loss functions
 --------------
 
 Loss definitions are in ``train.py``.
+
+Mathematical helpers
+~~~~~~~~~~~~~~~~~~~~
+
+``SmoothL1`` behaves like a quadratic loss for small residuals and like an absolute-error loss for large residuals:
+
+.. math::
+
+   \mathrm{SmoothL1}_{\beta}(r)
+   =
+   \begin{cases}
+     \frac{1}{2}r^2/\beta, & |r| < \beta,\\
+     |r|-\frac{1}{2}\beta, & |r| \ge \beta.
+   \end{cases}
+
+This limits the influence of large outliers while keeping a smooth local gradient near zero residual.
+
+The mass and quality heads emit logits ``z`` rather than probabilities.
+The sigmoid
+
+.. math::
+
+   \sigma(z)=\frac{1}{1+\exp(-z)}
+
+is used only when converting a logit to a probability-like score.
+``BCEWithLogits`` combines sigmoid and binary cross entropy in a numerically stable form:
+
+.. math::
+
+   \mathrm{BCEWithLogits}(z,y)
+   =
+   \mathrm{softplus}(z)-yz,
+   \qquad
+   \mathrm{softplus}(z)=\log(1+\exp z).
 
 ``_reconstruction_loss`` : ``train.py`` computes reconstruction loss.
 For ``loss_mode=physics``, energy, core, and direction are evaluated in physical units.
@@ -260,9 +460,9 @@ The final diagnostics therefore correspond to the best validation epoch, not nec
 Input distributions and feature importance
 ------------------------------------------
 
-``feature_analysis.save_input_distributions`` : ``feature_analysis.py:133`` scans HDF5 graphs and writes feature distribution PDFs and JSON.
+``feature_analysis.save_input_distributions`` : ``feature_analysis.py:139`` scans HDF5 graphs and writes feature distribution PDFs and JSON.
 
-``feature_analysis.save_feature_group_importance`` : ``feature_analysis.py:352`` restores the checkpoint, model config, scalers, and split indices, computes baseline metrics, replaces or zeros one feature group at a time, recomputes metrics, and reports the degradation.
+``feature_analysis.save_feature_group_importance`` : ``feature_analysis.py:369`` restores the checkpoint, model config, scalers, and split indices, computes baseline metrics, replaces or zeros one feature group at a time, recomputes metrics, and reports the degradation.
 This is a post-hoc ablation of the trained model, not a full retraining experiment.
 
 Where to read when changing code
