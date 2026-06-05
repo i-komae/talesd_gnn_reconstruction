@@ -710,7 +710,7 @@ def split_indices_by_stratified_source_path(
         or set(split_sources["val"]) & set(split_sources["test"])
     )
     if overlap:
-        raise ValueError(f"source-stratified split leaked source paths across splits: {sorted(overlap)[:5]}")
+        raise ValueError(f"source-stratified split leaked source groups across splits: {sorted(overlap)[:5]}")
     _progress_write(
         "source-stratified split summary "
         f"train_graphs={len(split['train'])} ({len(split['train']) / total_graphs:.3f}) "

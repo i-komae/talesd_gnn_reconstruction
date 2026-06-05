@@ -1717,7 +1717,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--split-mode",
         choices=["event", "source-path", "source-stratified"],
         default="event",
-        help="event単位、元DST source_path単位、またはsource_pathを保った物理パラメーター層化でtrain/validation/testを分ける",
+        help="event単位、source group単位、またはsource groupを保った物理パラメーター層化でtrain/validation/testを分ける",
     )
     train.add_argument("--seed", type=int, default=12345)
     train.add_argument("--device", default="auto", help="auto, cpu, mps, cuda など")
