@@ -155,7 +155,9 @@ Split と scaler
 ---------------
 
 ``train_model`` は dataset を作った後、train/validation/test の index を作ります。
-現在の本番設定では ``source-stratified`` split を使い、同じ ``source_path`` が複数 split にまたがらないようにします。
+現在の本番設定では ``source-stratified`` split を使い、同じ source group が複数 split にまたがらないようにします。
+source group は raw ``source_path`` そのものとは限りません。
+``DAT??????_gea_trg_XXX.dst.gz`` のように 1 つの CORSIKA shower を複数 DST に分割した file では、``XXX`` が異なっても共通の ``DAT??????`` を同じ source group として扱います。
 
 その後、train split だけを使って scaler を fit します。
 validation/test の情報で標準化係数を決めないためです。

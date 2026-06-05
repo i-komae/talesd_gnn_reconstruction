@@ -378,7 +378,7 @@ The main entry point is <code class="docutils literal notranslate"><span class="
 <li><p><code class="docutils literal notranslate"><span class="pre">target</span></code>: MC truth targets <code class="docutils literal notranslate"><span class="pre">log10_energy_eV,</span> <span class="pre">core_x_km,</span> <span class="pre">core_y_km,</span> <span class="pre">dir_x,</span> <span class="pre">dir_y,</span> <span class="pre">dir_z</span></code>.
 The core target is two-dimensional on the ground plane; the arrival direction is stored as a three-component unit vector.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">particle_label</span></code>: label for mass classification.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">metadata</span></code>: <code class="docutils literal notranslate"><span class="pre">source_path</span></code>, <code class="docutils literal notranslate"><span class="pre">source_index</span></code>, part type, and related split/diagnostic metadata.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">metadata</span></code>: raw <code class="docutils literal notranslate"><span class="pre">source_path</span></code>, <code class="docutils literal notranslate"><span class="pre">source_index</span></code>, part type, and related split/diagnostic metadata.</p></li>
 </ul>
 </section>
 <section id="node-and-edge-features">
@@ -445,16 +445,17 @@ The wrapper <code class="docutils literal notranslate"><span class="pre">collate
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">source-path</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">split_indices_by_source_path</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:200</span></code></p></td>
-<td><p>Splits by <code class="docutils literal notranslate"><span class="pre">source_path</span></code>.</p></td>
+<td><p>Splits by source group. Usually this is the raw <code class="docutils literal notranslate"><span class="pre">source_path</span></code>; split CORSIKA chunks named like <code class="docutils literal notranslate"><span class="pre">DAT??????_gea_trg_XXX.dst.gz</span></code> are grouped by the common <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> id.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">source-stratified</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">split_indices_by_stratified_source_path</span></code> : <code class="docutils literal notranslate"><span class="pre">train.py:564</span></code></p></td>
-<td><p>Keeps the same <code class="docutils literal notranslate"><span class="pre">source_path</span></code> out of multiple splits and also tries to reduce particle/energy imbalance.</p></td>
+<td><p>Keeps the same source group out of multiple splits and also tries to reduce particle/energy imbalance.</p></td>
 </tr>
 </tbody>
 </table>
 <p>The current default is <code class="docutils literal notranslate"><span class="pre">source-stratified</span></code> with validation fraction 0.05 and test fraction 0.10.
-Therefore the effective fractions are 0.85 train, 0.05 validation, and 0.10 test.</p>
+Therefore the effective fractions are 0.85 train, 0.05 validation, and 0.10 test.
+For MC, this grouping is by CORSIKA shower when one shower is split into multiple <code class="docutils literal notranslate"><span class="pre">gea_trg</span></code> DST chunks.</p>
 </section>
 <section id="training">
 <h2>Training<a class="headerlink" href="#training" title="Link to this heading"></a></h2>
