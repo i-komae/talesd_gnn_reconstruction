@@ -431,7 +431,7 @@ HDF5書き込み
 
 - HDF5 root attributesに ``format=talesd_gnn_graphs``、``format_version``、特徴量column定義、configを保存する。
 - ``events`` groupを作る。
-- ``metadata`` groupに ``event_id``、``source_path``、``source_index``、``parttype``、``particle_label`` を保存できるdatasetを作る。
+- ``metadata`` groupに ``event_id``、raw ``source_path``、``source_index``、``parttype``、``particle_label`` を保存できるdatasetを作る。
 
 ``write_graph`` : ``graph_io.py:53`` が行うこと:
 
@@ -441,7 +441,8 @@ HDF5書き込み
 - metadata datasetへsource情報とparticle情報を追記する。
 
 このmetadataは、後の ``source-stratified`` splitで重要です。
-同じ ``source_path`` をtrain/val/testへまたがせないために使います。
+raw ``source_path`` から source group を作り、同じ source group をtrain/val/testへまたがせないために使います。
+``DAT??????_gea_trg_XXX.dst.gz`` のような CORSIKA 分割 DST では、``XXX`` が違っても同じ ``DAT??????`` を同じ source group として扱います。
 
 energy-flat samplingとshard
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -576,14 +577,14 @@ splitは ``train.py`` にあります。
      - event index単位でrandom splitする。
    * - ``source-path``
      - ``split_indices_by_source_path`` : ``train.py:200``
-     - ``source_path`` 単位で分ける。
+     - source group 単位で分ける。通常は raw ``source_path`` だが、``DAT??????_gea_trg_XXX.dst.gz`` は ``DAT??????`` 単位にまとめる。
    * - ``source-stratified``
      - ``split_indices_by_stratified_source_path`` : ``train.py:564``
-     - ``source_path`` をまたがせず、particleやenergy分布も偏りにくくする。
+     - source group をまたがせず、particleやenergy分布も偏りにくくする。
 
 現在の既定は ``source-stratified`` です。
 validation fractionは0.05、test fractionは0.10、train fractionは0.85です。
-同じ ``source_path`` はtrain/val/testにまたがりません。
+同じ source group はtrain/val/testにまたがりません。
 
 学習本体
 --------

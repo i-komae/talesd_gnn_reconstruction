@@ -92,7 +92,7 @@ Main fields in ``GraphEvent`` : ``event_graph.py:41``:
 - ``target``: MC truth targets ``log10_energy_eV, core_x_km, core_y_km, dir_x, dir_y, dir_z``.
   The core target is two-dimensional on the ground plane; the arrival direction is stored as a three-component unit vector.
 - ``particle_label``: label for mass classification.
-- ``metadata``: ``source_path``, ``source_index``, part type, and related split/diagnostic metadata.
+- ``metadata``: raw ``source_path``, ``source_index``, part type, and related split/diagnostic metadata.
 
 Node and edge features
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -168,13 +168,14 @@ Splitting is implemented in ``train.py``.
      - Random event-index split.
    * - ``source-path``
      - ``split_indices_by_source_path`` : ``train.py:200``
-     - Splits by ``source_path``.
+     - Splits by source group. Usually this is the raw ``source_path``; split CORSIKA chunks named like ``DAT??????_gea_trg_XXX.dst.gz`` are grouped by the common ``DAT??????`` id.
    * - ``source-stratified``
      - ``split_indices_by_stratified_source_path`` : ``train.py:564``
-     - Keeps the same ``source_path`` out of multiple splits and also tries to reduce particle/energy imbalance.
+     - Keeps the same source group out of multiple splits and also tries to reduce particle/energy imbalance.
 
 The current default is ``source-stratified`` with validation fraction 0.05 and test fraction 0.10.
 Therefore the effective fractions are 0.85 train, 0.05 validation, and 0.10 test.
+For MC, this grouping is by CORSIKA shower when one shower is split into multiple ``gea_trg`` DST chunks.
 
 Training
 --------

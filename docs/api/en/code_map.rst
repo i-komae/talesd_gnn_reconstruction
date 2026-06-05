@@ -146,7 +146,10 @@ Dataset loading
 Split and scalers
 -----------------
 
-``train_model`` creates the dataset and then splits indices into train, validation, and test. The production setting uses ``source-stratified`` splitting, which prevents the same ``source_path`` from crossing split boundaries.
+``train_model`` creates the dataset and then splits indices into train, validation, and test.
+The production setting uses ``source-stratified`` splitting.
+The split key is a source group, not always the raw ``source_path``.
+For split CORSIKA DST files named like ``DAT??????_gea_trg_XXX.dst.gz``, the ``XXX`` chunks are grouped by the common ``DAT??????`` shower id so that one shower cannot cross split boundaries.
 
 Scalers are fit only on the training split:
 

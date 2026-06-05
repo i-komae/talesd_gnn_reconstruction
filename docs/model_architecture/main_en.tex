@@ -215,8 +215,12 @@ In the current schema, pulse-level quantities such as \code{log10\_pulse\_rho} a
 The waveform channels are \code{upper\_raw\_window\_vem}, \code{lower\_raw\_window\_vem}, \code{upper\_accepted\_mask}, and \code{lower\_accepted\_mask}.
 The current \code{pulse\_features} tensor keeps only \code{node\_index}, so no additional pulse-scalar distribution is shown.
 Figure~\ref{fig:en-split-distributions} shows the train/validation/test distributions for the same HDF5 export.
-The realized event fractions are 81.0\%, 7.37\%, and 11.6\%, while the source-path fractions are 69.3\%, 10.1\%, and 20.6\%.
-The event fractions differ from the nominal target because the split preserves source-path separation.
+The split is performed by source group rather than by raw event index.
+Usually the source group is the raw source path.
+For split CORSIKA DST files named like \code{DAT??????\_gea\_trg\_XXX.dst.gz}, all \code{XXX} chunks with the same \code{DAT??????} shower id must remain in the same split.
+The existing summary for this export reports event fractions of 81.0\%, 7.37\%, and 11.6\%, and raw source-path fractions of 69.3\%, 10.1\%, and 20.6\%.
+Those source counts were generated before the CORSIKA chunk grouping correction, so the source-group fractions must be regenerated from the HDF5 summary.
+The event fractions can differ from the nominal target because the split preserves source-group separation.
 These plots are input diagnostics, not trained-model performance metrics.
 No event-level graph topology figure is included here because no current-analysis graph PDF has been generated from this HDF5 export.
 Older graph PDFs from other checks or analyses are intentionally not used as figures for this model description.
