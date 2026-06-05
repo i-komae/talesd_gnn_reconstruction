@@ -381,7 +381,7 @@ def save_feature_group_importance(
     import torch
 
     device = resolve_device(device)
-    checkpoint = torch.load(Path(checkpoint_path).expanduser(), map_location=device)
+    checkpoint = torch.load(Path(checkpoint_path).expanduser(), map_location=device, weights_only=False)
     scalers = {name: StandardScaler.from_dict(data) for name, data in checkpoint["scalers"].items()}
     model_config = dict(checkpoint["model_config"])
     model = build_model_from_config(model_config).to(device)

@@ -16,7 +16,7 @@ from .train import resolve_device
 def _load_checkpoint(path: str | Path, device: str) -> dict[str, Any]:
     import torch
 
-    return torch.load(Path(path).expanduser(), map_location=device)
+    return torch.load(Path(path).expanduser(), map_location=device, weights_only=False)
 
 
 def predict_graphs(
