@@ -13,6 +13,7 @@ import numpy as np
 from talesd_gnn_reconstruction.cli import _expand_h5_graph_paths
 from talesd_gnn_reconstruction.progress import progress
 from talesd_gnn_reconstruction.progress import progress_bar
+from talesd_gnn_reconstruction.train import source_group_key
 
 
 def _decode(value: Any) -> str:
@@ -26,11 +27,12 @@ def _read_string_array(dataset: h5py.Dataset) -> list[str]:
     return [_decode(value) for value in data]
 
 
-def _summarize_one(payload: tuple[int, str]) -> tuple[int, dict[str, Any], set[str]]:
+def _summarize_one(payload: tuple[int, str]) -> tuple[int, dict[str, Any], set[str], set[str]]:
     index, path_text = payload
     path = Path(path_text)
     size = int(path.stat().st_size)
     source_paths: set[str] = set()
+    source_groups: set[str] = set()
     with h5py.File(path, "r") as h5:
         n_graphs = int(len(h5["events"]))
         row: dict[str, Any] = {
@@ -53,13 +55,16 @@ def _summarize_one(payload: tuple[int, str]) -> tuple[int, dict[str, Any], set[s
         if metadata is not None and "source_path" in metadata:
             paths_in_shard = _read_string_array(metadata["source_path"])
             source_paths.update(paths_in_shard)
+            source_groups.update(source_group_key(source_path) for source_path in paths_in_shard)
             row["unique_source_paths"] = len(source_paths)
-    return index, row, source_paths
+            row["unique_source_groups"] = len(source_groups)
+    return index, row, source_paths, source_groups
 
 
 def _merge_summary_row(
     row: dict[str, Any],
     source_paths: set[str],
+    source_groups: set[str],
     totals: dict[str, Any],
     rows: dict[int, dict[str, Any]],
     index: int,
@@ -70,6 +75,7 @@ def _merge_summary_row(
     totals["iron"] += int(row.get("iron", 0))
     totals["unknown_particle"] += int(row.get("unknown_particle", 0))
     totals["source_paths"].update(source_paths)
+    totals["source_groups"].update(source_groups)
     rows[index] = row
 
 
@@ -82,6 +88,7 @@ def summarize(paths: list[Path], *, show_progress: bool = True, workers: int = 1
         "iron": 0,
         "unknown_particle": 0,
         "source_paths": set(),
+        "source_groups": set(),
     }
     rows: dict[int, dict[str, Any]] = {}
 
@@ -108,8 +115,8 @@ def summarize(paths: list[Path], *, show_progress: bool = True, workers: int = 1
             while pending:
                 done, pending = wait(pending, return_when=FIRST_COMPLETED)
                 for future in done:
-                    index, row, source_set = future.result()
-                    _merge_summary_row(row, source_set, totals, rows, index)
+                    index, row, source_set, source_group_set = future.result()
+                    _merge_summary_row(row, source_set, source_group_set, totals, rows, index)
                     progress_handle.update(1)
                     submit_next()
             pool.shutdown(wait=True)
@@ -127,8 +134,8 @@ def summarize(paths: list[Path], *, show_progress: bool = True, workers: int = 1
     else:
         iterator: Any = progress(paths, desc="summarize graph shards", total=len(paths), enabled=show_progress)
         for index, path in enumerate(iterator):
-            row_index, row, source_set = _summarize_one((index, str(path)))
-            _merge_summary_row(row, source_set, totals, rows, row_index)
+            row_index, row, source_set, source_group_set = _summarize_one((index, str(path)))
+            _merge_summary_row(row, source_set, source_group_set, totals, rows, row_index)
 
     return {
         "shards": len(paths),
@@ -139,6 +146,7 @@ def summarize(paths: list[Path], *, show_progress: bool = True, workers: int = 1
         "iron": totals["iron"],
         "unknown_particle": totals["unknown_particle"],
         "unique_source_paths": len(totals["source_paths"]),
+        "unique_source_groups": len(totals["source_groups"]),
         "shard_rows": [rows[index] for index in sorted(rows)],
     }
 

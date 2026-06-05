@@ -4,6 +4,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from collections.abc import Callable, Sequence
@@ -32,6 +33,9 @@ if TYPE_CHECKING:
     from .model import TaleSdGNN
 
 
+_CORSIKA_SPLIT_DST_RE = re.compile(r"^(DAT\d+)_gea_trg_\d+(?:\.dst(?:\.gz)?)?$", re.IGNORECASE)
+
+
 def resolve_device(device: str = "auto") -> str:
     import torch
 
@@ -47,6 +51,14 @@ def _batches(indices: list[int], batch_size: int, shuffle: bool) -> list[list[in
     if shuffle:
         random.shuffle(indices)
     return [indices[i : i + batch_size] for i in range(0, len(indices), batch_size)]
+
+
+def source_group_key(source_path: str) -> str:
+    path = Path(str(source_path))
+    match = _CORSIKA_SPLIT_DST_RE.match(path.name)
+    if not match:
+        return str(source_path)
+    return str(path.with_name(match.group(1).upper()))
 
 
 def _collate_graph_batch(
@@ -209,8 +221,9 @@ def split_indices_by_source_path(
     iterator = _progress(range(len(dataset)), desc="scan source paths", total=len(dataset), enabled=show_progress)
     for index in iterator:
         source_path = dataset.source_path(index) or f"unknown:{index}"
-        source_to_indices.setdefault(source_path, []).append(index)
-        source_to_stratum.setdefault(source_path, str(Path(source_path).parent))
+        source_group = source_group_key(source_path)
+        source_to_indices.setdefault(source_group, []).append(index)
+        source_to_stratum.setdefault(source_group, str(Path(source_group).parent))
 
     strata: dict[str, list[str]] = {}
     for source_path, stratum in source_to_stratum.items():
@@ -340,7 +353,8 @@ def _scan_stratified_source_shard(
                 source_path = str(group.attrs.get("source_path", ""))
             if not source_path:
                 source_path = f"unknown:{global_index}"
-            source_to_indices.setdefault(source_path, []).append(global_index)
+            source_group = source_group_key(source_path)
+            source_to_indices.setdefault(source_group, []).append(global_index)
 
             particle_label = None
             if label_values is not None and local_index < len(label_values):
@@ -351,7 +365,7 @@ def _scan_stratified_source_shard(
                 particle_label = H5GraphDataset._group_particle_label(group)
 
             stats = source_stats.setdefault(
-                source_path,
+                source_group,
                 {
                     "target_sum": None,
                     "target_count": 0,
@@ -599,9 +613,10 @@ def split_indices_by_stratified_source_path(
         )
         for index in iterator:
             source_path = dataset.source_path(index) or f"unknown:{index}"
-            source_to_indices.setdefault(source_path, []).append(index)
+            source_group = source_group_key(source_path)
+            source_to_indices.setdefault(source_group, []).append(index)
             stats = source_stats.setdefault(
-                source_path,
+                source_group,
                 {
                     "target_sum": None,
                     "target_count": 0,

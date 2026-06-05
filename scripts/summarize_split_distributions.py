@@ -14,7 +14,7 @@ from talesd_gnn_reconstruction.cli import _expand_h5_graph_paths
 from talesd_gnn_reconstruction.dataset import H5GraphDataset
 from talesd_gnn_reconstruction.metrics import direction_columns_for_dim, direction_to_angles
 from talesd_gnn_reconstruction.progress import progress
-from talesd_gnn_reconstruction.train import split_indices_by_stratified_source_path
+from talesd_gnn_reconstruction.train import source_group_key, split_indices_by_stratified_source_path
 
 
 def _finite(value: Any) -> float | None:
@@ -274,10 +274,11 @@ def summarize(
             target = dataset.target(index)
             particle_label = dataset.particle_label(index)
             source_path = dataset.source_path(index) or f"unknown:{index}"
+            source_group = source_group_key(source_path)
             n_nodes, n_edges = _shape_counts(dataset, index)
             _add(
                 totals[split_name],
-                source_path=source_path,
+                source_path=source_group,
                 target=target,
                 particle_label=particle_label,
                 n_nodes=n_nodes,
@@ -287,7 +288,7 @@ def summarize(
                 bin_key = _energy_bin(float(target[0]), energy_bin_width)
                 _add(
                     by_energy[bin_key][split_name],
-                    source_path=source_path,
+                    source_path=source_group,
                     target=target,
                     particle_label=particle_label,
                     n_nodes=n_nodes,

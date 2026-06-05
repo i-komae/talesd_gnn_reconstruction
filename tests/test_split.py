@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from talesd_gnn_reconstruction.train import _assign_source_group, split_indices_by_stratified_source_path
+from talesd_gnn_reconstruction.train import _assign_source_group, source_group_key, split_indices_by_stratified_source_path
 
 
 class _FakeGraphDataset:
@@ -124,6 +124,34 @@ class SourceSplitTest(unittest.TestCase):
         self.assertEqual(sum(len(indices) for indices in split.values()), len(dataset))
         self.assertGreater(len(split["train"]), len(split["test"]))
         self.assertGreater(len(split["train"]), len(split["val"]))
+
+    def test_corsika_split_dst_chunks_stay_in_same_split(self) -> None:
+        source_counts = {}
+        for dat_index in range(20):
+            particle = "proton" if dat_index < 10 else "iron"
+            loge = 16 if dat_index < 10 else 17
+            for chunk_index in range(3):
+                source_counts[
+                    f"/mc/{particle}/bin_{loge}/DAT{dat_index:06d}_gea_trg_{chunk_index:03d}.dst.gz"
+                ] = 4
+        dataset = _FakeGraphDataset(source_counts)
+
+        split = split_indices_by_stratified_source_path(
+            dataset,  # type: ignore[arg-type]
+            val_fraction=0.1,
+            test_fraction=0.2,
+            seed=11,
+            show_progress=False,
+            min_group_sources=4,
+            workers=0,
+        )
+
+        group_to_split: dict[str, str] = {}
+        for split_name, indices in split.items():
+            for index in indices:
+                group = source_group_key(dataset.source_path(index))
+                previous = group_to_split.setdefault(group, split_name)
+                self.assertEqual(previous, split_name)
 
 
 if __name__ == "__main__":
