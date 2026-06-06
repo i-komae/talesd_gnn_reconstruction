@@ -143,6 +143,47 @@ DST から作り直した energy-flat HDF5 は正常に完了している。
 一方、\code{model.PhysicsTaleSdGNN} は forward pass のみを担当し、loss の計算は \code{train.py} 側に分離されている。
 この分離により、同じ model 出力に対して、再構成 loss、quality loss、mass loss、energy bias penalty を組み合わせられる。
 
+\subsection{heterogeneous graph workflow}
+
+実装には、公開 API である \code{dstio.tale.graph} を使う heterogeneous graph 経路も追加されている。
+これは、以降の節で説明する accepted-pulse homogeneous HDF5 schema とは別系統である。
+この経路では、検出器読み出しとパルス候補を 2 種類の node として扱う。
+検出器波形は pulse node ごとに複製せず、detector node に 1 回だけ保持する。
+pulse node は detector--pulse relation と pulse bounds によって対応する detector waveform を参照する。
+relation は pulse--pulse、detector--detector、detector--pulse の 3 系統である。
+
+heterogeneous 学習用 cache の流れは次である。
+\begin{small}
+\[
+\mathrm{DST}
+\rightarrow
+\code{talesd-gnn export-hetero}
+\rightarrow
+\mathrm{heterogeneous\ HDF5\ graph}
+\rightarrow
+\code{train-hetero}
+\rightarrow
+\code{MinimalHeteroTaleSdGNN}.
+\]
+\end{small}
+最終的な一回通しの再構成では、中間 HDF5 を必須にしない。
+\begin{small}
+\[
+\mathrm{DST}
+\rightarrow
+\code{talesd-gnn reconstruct-dst}
+\rightarrow
+\code{dstio.tale.graph.iter\_graphs}
+\rightarrow
+\code{MinimalHeteroTaleSdGNN}
+\rightarrow
+\mathrm{reconstruction\ CSV}.
+\]
+\end{small}
+この経路では、HDF5 は学習用 cache である。
+直接再構成 command と HDF5 exporter は、同じ graph schema、feature 変換層、checkpoint scaler を使う。
+直近で比較する条件は、reco+mass のまま \code{LOSS\_MODE=physics} を保ち、quality head のみを有効にする run と、predicted-error head のみを有効にする run の 2 種類である。
+
 Slurm での本番学習では、通常は \code{talesd-gnn train} を直接打たず、\code{scripts/submit\_server\_*.sh} を使う。
 これらの submitter は resource、run directory、local graph cache、runtime copy、環境変数を設定した後、最終的に \code{scripts/train\_large\_existing\_graphs.sh} から \code{talesd-gnn train} を呼ぶ。
 \code{submit\_server\_reco\_mass\_training.sh} や \code{submit\_server\_mass\_only\_training.sh} は、task 固有の既定値を設定してから共通 submitter に渡す。

@@ -21,6 +21,12 @@ Slurmでの本番実行では、直接 ``talesd-gnn`` を打つよりもsubmitte
      - ``scripts/submit_server_mass_only_training.sh``
    * - reco+mass
      - ``scripts/submit_server_reco_mass_training.sh``
+   * - heterogeneous reco+mass
+     - ``scripts/submit_server_hetero_training.sh``
+   * - heterogeneous reco+mass, quality-only補助head
+     - ``scripts/submit_server_hetero_reco_mass_quality_training.sh``
+   * - heterogeneous reco+mass, predicted-error-only補助head
+     - ``scripts/submit_server_hetero_reco_mass_error_training.sh``
 
 再構成quality-onlyの例
 ----------------------
@@ -45,6 +51,31 @@ mass focalの例
    MASS_RANKING_WEIGHT=0.5 \
    scripts/submit_server_mass_only_training.sh
 
+heterogeneous reco+mass比較
+---------------------------
+
+これらの submitter は task を reco+mass のままにし、``LOSS_MODE=physics`` を保ちます。
+1本目は quality head だけを有効にします。
+2本目は predicted-error head だけを有効にします。
+同じ heterogeneous graph input に対する別 run として比較します。
+
+.. code-block:: bash
+
+   GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
+   PARTITION=v100-al9_long \
+   RUN_NAME=hetero_reco_mass_quality_v100_128epoch_$(date +%Y%m%d_%H%M%S) \
+   scripts/submit_server_hetero_reco_mass_quality_training.sh
+
+.. code-block:: bash
+
+   GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
+   PARTITION=v100-al9_long \
+   RUN_NAME=hetero_reco_mass_error_v100_128epoch_$(date +%Y%m%d_%H%M%S) \
+   scripts/submit_server_hetero_reco_mass_error_training.sh
+
+``scripts/submit_server_hetero_training.sh`` は既定では ``FEATURE_IMPORTANCE=0`` です。
+同じSlurm job内で学習後のgroup ablationも走らせる場合だけ ``FEATURE_IMPORTANCE=1`` を指定します。
+
 注意点
 ------
 
@@ -54,4 +85,3 @@ mass focalの例
 - B6000はCUDA/cuBLAS preflightが通るまで本番投入しない。
 - A100はdriver/CUDA互換性を確認してから使う。
 - local graph cacheはSlurm allocation後に作る。submit前にrsyncしない。
-

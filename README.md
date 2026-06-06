@@ -2,13 +2,25 @@
 
 TALE-SD の不規則な検出器配置をグラフとして扱い、GNNでエネルギー、コア位置、到来方向を推定するための新規 `uv` プロジェクトです。
 
-この初期版は次の流れを実装しています。
+現行コードには、従来の homogeneous HDF5 graph と、新しい
+`dstio.tale.graph` 由来の heterogeneous graph の2系統があります。
+最終的な data / MC 再構成では、中間 HDF5 を必須にせず、学習済み
+heterogeneous checkpoint で DST を直接読む経路を使います。
+
+従来系の流れ:
 
 1. TALE-SD data DST (`talesdcalibev`) または MC DST (`rusdraw` + `rusdmc`) を読む
 2. waveform から上下層 coincidence pulse を抽出する
 3. `coincidence_analysis` の Ising graph と同じ条件で、上下層coincident pulse候補をノードにしたHDF5グラフへ変換する
 4. MC truth付きグラフでGNNを学習する
 5. 学習済みモデルで data / MC を再構成しCSVへ出力する
+
+新しい heterogeneous graph 系の流れ:
+
+1. `dstio.tale.graph.iter_graphs` で DST から `GraphEvent` を作る
+2. detector node と pulse node、3種類の edge relation を持つ HDF5 graph を学習用cacheとして保存する
+3. `talesd-gnn train-hetero` で detector branch、pulse branch、detector-level waveform encoderを持つheterogeneous modelを学習する
+4. 学習済みheterogeneous checkpointを使い、`talesd-gnn reconstruct-dst` で DST から直接再構成CSVを作る
 
 ## コード構成と実行フロー
 
@@ -40,6 +52,21 @@ scripts/submit_server_graph_export.sh
 - `src/talesd_gnn_reconstruction/event_graph.py`: node/edge/waveform/target特徴量の構築
 - `src/talesd_gnn_reconstruction/graph_io.py`: HDF5 schemaと書き込み
 - `scripts/summarize_graph_shards.py`: graph数、metadata、particle/source分布などの集計
+
+新しい heterogeneous graph では、DST の読み出しと graph 定義は
+`dstio.tale.graph` に寄せます。GNN repo 側は HDF5 cache、dataset、
+model input、training、direct inference を担当します。
+
+```text
+.venv/bin/talesd-gnn export-hetero
+  -> cli._cmd_export_hetero()
+    -> dstio.tale.graph.iter_graphs()
+    -> hetero_graph_io.py
+```
+
+`export-hetero` の HDF5 は学習用cacheです。最終的な一回通し再構成では、
+HDF5を作らず `reconstruct-dst` が同じ graph schema と checkpoint scaler を使って
+DSTから直接推論します。
 
 既存の大規模HDF5から小規模HDF5を切り出す場合は、DSTを読み直しません。
 
@@ -81,6 +108,29 @@ scripts/submit_server_*.sh
 - `src/talesd_gnn_reconstruction/metrics.py`: 評価指標
 - `src/talesd_gnn_reconstruction/diagnostics.py`: 学習曲線、energy依存性、quality cutなどの診断図
 
+heterogeneous graph の標準入口は次です。
+
+- 基本reco+mass: `scripts/submit_server_hetero_training.sh`
+- reco+mass + quality-only比較: `scripts/submit_server_hetero_reco_mass_quality_training.sh`
+- reco+mass + predicted-error-only比較: `scripts/submit_server_hetero_reco_mass_error_training.sh`
+
+どちらの比較 wrapper も `LOSS_MODE=physics`、`MASS_CLASSIFICATION=1` を保ちます。
+quality-only は `QUALITY_PREDICTION=1`, `ERROR_PREDICTION=0`、
+predicted-error-only は `QUALITY_PREDICTION=0`, `ERROR_PREDICTION=1` です。
+`physics-nll` へは自動では切り替えません。
+
+```text
+scripts/submit_server_hetero_*.sh
+  -> scripts/train_hetero_existing_graphs.sh
+    -> .venv/bin/talesd-gnn train-hetero
+      -> cli._cmd_train_hetero()
+        -> hetero_training.train_hetero_model()
+          -> hetero_graph_io.H5HeteroGraphDataset
+          -> hetero_data.sample_to_hetero_data()
+          -> hetero_model.MinimalHeteroTaleSdGNN
+          -> loss / metrics / diagnostics
+```
+
 ### テスト・評価・推論
 
 学習時のvalidationと、学習後のtest評価は `train.train_model()` の中で実行されます。学習後はbest validation checkpointを読み戻して、validation/testに対するprediction、metrics、diagnosticsを作ります。
@@ -103,6 +153,18 @@ train.train_model()
 .venv/bin/talesd-gnn predict
   -> cli._cmd_predict()
     -> predict.predict_graphs()
+```
+
+heterogeneous checkpoint を使って DST を直接再構成する場合は
+`talesd-gnn reconstruct-dst` です。これは HDF5 graph を入力にしません。
+
+```text
+.venv/bin/talesd-gnn reconstruct-dst
+  -> cli._cmd_reconstruct_dst()
+    -> hetero_predict.reconstruct_dst()
+      -> dstio.tale.graph.iter_graphs()
+      -> hetero_data.sample_to_hetero_data()
+      -> hetero_model.MinimalHeteroTaleSdGNN
 ```
 
 入力分布と特徴量重要度は、学習本体とは別の診断入口です。
@@ -133,6 +195,11 @@ split診断の `sources` は学習で使う source group 数です。通常は `
 | モデル構造 | `src/talesd_gnn_reconstruction/model.py` |
 | metrics、診断図 | `src/talesd_gnn_reconstruction/metrics.py`, `src/talesd_gnn_reconstruction/diagnostics.py` |
 | 入力分布、特徴量重要度 | `src/talesd_gnn_reconstruction/feature_analysis.py` |
+| hetero HDF5書き込み | `src/talesd_gnn_reconstruction/hetero_graph_io.py` |
+| hetero graph変換 | `src/talesd_gnn_reconstruction/hetero_data.py` |
+| hetero model/training | `src/talesd_gnn_reconstruction/hetero_model.py`, `src/talesd_gnn_reconstruction/hetero_training.py` |
+| DST直接再構成 | `src/talesd_gnn_reconstruction/hetero_predict.py` |
+| hetero特徴量重要度 | `src/talesd_gnn_reconstruction/hetero_feature_analysis.py` |
 
 現在のモデル入力では、accepted-pulse node scalar は28列です。列名は `pulse_*`、`detector_*`、事象文脈量に分け、パルス自身の信号量、同一検出器内のaccepted pulse合計信号量、accepted pulse数、時間幅を区別します。`pulse_features` は対応nodeを示す `node_index` だけを保持し、pulse scalar encoderは使いません。旧HDF5の `log10_total_rho`、`sqrt_total_rho`、`local_detector_density_1p5km2` などを現行schemaへ黙って読み替えることはしません。特徴量の物理定義が変わったため、現行コードで学習するHDF5は再exportが必要です。
 
@@ -214,6 +281,55 @@ uv run talesd-gnn train \
 学習時は `fit scalers`、epochごとのtrain/validation、最後のvalidation/test推論にprogress barを表示します。`--num-workers` はHDF5 graph読み込みとbatch構築に使うDataLoader worker数で、初期値の `-1` は小規模入力では0、大規模入力では最大4 workerを自動選択します。0にすると単一processへ戻ります。`--collate-backend auto` が既定で、小規模入力ではPython/NumPy collate、大規模入力やworker利用時は必須依存のpybind11 C++ collateを使います。
 
 C++ collateの内部並列数は `--collate-threads` または環境変数 `TALESD_GNN_COLLATE_THREADS` で指定できます。既定値は実測最速の1です。0なら自動選択です。
+
+heterogeneous HDF5 を作成:
+
+```bash
+uv run talesd-gnn export-hetero \
+  --input-dir /path/to/tale_mc_dst \
+  --kind mc \
+  --const-dst $TADIR/data/SD/talesdconst_pass2.dst \
+  --mc-calib-dir /path/to/tale_mc_calib \
+  --require-reference-core \
+  --skip-errors \
+  --skip-missing-mc-calibration \
+  --shard-size 50000 \
+  -o outputs/hetero_graphs/tale_hetero.h5
+```
+
+heterogeneous reco+mass を学習:
+
+```bash
+GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
+PARTITION=v100-al9_long \
+scripts/submit_server_hetero_training.sh
+```
+
+次の比較では、同じ reco+mass 条件で quality-only と predicted-error-only を別々に投げます。
+
+```bash
+GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
+PARTITION=v100-al9_long \
+scripts/submit_server_hetero_reco_mass_quality_training.sh
+
+GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
+PARTITION=v100-al9_long \
+scripts/submit_server_hetero_reco_mass_error_training.sh
+```
+
+heterogeneous checkpoint で DST を直接再構成:
+
+```bash
+uv run talesd-gnn reconstruct-dst \
+  --input-dir /path/to/data_or_mc_dst \
+  --kind auto \
+  --checkpoint outputs/hetero_reco_mass.pt \
+  --const-dst $TADIR/data/SD/talesdconst_pass2.dst \
+  --mc-calib-dir /path/to/tale_mc_calib \
+  --batch-size 256 \
+  --skip-errors \
+  -o outputs/reconstruction.csv
+```
 
 核種別に再構成モデルを比較する場合は、DSTを読み直さず既存HDF5 graphから `rusdmc.parttype` 由来のラベルで絞ります。
 

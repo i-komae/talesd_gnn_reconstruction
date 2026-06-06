@@ -114,6 +114,46 @@ The central training function creates the dataset, constructs the train/validati
 The neural network class \code{PhysicsTaleSdGNN} only performs the forward pass.
 Losses are computed in \code{train.py}, which keeps reconstruction, quality, mass, and bias-penalty terms separate from the model architecture.
 
+\subsection{Heterogeneous graph workflow}
+
+The implementation now also contains a heterogeneous graph path based on the public \code{dstio.tale.graph} API.
+This path is separate from the accepted-pulse homogeneous HDF5 schema described in the following sections.
+It represents detector readouts and pulse candidates as two node types rather than duplicating detector waveforms on every pulse node.
+Detector waveforms are stored once on detector nodes, and pulse nodes refer to their detector through the detector--pulse relation and pulse bounds.
+The graph relations are pulse--pulse, detector--detector, and detector--pulse relations.
+
+The heterogeneous training/cache path is
+\begin{footnotesize}
+\[
+\mathrm{DST}
+\rightarrow
+\code{talesd-gnn export-hetero}
+\rightarrow
+\mathrm{heterogeneous\ HDF5\ graph}
+\rightarrow
+\code{train-hetero}
+\rightarrow
+\code{MinimalHeteroTaleSdGNN}.
+\]
+\end{footnotesize}
+The final one-pass reconstruction path does not require an intermediate HDF5 file:
+\begin{footnotesize}
+\[
+\mathrm{DST}
+\rightarrow
+\code{talesd-gnn reconstruct-dst}
+\rightarrow
+\code{dstio.tale.graph.iter\_graphs}
+\rightarrow
+\code{MinimalHeteroTaleSdGNN}
+\rightarrow
+\mathrm{reconstruction\ CSV}.
+\]
+\end{footnotesize}
+For this path, HDF5 is a training cache only.
+The direct reconstruction command and the HDF5 exporter use the same graph schema, feature conversion layer, and checkpoint scalers.
+The current comparison to run for this path is reco+mass with either the quality head enabled or the predicted-error head enabled, while keeping \code{LOSS\_MODE=physics}.
+
 \section{Event Graph Input}
 
 One air-shower event is represented as one directed graph.
