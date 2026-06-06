@@ -17,7 +17,10 @@ from talesd_gnn_reconstruction.hetero_data import (
     hetero_sample_to_tensors,
     sample_to_hetero_data,
 )
-from talesd_gnn_reconstruction.hetero_feature_analysis import save_hetero_feature_group_importance
+from talesd_gnn_reconstruction.hetero_feature_analysis import (
+    save_hetero_feature_group_importance,
+    save_hetero_input_distributions,
+)
 from talesd_gnn_reconstruction.hetero_graph_io import (
     EDGE_RELATIONS,
     FORMAT_NAME,
@@ -458,6 +461,34 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertGreater(split["detector_nodes"]["n"], 0)
             self.assertGreater(split["pulse_nodes"]["n"], 0)
             self.assertGreater(split["event_time_hour"]["n"], 0)
+
+    def test_hetero_input_distributions_write_summary_and_plots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            output_dir = Path(tmpdir) / "input_distributions"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(4):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            summary = save_hetero_input_distributions(
+                graph_path,
+                output_dir,
+                max_graphs=4,
+                max_values_per_feature=100,
+                show_progress=False,
+            )
+
+            summary_path = Path(summary["summary_json"])
+            self.assertTrue(summary_path.exists())
+            payload = json.loads(summary_path.read_text())
+            self.assertEqual(payload["graph_format"], "hetero")
+            self.assertEqual(payload["n_graphs_total"], 4)
+            self.assertIn("detector", payload["features"])
+            self.assertIn("pulse", payload["features"])
+            self.assertIn("edge_features_by_type", payload["features"])
+            self.assertTrue((output_dir / "detector_features.pdf").exists())
+            self.assertTrue((output_dir / "pulse_features.pdf").exists())
+            self.assertTrue((output_dir / "waveform_features.pdf").exists())
 
     @unittest.skipUnless(
         MC_SAMPLE.exists() and CONST_DST.exists() and MC_CALIB_DIR.exists(),

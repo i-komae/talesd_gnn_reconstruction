@@ -59,6 +59,11 @@ TEST_FRACTION="${TEST_FRACTION:-0.45}"
 SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION:-0.10}"
 SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION:-0.45}"
 SPLIT_WORKERS="${SPLIT_WORKERS:-8}"
+SUMMARY_WORKERS="${SUMMARY_WORKERS:-${SPLIT_WORKERS}}"
+MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS:-1}"
+INPUT_DISTRIBUTION_MAX_GRAPHS="${INPUT_DISTRIBUTION_MAX_GRAPHS:-100000}"
+INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE="${INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE:-200000}"
+SEED="${SEED:-12345}"
 DRY_RUN="${DRY_RUN:-0}"
 DRY_RUN_SELECTION="${DRY_RUN_SELECTION:-0}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-/dicos_ui_home/ikomae/work/uv-cache}"
@@ -78,7 +83,7 @@ if [[ "${KIND}" == "mc" && -z "${MC_CALIB_DIR}" ]]; then
   exit 2
 fi
 
-mkdir -p "${RUN_DIR}/slurm" "${GRAPH_RUN_DIR}/summaries"
+mkdir -p "${RUN_DIR}/slurm" "${RUN_DIR}/summaries" "${GRAPH_RUN_DIR}/summaries"
 SBATCH_FILE="${RUN_DIR}/slurm/${RUN_NAME}.sbatch"
 SLURM_LOG_DIR="${RUN_DIR}/slurm"
 LOG_DIR="${RUN_DIR}/logs"
@@ -138,8 +143,8 @@ cat > "${SBATCH_FILE}" <<EOF
 #SBATCH --cpus-per-task=${CPUS_PER_TASK}
 #SBATCH --mem=${MEM}
 #SBATCH --time=${TIME_LIMIT}
-#SBATCH --output=${SLURM_LOG_DIR}/%x_%j.out
-#SBATCH --error=${SLURM_LOG_DIR}/%x_%j.err
+#SBATCH --output=${SLURM_LOG_DIR}/%x_%j.log
+#SBATCH --error=${SLURM_LOG_DIR}/%x_%j.log
 
 set -euo pipefail
 JOB_LOG_PATH="${LOG_DIR}/${RUN_NAME}.job.log"
@@ -152,12 +157,13 @@ echo "date=\$(date)"
 echo "hostname=\$(hostname 2>/dev/null || true)"
 echo "slurm_job_id=\${SLURM_JOB_ID:-}"
 echo "job_log=\${JOB_LOG_PATH}"
-echo "slurm_stdout=${SLURM_LOG_DIR}/%x_%j.out"
-echo "slurm_stderr=${SLURM_LOG_DIR}/%x_%j.err"
+echo "slurm_log=${SLURM_LOG_DIR}/%x_%j.log"
 echo "run_name=${RUN_NAME}"
 echo "graph_output=${GRAPH_OUTPUT}"
 echo "energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}"
 echo "export_workers=${EXPORT_WORKERS}"
+echo "summary_workers=${SUMMARY_WORKERS}"
+echo "make_input_distributions=${MAKE_INPUT_DISTRIBUTIONS}"
 echo "selection_strategy=source_group_manifest_filename_energy_v1"
 echo "======================================================================"
 
@@ -176,6 +182,7 @@ env UV_CACHE_DIR="${UV_CACHE_DIR}" uv sync --frozen
   --energy-sample-per-bin "${ENERGY_SAMPLE_PER_BIN}" \\
 ${particle_line}\
   --energy-bin-width "${ENERGY_BIN_WIDTH}" \\
+  --seed "${SEED}" \\
   --workers "${EXPORT_WORKERS}" \\
   --balance-cell-preselect "${BALANCE_CELL_PRESELECT}" \\
   --balance-zenith-bin-width-deg "${BALANCE_ZENITH_BIN_WIDTH_DEG}" \\
@@ -192,6 +199,11 @@ ${particle_line}\
 ${core_line}${dry_selection_line}${input_lines}  -o "${GRAPH_OUTPUT}"
 
 if [[ "${DRY_RUN_SELECTION}" != "1" ]]; then
+  .venv/bin/python scripts/summarize_graph_shards.py "${GRAPH_RUN_DIR}" \\
+    --workers "${SUMMARY_WORKERS}" \\
+    -o "${GRAPH_RUN_DIR}/summaries/graph_summary.json"
+  cp -f "${GRAPH_RUN_DIR}/summaries/graph_summary.json" "${RUN_DIR}/summaries/graph_summary.json"
+
   .venv/bin/python scripts/summarize_split_distributions.py "${GRAPH_RUN_DIR}" \\
     -o "${GRAPH_RUN_DIR}/summaries/split_distribution_summary.json" \\
     --plot-dir "${GRAPH_RUN_DIR}/summaries/split_distributions" \\
@@ -199,7 +211,18 @@ if [[ "${DRY_RUN_SELECTION}" != "1" ]]; then
     --test-fraction "${TEST_FRACTION}" \\
     --source-val-fraction "${SOURCE_VAL_FRACTION}" \\
     --source-test-fraction "${SOURCE_TEST_FRACTION}" \\
+    --seed "${SEED}" \\
     --split-workers "${SPLIT_WORKERS}"
+  cp -f "${GRAPH_RUN_DIR}/summaries/split_distribution_summary.json" "${RUN_DIR}/summaries/split_distribution_summary.json"
+
+  if [[ "${MAKE_INPUT_DISTRIBUTIONS}" == "1" ]]; then
+    .venv/bin/talesd-gnn input-distributions \\
+      --graphs "${GRAPH_RUN_DIR}" \\
+      --max-graphs "${INPUT_DISTRIBUTION_MAX_GRAPHS}" \\
+      --max-values-per-feature "${INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE}" \\
+      --seed "${SEED}" \\
+      -o "${GRAPH_RUN_DIR}/summaries/input_distributions"
+  fi
 fi
 EOF
 
@@ -209,6 +232,7 @@ run_name: ${RUN_NAME}
 graph_output: ${GRAPH_OUTPUT}
 selection_summary: ${SELECTION_SUMMARY}
 energy_sample_per_bin: ${ENERGY_SAMPLE_PER_BIN}
+seed: ${SEED}
 split_event_fractions: train=1-val-test, val=${VAL_FRACTION}, test=${TEST_FRACTION}
 split_source_fractions: train=1-val-test, val=${SOURCE_VAL_FRACTION}, test=${SOURCE_TEST_FRACTION}
 sbatch_file: ${SBATCH_FILE}

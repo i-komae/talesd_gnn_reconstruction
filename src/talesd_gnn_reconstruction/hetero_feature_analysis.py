@@ -9,13 +9,22 @@ from typing import Any
 import numpy as np
 
 from .dataset import StandardScaler
-from .feature_analysis import expand_graph_paths, _metric_delta, _plot_feature_group_importance
+from .feature_analysis import (
+    expand_graph_paths,
+    _metric_delta,
+    _plot_feature_group,
+    _plot_feature_group_importance,
+    _reservoir_merge,
+    _sample_indices,
+    _summarize_values,
+)
 from .hetero_data import sample_to_hetero_data
 from .hetero_graph_io import EDGE_RELATIONS, H5HeteroGraphDataset, H5PyGHeteroGraphDataset
 from .hetero_model import MinimalHeteroTaleSdGNN
 from .hetero_training import _predict_hetero_numpy
 from .metrics import binary_classification_metrics, reconstruction_metrics
 from .progress import progress as _progress
+from .progress import write as _progress_write
 from .train import resolve_device
 
 
@@ -33,12 +42,211 @@ def _columns_from_hetero_dataset(dataset: H5HeteroGraphDataset) -> dict[str, Any
         "detector_features": [str(value) for value in columns.get("detector_features", [])],
         "detector_context_features": [str(value) for value in columns.get("detector_context_features", [])],
         "pulse_features": [str(value) for value in columns.get("pulse_features", columns.get("node_features", []))],
+        "pulse_bounds": [str(value) for value in columns.get("pulse_bounds", [])],
         "detector_waveforms": [str(value) for value in columns.get("detector_waveforms", [])],
         "edge_features_by_type": {
             str(relation): [str(value) for value in edge_columns.get(relation, columns.get("edge_features", []))]
             for relation in EDGE_RELATIONS
         },
+        "target": [str(value) for value in columns.get("target", [])],
     }
+
+
+def _merge_feature_columns(
+    samples: dict[str, np.ndarray | None],
+    values: np.ndarray,
+    columns: Sequence[str],
+    *,
+    cap: int,
+    rng: np.random.Generator,
+) -> None:
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim == 1:
+        array = array.reshape(1, -1)
+    for col, name in enumerate(columns[: array.shape[1]]):
+        samples[name] = _reservoir_merge(samples.get(name), array[:, col], cap=cap, rng=rng)
+
+
+def save_hetero_input_distributions(
+    graphs_path: str | Path | Sequence[str | Path],
+    output_dir: str | Path,
+    *,
+    max_graphs: int = 100000,
+    max_values_per_feature: int = 200000,
+    seed: int = 12345,
+    show_progress: bool = True,
+) -> dict[str, Any]:
+    paths = expand_graph_paths(graphs_path)
+    if show_progress:
+        _progress_write(f"stage=start hetero_input_distributions paths={len(paths)}")
+        _progress_write("stage=start hetero_input_distributions dataset_init")
+    dataset = H5HeteroGraphDataset(paths, require_target=False, require_particle_label=False, load_attrs=False)
+    try:
+        if show_progress:
+            _progress_write(
+                f"stage=done hetero_input_distributions dataset_init graphs={len(dataset)} shards={len(dataset.paths)}"
+            )
+        columns = _columns_from_hetero_dataset(dataset)
+        if not columns["pulse_bounds"]:
+            columns["pulse_bounds"] = ["upper_rise_bin", "upper_fall_bin", "lower_rise_bin", "lower_fall_bin"]
+        if not columns["detector_waveforms"]:
+            columns["detector_waveforms"] = ["upper_raw_vem", "lower_raw_vem"]
+        indices = _sample_indices(len(dataset), int(max_graphs), int(seed))
+        if show_progress:
+            _progress_write(
+                "stage=start hetero_input_distributions collect "
+                f"sampled_graphs={len(indices)} total_graphs={len(dataset)} "
+                f"max_values_per_feature={int(max_values_per_feature)}"
+            )
+        rng = np.random.default_rng(seed)
+        samples: dict[str, dict[str, np.ndarray | None]] = {
+            "event": {
+                "n_detector_nodes": None,
+                "n_pulse_nodes": None,
+                "detector_waveform_length": None,
+            },
+            "detector": {name: None for name in columns["detector_features"]},
+            "detector_context": {name: None for name in columns["detector_context_features"]},
+            "pulse": {name: None for name in columns["pulse_features"]},
+            "pulse_bounds": {name: None for name in columns["pulse_bounds"]},
+            "waveform": {name: None for name in columns["detector_waveforms"]},
+            "target": {name: None for name in columns["target"]},
+        }
+        edge_samples: dict[str, dict[str, np.ndarray | None]] = {
+            relation: {name: None for name in columns["edge_features_by_type"].get(relation, [])}
+            for relation in EDGE_RELATIONS
+        }
+        particle_labels: list[float] = []
+
+        for index in _progress(indices, desc="collect hetero input distributions", total=len(indices), enabled=show_progress):
+            sample = dataset[int(index)]
+            detector_features = np.asarray(sample["detector_features"], dtype=np.float64)
+            detector_context = np.asarray(sample["detector_context_features"], dtype=np.float64)
+            pulse_features = np.asarray(sample["pulse_features"], dtype=np.float64)
+            pulse_bounds = np.asarray(sample["pulse_bounds"], dtype=np.float64)
+            waveforms = np.asarray(sample["detector_waveforms"], dtype=np.float64)
+            _merge_feature_columns(
+                samples["detector"],
+                detector_features,
+                columns["detector_features"],
+                cap=max_values_per_feature,
+                rng=rng,
+            )
+            _merge_feature_columns(
+                samples["detector_context"],
+                detector_context,
+                columns["detector_context_features"],
+                cap=max_values_per_feature,
+                rng=rng,
+            )
+            _merge_feature_columns(
+                samples["pulse"],
+                pulse_features,
+                columns["pulse_features"],
+                cap=max_values_per_feature,
+                rng=rng,
+            )
+            _merge_feature_columns(
+                samples["pulse_bounds"],
+                pulse_bounds,
+                columns["pulse_bounds"],
+                cap=max_values_per_feature,
+                rng=rng,
+            )
+            samples["event"]["n_detector_nodes"] = _reservoir_merge(
+                samples["event"]["n_detector_nodes"],
+                np.asarray([detector_features.shape[0]], dtype=np.float64),
+                cap=max_values_per_feature,
+                rng=rng,
+            )
+            samples["event"]["n_pulse_nodes"] = _reservoir_merge(
+                samples["event"]["n_pulse_nodes"],
+                np.asarray([pulse_features.shape[0]], dtype=np.float64),
+                cap=max_values_per_feature,
+                rng=rng,
+            )
+            samples["event"]["detector_waveform_length"] = _reservoir_merge(
+                samples["event"]["detector_waveform_length"],
+                np.asarray([waveforms.shape[2] if waveforms.ndim == 3 else 0], dtype=np.float64),
+                cap=max_values_per_feature,
+                rng=rng,
+            )
+            if waveforms.ndim == 3:
+                for channel, name in enumerate(columns["detector_waveforms"][: waveforms.shape[1]]):
+                    samples["waveform"][name] = _reservoir_merge(
+                        samples["waveform"].get(name),
+                        waveforms[:, channel, :].reshape(-1),
+                        cap=max_values_per_feature,
+                        rng=rng,
+                    )
+            edge_features_by_type = sample["edge_features_by_type"]
+            for relation in EDGE_RELATIONS:
+                edge_features = np.asarray(edge_features_by_type.get(relation, np.zeros((0, 0))), dtype=np.float64)
+                _merge_feature_columns(
+                    edge_samples[relation],
+                    edge_features,
+                    columns["edge_features_by_type"].get(relation, []),
+                    cap=max_values_per_feature,
+                    rng=rng,
+                )
+            target = sample.get("target")
+            if target is not None:
+                _merge_feature_columns(samples["target"], np.asarray(target, dtype=np.float64), columns["target"], cap=max_values_per_feature, rng=rng)
+            label = sample.get("particle_label")
+            if label is not None and np.isfinite(float(label)):
+                particle_labels.append(float(label))
+        if show_progress:
+            _progress_write("stage=done hetero_input_distributions collect")
+
+        output = Path(output_dir).expanduser()
+        output.mkdir(parents=True, exist_ok=True)
+        features = {
+            group: {
+                name: _summarize_values(values if values is not None else np.empty((0,)))
+                for name, values in group_samples.items()
+            }
+            for group, group_samples in samples.items()
+        }
+        features["edge_features_by_type"] = {
+            relation: {
+                name: _summarize_values(values if values is not None else np.empty((0,)))
+                for name, values in relation_samples.items()
+            }
+            for relation, relation_samples in edge_samples.items()
+        }
+        summary = {
+            "graph_format": "hetero",
+            "graphs": paths,
+            "n_graphs_total": len(dataset),
+            "n_graphs_sampled": len(indices),
+            "columns": columns,
+            "features": features,
+            "particle_labels": {
+                "n": len(particle_labels),
+                "proton": int(np.sum(np.asarray(particle_labels) < 0.5)) if particle_labels else 0,
+                "iron": int(np.sum(np.asarray(particle_labels) >= 0.5)) if particle_labels else 0,
+            },
+        }
+        summary_path = output / "input_feature_summary.json"
+        summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+        for group, group_samples in samples.items():
+            _plot_feature_group(
+                {name: values for name, values in group_samples.items() if values is not None},
+                output / f"{group}_features.pdf",
+                f"hetero {group} feature distributions",
+            )
+        for relation, relation_samples in edge_samples.items():
+            _plot_feature_group(
+                {name: values for name, values in relation_samples.items() if values is not None},
+                output / f"edge_{relation}_features.pdf",
+                f"hetero {relation} feature distributions",
+            )
+        summary["summary_json"] = str(summary_path)
+        if show_progress:
+            _progress_write(f"stage=done hetero_input_distributions summary_json={summary_path}")
+        return summary
+    finally:
+        dataset.close()
 
 
 def _present(columns: Sequence[str], names: Sequence[str]) -> list[str]:

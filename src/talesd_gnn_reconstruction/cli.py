@@ -1005,6 +1005,18 @@ def _selected_path_chunks(
     return chunks
 
 
+def _selected_entries_from_path_indices(
+    inputs: list[str],
+    selected_indices_by_path: dict[str, set[int]],
+) -> list[SelectedEntry]:
+    entries: list[SelectedEntry] = []
+    for path in inputs:
+        for source_index in sorted(selected_indices_by_path.get(path, ())):
+            unique_id = f"{path}:{int(source_index)}"
+            entries.append((0, unique_id, path, int(source_index), float("nan"), 0, 0))
+    return entries
+
+
 def _interleaved_selected_entries(
     entries: list[SelectedEntry],
     *,
@@ -1334,6 +1346,129 @@ def _write_ordered_selected_graph_shard(
     }
 
 
+def _write_selected_hetero_graph_shard(
+    payload: tuple[
+        int,
+        list[SelectedEntry],
+        str,
+        str,
+        str,
+        str | None,
+        str | None,
+        bool,
+        bool,
+        bool,
+        bool,
+        int | None,
+        int,
+        float,
+        str,
+        dict[str, Any],
+    ]
+) -> dict[str, Any]:
+    import dstio.tale.graph as tale_graph
+
+    from .hetero_graph_io import create_hetero_graph_file, write_hetero_graph
+
+    (
+        shard_index,
+        entries,
+        kind,
+        cleaning,
+        node_policy,
+        const_dst,
+        mc_calib_dir,
+        require_trigger_mode0,
+        require_reference_core,
+        skip_errors,
+        skip_missing_mc_calibration,
+        min_event_date,
+        open_retries,
+        open_retry_delay,
+        output,
+        config,
+    ) = payload
+
+    output_path = _shard_path(output, shard_index)
+    shard_config = dict(config)
+    shard_config["shard_index"] = shard_index
+    handle = None
+    written = 0
+    skipped = 0
+    processed_files = 0
+    wanted_by_path: dict[str, set[int]] = {}
+    for _bin_key, _unique_id, path, source_index, _log10_energy, _date, _time_value in entries:
+        wanted_by_path.setdefault(path, set()).add(int(source_index))
+    selected_total = sum(len(indices) for indices in wanted_by_path.values())
+    interval = max(float(os.environ.get("TALESD_GNN_PROGRESS_INTERVAL", "30")), 1.0)
+    last_report = time.perf_counter()
+
+    _progress_write(
+        f"hetero export/write shard {shard_index:04d}: start files={len(wanted_by_path)} "
+        f"selected={selected_total} output={output_path.name}"
+    )
+    try:
+        for file_number, path in enumerate(wanted_by_path, start=1):
+            selected = wanted_by_path.get(path)
+            if not selected:
+                continue
+            file_written = 0
+            for graph in tale_graph.iter_graphs(
+                path,
+                kind=kind,
+                cleaning=cleaning,
+                node_policy=node_policy,
+                const_dst=const_dst,
+                mc_calib_dir=mc_calib_dir,
+                max_events=None,
+                require_trigger_mode0=require_trigger_mode0,
+                require_reference_core=require_reference_core,
+                skip_errors=skip_errors,
+                skip_missing_mc_calibration=skip_missing_mc_calibration,
+                source_indices=selected,
+                min_event_date=min_event_date,
+                open_retries=open_retries,
+                open_retry_delay=open_retry_delay,
+            ):
+                if graph.target is None or graph.target.shape[0] == 0:
+                    skipped += 1
+                    continue
+                if handle is None:
+                    handle = create_hetero_graph_file(output_path, config=shard_config)
+                write_hetero_graph(handle, written, graph)
+                written += 1
+                file_written += 1
+            skipped += max(len(selected) - file_written, 0)
+            processed_files += 1
+            now = time.perf_counter()
+            if now - last_report >= interval:
+                _progress_write(
+                    f"hetero export/write shard {shard_index:04d}: files={file_number}/{len(wanted_by_path)} "
+                    f"written={written} skipped={skipped}"
+                )
+                last_report = now
+    except BaseException as exc:
+        _progress_write(
+            f"hetero export/write shard {shard_index:04d}: failed files={processed_files}/{len(wanted_by_path)} "
+            f"written={written} skipped={skipped} error={exc}"
+        )
+        raise
+    finally:
+        if handle is not None:
+            handle.close()
+
+    _progress_write(
+        f"hetero export/write shard {shard_index:04d}: done files={processed_files}/{len(wanted_by_path)} "
+        f"written={written} skipped={skipped} output={output_path.name if written > 0 else '(empty)'}"
+    )
+    return {
+        "shard_index": shard_index,
+        "path": str(output_path) if written > 0 else None,
+        "written": written,
+        "skipped": skipped,
+    }
+
+
 def _iter_selected_shard_write_results(
     inputs: list[str],
     args: argparse.Namespace,
@@ -1376,6 +1511,51 @@ def _iter_selected_shard_write_results(
         _write_selected_graph_shard,
         workers,
         "export/write shards",
+        max_tasks_per_child=max(int(args.worker_max_files), 0),
+    )
+
+
+def _iter_selected_hetero_shard_write_results(
+    inputs: list[str],
+    args: argparse.Namespace,
+    const_dst: Path | None,
+    mc_calib_dir: Path | None,
+    selected_indices_by_path: dict[str, set[int]],
+    config: dict[str, Any],
+) -> Iterator[dict[str, Any]]:
+    selected_entries = _selected_entries_from_path_indices(inputs, selected_indices_by_path)
+    chunks = _selected_entry_chunks(selected_entries, int(args.shard_size))
+    payloads = [
+        (
+            shard_index,
+            entries,
+            args.kind,
+            args.cleaning,
+            args.node_policy,
+            str(const_dst) if const_dst is not None else None,
+            str(mc_calib_dir) if mc_calib_dir is not None else None,
+            not args.keep_non_mode0,
+            bool(args.require_reference_core),
+            bool(args.skip_errors),
+            bool(args.skip_missing_mc_calibration),
+            None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date),
+            int(args.open_retries),
+            float(args.open_retry_delay),
+            str(Path(args.output).expanduser()),
+            config,
+        )
+        for shard_index, entries in enumerate(chunks)
+    ]
+    workers = min(max(int(args.workers), 1), len(payloads)) if payloads else 1
+    _progress_write(
+        f"hetero export/write shards: start shards={len(payloads)} workers={workers} "
+        f"selected_files={len(selected_indices_by_path)} selected_events={len(selected_entries)}"
+    )
+    yield from _iter_process_pool(
+        payloads,
+        _write_selected_hetero_graph_shard,
+        workers,
+        "hetero export/write shards",
         max_tasks_per_child=max(int(args.worker_max_files), 0),
     )
 
@@ -2673,6 +2853,27 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
         if args.dry_run_selection:
             print("dry-run selection complete; no hetero HDF5 was written")
             return
+        if int(args.shard_size) > 0 and int(args.workers) > 1:
+            config["balanced_selection_parallel_shard_write"] = True
+            written_total = 0
+            skipped_total = 0
+            written_path_items: list[tuple[int, Path]] = []
+            for result in _iter_selected_hetero_shard_write_results(
+                inputs,
+                args,
+                const_dst,
+                mc_calib_dir,
+                selected_by_path,
+                config,
+            ):
+                written_total += int(result["written"])
+                skipped_total += int(result["skipped"])
+                if result.get("path"):
+                    written_path_items.append((int(result["shard_index"]), Path(str(result["path"]))))
+            written_paths = [path for _index, path in sorted(written_path_items, key=lambda item: item[0])]
+            targets = ", ".join(str(path) for path in written_paths) if written_paths else str(args.output)
+            print(f"wrote {written_total} hetero graphs to {targets} (skipped {skipped_total} selected events)")
+            return
         graphs = _iter_selected_hetero_graphs(inputs, args, const_dst, mc_calib_dir, selected_by_path)
     else:
         graphs = tale_graph.iter_graphs(
@@ -2934,10 +3135,23 @@ def _cmd_predict(args: argparse.Namespace) -> None:
 
 
 def _cmd_input_distributions(args: argparse.Namespace) -> None:
-    from .feature_analysis import save_input_distributions
-
     graphs = _resolve_graph_args(args.graphs, args.graphs_list)
-    summary = save_input_distributions(
+    paths = _expand_h5_graph_paths(graphs)
+    graph_format = ""
+    if paths:
+        import h5py
+
+        with h5py.File(paths[0], "r") as handle:
+            graph_format = str(handle.attrs.get("format", ""))
+    if graph_format == "talesd_gnn_hetero_graphs":
+        from .hetero_feature_analysis import save_hetero_input_distributions
+
+        save = save_hetero_input_distributions
+    else:
+        from .feature_analysis import save_input_distributions
+
+        save = save_input_distributions
+    summary = save(
         graphs,
         args.output,
         max_graphs=args.max_graphs,
