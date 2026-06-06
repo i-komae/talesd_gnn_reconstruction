@@ -1621,6 +1621,8 @@ def _cmd_train(args: argparse.Namespace) -> None:
         diagnostic_min_bin_count=args.diagnostic_min_bin_count,
     )
     print(f"checkpoint: {result['checkpoint']}")
+    if result.get("metrics_json"):
+        print(f"metrics: {result['metrics_json']}")
     print(f"metrics: {result['metrics_path']}")
     diagnostics = result.get("diagnostics") or {}
     if diagnostics:
@@ -1657,8 +1659,22 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         waveform_encoder=args.waveform_encoder,
         waveform_embedding_dim=args.waveform_embedding_dim,
         waveform_length=args.waveform_length,
+        loss_mode=args.loss_mode,
+        energy_loss_weight=args.energy_loss_weight,
+        core_loss_weight=args.core_loss_weight,
+        direction_loss_weight=args.direction_loss_weight,
+        core_loss_scale_km=args.core_loss_scale_km,
+        angular_loss_scale_deg=args.angular_loss_scale_deg,
+        energy_bias_loss_weight=args.energy_bias_loss_weight,
+        energy_particle_bias_loss_weight=args.energy_particle_bias_loss_weight,
+        energy_bias_bin_width=args.energy_bias_bin_width,
+        energy_bias_min_bin_count=args.energy_bias_min_bin_count,
         mass_classification=args.mass_classification,
         mass_loss_weight=args.mass_loss_weight,
+        mass_loss_mode=args.mass_loss_mode,
+        mass_focal_gamma=args.mass_focal_gamma,
+        mass_ranking_weight=args.mass_ranking_weight,
+        mass_ranking_margin=args.mass_ranking_margin,
         val_fraction=args.val_fraction,
         test_fraction=args.test_fraction,
         source_val_fraction=args.source_val_fraction,
@@ -1666,12 +1682,32 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         split_mode=args.split_mode,
         seed=args.seed,
         device=args.device,
+        save_diagnostics=args.diagnostics,
+        diagnostic_energy_bin_width=args.diagnostic_energy_bin_width,
+        diagnostic_min_bin_count=args.diagnostic_min_bin_count,
         show_progress=not args.no_progress,
     )
     print(f"checkpoint: {result['checkpoint']}")
     if result.get("history"):
         last = result["history"][-1]
         print(f"last epoch: {last['epoch']} train_loss={last['train_loss']:.6g} val_loss={last['val_loss']:.6g}")
+    metrics = result.get("metrics") or {}
+    if metrics.get("validation"):
+        validation = metrics["validation"]
+        print(
+            "validation: "
+            f"rmse_log10_energy={validation.get('rmse_log10_energy', float('nan')):.6g} "
+            f"core_68_km={validation.get('core_68_km', float('nan')):.6g} "
+            f"angular_68_deg={validation.get('angular_68_deg', float('nan')):.6g}"
+        )
+    if metrics.get("test"):
+        test = metrics["test"]
+        print(
+            "test: "
+            f"rmse_log10_energy={test.get('rmse_log10_energy', float('nan')):.6g} "
+            f"core_68_km={test.get('core_68_km', float('nan')):.6g} "
+            f"angular_68_deg={test.get('angular_68_deg', float('nan')):.6g}"
+        )
 
 
 def _cmd_reconstruct_dst(args: argparse.Namespace) -> None:
@@ -1967,8 +2003,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="detector waveform の固定入力長。未指定ならtrain split内の最大長を使う",
     )
+    train_hetero.add_argument(
+        "--loss-mode",
+        choices=["scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics"],
+        default="physics",
+    )
+    train_hetero.add_argument("--energy-loss-weight", type=float, default=1.0)
+    train_hetero.add_argument("--core-loss-weight", type=float, default=1.0)
+    train_hetero.add_argument("--direction-loss-weight", type=float, default=1.0)
+    train_hetero.add_argument("--core-loss-scale-km", type=float, default=0.05)
+    train_hetero.add_argument("--angular-loss-scale-deg", type=float, default=1.0)
+    train_hetero.add_argument("--energy-bias-loss-weight", type=float, default=0.0)
+    train_hetero.add_argument("--energy-particle-bias-loss-weight", type=float, default=0.0)
+    train_hetero.add_argument("--energy-bias-bin-width", type=float, default=0.1)
+    train_hetero.add_argument("--energy-bias-min-bin-count", type=int, default=8)
     train_hetero.add_argument("--mass-classification", action="store_true")
     train_hetero.add_argument("--mass-loss-weight", type=float, default=0.1)
+    train_hetero.add_argument("--mass-loss-mode", choices=["bce", "focal"], default="bce")
+    train_hetero.add_argument("--mass-focal-gamma", type=float, default=2.0)
+    train_hetero.add_argument("--mass-ranking-weight", type=float, default=0.0)
+    train_hetero.add_argument("--mass-ranking-margin", type=float, default=1.0)
     train_hetero.add_argument("--val-fraction", type=float, default=0.1)
     train_hetero.add_argument("--test-fraction", type=float, default=0.1)
     train_hetero.add_argument("--source-val-fraction", type=float, default=0.10)
@@ -1980,6 +2034,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train_hetero.add_argument("--seed", type=int, default=12345)
     train_hetero.add_argument("--device", default="auto")
+    train_hetero.add_argument("--diagnostics", action="store_true", help="training後に既存diagnostics PDF/JSONを生成する")
+    train_hetero.add_argument("--diagnostic-energy-bin-width", type=float, default=0.1)
+    train_hetero.add_argument("--diagnostic-min-bin-count", type=int, default=20)
     train_hetero.add_argument("--no-progress", action="store_true")
     train_hetero.set_defaults(func=_cmd_train_hetero)
 

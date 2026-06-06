@@ -263,12 +263,16 @@ class HeteroGraphIoTest(unittest.TestCase):
             )
 
             self.assertEqual(result["checkpoint"], str(checkpoint_path))
+            self.assertEqual(result["metrics_json"], str(checkpoint_path) + ".metrics.json")
             checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
             self.assertEqual(checkpoint["model_config"]["architecture"], "minimal_hetero")
             self.assertIn("hetero_scalers", checkpoint)
             self.assertIn("detector", checkpoint["hetero_scalers"])
             self.assertIn("target", checkpoint["hetero_scalers"])
+            self.assertIn("metrics", checkpoint)
+            self.assertIn("test", checkpoint["metrics"])
             self.assertEqual(len(checkpoint["history"]), 1)
+            self.assertTrue((Path(str(checkpoint_path) + ".metrics.json")).exists())
 
     @unittest.skipUnless(
         MC_SAMPLE.exists() and CONST_DST.exists() and MC_CALIB_DIR.exists(),
