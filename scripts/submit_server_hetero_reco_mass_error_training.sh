@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+PARTITION_FOR_NAME="${PARTITION:-v100-al9_long}"
+RESOURCE_TAG="${RESOURCE_TAG:-${PARTITION_FOR_NAME%%-*}}"
+TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}"
+
+export RUN_ID
+export RESOURCE_TAG
+export TRAIN_EPOCHS
+export RUN_NAME="${RUN_NAME:-server_hetero_reco_mass_error_${RESOURCE_TAG}_${TRAIN_EPOCHS}epoch_${RUN_ID}}"
+export TRAINING_TASK="reconstruction"
+export MASS_CLASSIFICATION="1"
+export LOSS_MODE="${LOSS_MODE:-physics}"
+export QUALITY_PREDICTION="0"
+export ERROR_PREDICTION="1"
+export ERROR_WEIGHT="${ERROR_WEIGHT:-0.2}"
+
+exec "${SCRIPT_DIR}/submit_server_hetero_training.sh"

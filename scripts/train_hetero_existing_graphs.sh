@@ -44,6 +44,20 @@ MASS_LOSS_MODE="${MASS_LOSS_MODE:-bce}"
 MASS_FOCAL_GAMMA="${MASS_FOCAL_GAMMA:-2.0}"
 MASS_RANKING_WEIGHT="${MASS_RANKING_WEIGHT:-0.5}"
 MASS_RANKING_MARGIN="${MASS_RANKING_MARGIN:-1.0}"
+QUALITY_PREDICTION="${QUALITY_PREDICTION:-0}"
+QUALITY_WEIGHT="${QUALITY_WEIGHT:-0.2}"
+QUALITY_ANGULAR_SCALE_DEG="${QUALITY_ANGULAR_SCALE_DEG:-1.0}"
+QUALITY_CORE_SCALE_KM="${QUALITY_CORE_SCALE_KM:-0.05}"
+QUALITY_ENERGY_SCALE="${QUALITY_ENERGY_SCALE:-0.10}"
+ERROR_PREDICTION="${ERROR_PREDICTION:-0}"
+ERROR_WEIGHT="${ERROR_WEIGHT:-0.2}"
+ERROR_ANGULAR_SCALE_DEG="${ERROR_ANGULAR_SCALE_DEG:-1.0}"
+ERROR_CORE_SCALE_KM="${ERROR_CORE_SCALE_KM:-0.05}"
+ERROR_ENERGY_SCALE="${ERROR_ENERGY_SCALE:-0.10}"
+NLL_WEIGHT="${NLL_WEIGHT:-0.2}"
+NLL_SIGMA_ENERGY_FLOOR="${NLL_SIGMA_ENERGY_FLOOR:-0.01}"
+NLL_SIGMA_ANGLE_FLOOR_DEG="${NLL_SIGMA_ANGLE_FLOOR_DEG:-0.05}"
+NLL_SIGMA_CORE_FLOOR_KM="${NLL_SIGMA_CORE_FLOOR_KM:-0.005}"
 VAL_FRACTION="${VAL_FRACTION:-0.05}"
 TEST_FRACTION="${TEST_FRACTION:-0.10}"
 SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION:-0.10}"
@@ -56,16 +70,28 @@ FEATURE_IMPORTANCE="${FEATURE_IMPORTANCE:-0}"
 SEED="${SEED:-12345}"
 PYTHON_BIN="${PYTHON_BIN:-.venv/bin/python}"
 
+if [[ "${LOSS_MODE}" == "physics-nll" || "${LOSS_MODE}" == "nll" ]]; then
+  ERROR_PREDICTION=1
+fi
+
 if [[ "${FEATURE_IMPORTANCE}" == "1" ]]; then
   echo "hetero feature importance is not implemented yet; set FEATURE_IMPORTANCE=0" >&2
   exit 2
 fi
 
 if [[ -z "${CONFIG_NAME:-}" ]]; then
+  AUX_HEAD_TAG=""
+  if [[ "${QUALITY_PREDICTION}" == "1" && "${ERROR_PREDICTION}" == "1" ]]; then
+    AUX_HEAD_TAG="_quality_error"
+  elif [[ "${QUALITY_PREDICTION}" == "1" ]]; then
+    AUX_HEAD_TAG="_quality"
+  elif [[ "${ERROR_PREDICTION}" == "1" ]]; then
+    AUX_HEAD_TAG="_error"
+  fi
   if [[ "${MASS_CLASSIFICATION}" == "1" ]]; then
-    CONFIG_NAME="hetero_reconstruction_mass_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${LOSS_MODE}_${MASS_LOSS_MODE}_${TRAIN_EPOCHS}epoch"
+    CONFIG_NAME="hetero_reconstruction_mass${AUX_HEAD_TAG}_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${LOSS_MODE}_${MASS_LOSS_MODE}_${TRAIN_EPOCHS}epoch"
   else
-    CONFIG_NAME="hetero_reconstruction_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${LOSS_MODE}_${TRAIN_EPOCHS}epoch"
+    CONFIG_NAME="hetero_reconstruction${AUX_HEAD_TAG}_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${LOSS_MODE}_${TRAIN_EPOCHS}epoch"
   fi
 fi
 
@@ -107,6 +133,20 @@ MASS_LOSS_MODE=${MASS_LOSS_MODE}
 MASS_FOCAL_GAMMA=${MASS_FOCAL_GAMMA}
 MASS_RANKING_WEIGHT=${MASS_RANKING_WEIGHT}
 MASS_RANKING_MARGIN=${MASS_RANKING_MARGIN}
+QUALITY_PREDICTION=${QUALITY_PREDICTION}
+QUALITY_WEIGHT=${QUALITY_WEIGHT}
+QUALITY_ANGULAR_SCALE_DEG=${QUALITY_ANGULAR_SCALE_DEG}
+QUALITY_CORE_SCALE_KM=${QUALITY_CORE_SCALE_KM}
+QUALITY_ENERGY_SCALE=${QUALITY_ENERGY_SCALE}
+ERROR_PREDICTION=${ERROR_PREDICTION}
+ERROR_WEIGHT=${ERROR_WEIGHT}
+ERROR_ANGULAR_SCALE_DEG=${ERROR_ANGULAR_SCALE_DEG}
+ERROR_CORE_SCALE_KM=${ERROR_CORE_SCALE_KM}
+ERROR_ENERGY_SCALE=${ERROR_ENERGY_SCALE}
+NLL_WEIGHT=${NLL_WEIGHT}
+NLL_SIGMA_ENERGY_FLOOR=${NLL_SIGMA_ENERGY_FLOOR}
+NLL_SIGMA_ANGLE_FLOOR_DEG=${NLL_SIGMA_ANGLE_FLOOR_DEG}
+NLL_SIGMA_CORE_FLOOR_KM=${NLL_SIGMA_CORE_FLOOR_KM}
 VAL_FRACTION=${VAL_FRACTION}
 TEST_FRACTION=${TEST_FRACTION}
 SOURCE_VAL_FRACTION=${SOURCE_VAL_FRACTION}
@@ -146,6 +186,18 @@ cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli train-hetero
   --mass-focal-gamma "${MASS_FOCAL_GAMMA}"
   --mass-ranking-weight "${MASS_RANKING_WEIGHT}"
   --mass-ranking-margin "${MASS_RANKING_MARGIN}"
+  --quality-loss-weight "${QUALITY_WEIGHT}"
+  --quality-angular-scale-deg "${QUALITY_ANGULAR_SCALE_DEG}"
+  --quality-core-scale-km "${QUALITY_CORE_SCALE_KM}"
+  --quality-energy-scale "${QUALITY_ENERGY_SCALE}"
+  --error-loss-weight "${ERROR_WEIGHT}"
+  --error-angular-scale-deg "${ERROR_ANGULAR_SCALE_DEG}"
+  --error-core-scale-km "${ERROR_CORE_SCALE_KM}"
+  --error-energy-scale "${ERROR_ENERGY_SCALE}"
+  --nll-loss-weight "${NLL_WEIGHT}"
+  --nll-sigma-energy-floor "${NLL_SIGMA_ENERGY_FLOOR}"
+  --nll-sigma-angle-floor-deg "${NLL_SIGMA_ANGLE_FLOOR_DEG}"
+  --nll-sigma-core-floor-km "${NLL_SIGMA_CORE_FLOOR_KM}"
   --split-mode "${SPLIT_MODE}"
   --test-fraction "${TEST_FRACTION}"
   --val-fraction "${VAL_FRACTION}"
@@ -161,6 +213,12 @@ if [[ -n "${WAVEFORM_LENGTH}" ]]; then
 fi
 if [[ "${MASS_CLASSIFICATION}" == "1" ]]; then
   cmd+=(--mass-classification)
+fi
+if [[ "${QUALITY_PREDICTION}" == "1" ]]; then
+  cmd+=(--quality-prediction)
+fi
+if [[ "${ERROR_PREDICTION}" == "1" ]]; then
+  cmd+=(--error-prediction)
 fi
 if [[ "${DIAGNOSTICS}" == "1" ]]; then
   cmd+=(--diagnostics)
@@ -237,8 +295,8 @@ Graph input:
 
 Not yet integrated:
   hetero feature importance
-  hetero quality/error heads
-  Slurm wrapper defaults for hetero production jobs
+  full HGT/HeteroConv production architecture
+  large-scale server training confirmation
 EOF
 
 echo "run_dir=${RUN_DIR}"

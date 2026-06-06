@@ -168,13 +168,15 @@ class HeteroGraphIoTest(unittest.TestCase):
             sample,
             target_dim=6,
             classification_dim=1,
+            quality_dim=1,
+            error_dim=3,
             hidden_dim=24,
             num_layers=1,
             dropout=0.0,
             waveform_embedding_dim=12,
         )
         output_tensor = model(tensors)
-        self.assertEqual(tuple(output_tensor.shape), (1, 7))
+        self.assertEqual(tuple(output_tensor.shape), (1, 11))
         self.assertTrue(torch.isfinite(output_tensor).all())
         loss = output_tensor.square().mean()
         loss.backward()
@@ -227,13 +229,15 @@ class HeteroGraphIoTest(unittest.TestCase):
             sample,
             target_dim=6,
             classification_dim=1,
+            quality_dim=1,
+            error_dim=3,
             hidden_dim=24,
             num_layers=1,
             dropout=0.0,
             waveform_embedding_dim=12,
         )
         output_tensor = model(batch)
-        self.assertEqual(tuple(output_tensor.shape), (2, 7))
+        self.assertEqual(tuple(output_tensor.shape), (2, 11))
         self.assertTrue(torch.isfinite(output_tensor).all())
         loss = output_tensor.square().mean()
         loss.backward()
@@ -257,6 +261,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                 dropout=0.0,
                 waveform_embedding_dim=8,
                 mass_classification=True,
+                quality_prediction=True,
                 split_mode="event",
                 device="cpu",
                 show_progress=False,
@@ -266,13 +271,53 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertEqual(result["metrics_json"], str(checkpoint_path) + ".metrics.json")
             checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
             self.assertEqual(checkpoint["model_config"]["architecture"], "minimal_hetero")
+            self.assertEqual(checkpoint["model_config"]["quality_dim"], 1)
+            self.assertEqual(checkpoint["model_config"]["error_dim"], 0)
             self.assertIn("hetero_scalers", checkpoint)
             self.assertIn("detector", checkpoint["hetero_scalers"])
             self.assertIn("target", checkpoint["hetero_scalers"])
             self.assertIn("metrics", checkpoint)
             self.assertIn("test", checkpoint["metrics"])
             self.assertEqual(len(checkpoint["history"]), 1)
+            self.assertIn("train_quality_loss", checkpoint["history"][0])
+            self.assertTrue(checkpoint["runtime"]["quality_prediction"])
+            self.assertFalse(checkpoint["runtime"]["error_prediction"])
             self.assertTrue((Path(str(checkpoint_path) + ".metrics.json")).exists())
+
+    def test_train_hetero_error_head_smoke_saves_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            checkpoint_path = Path(tmpdir) / "checkpoint.pt"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(6):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            train_hetero_model(
+                graph_path,
+                checkpoint_path,
+                epochs=1,
+                batch_size=2,
+                hidden_dim=16,
+                num_layers=1,
+                dropout=0.0,
+                waveform_embedding_dim=8,
+                mass_classification=True,
+                quality_prediction=False,
+                error_prediction=True,
+                error_loss_weight=0.2,
+                split_mode="event",
+                device="cpu",
+                show_progress=False,
+            )
+
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            self.assertEqual(checkpoint["model_config"]["quality_dim"], 0)
+            self.assertEqual(checkpoint["model_config"]["error_dim"], 3)
+            self.assertFalse(checkpoint["runtime"]["quality_prediction"])
+            self.assertTrue(checkpoint["runtime"]["error_prediction"])
+            self.assertEqual(checkpoint["runtime"]["error_loss_weight"], 0.2)
+            self.assertIn("train_error_loss", checkpoint["history"][0])
+            self.assertNotIn("train_quality_loss", checkpoint["history"][0])
 
     @unittest.skipUnless(
         MC_SAMPLE.exists() and CONST_DST.exists() and MC_CALIB_DIR.exists(),

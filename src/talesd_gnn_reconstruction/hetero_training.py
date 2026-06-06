@@ -17,7 +17,10 @@ from .hetero_model import MinimalHeteroTaleSdGNN
 from .metrics import binary_classification_metrics, reconstruction_metrics
 from .progress import progress as _progress
 from .train import (
+    _error_prediction_loss,
     _mass_classification_loss,
+    _physical_error_predictions,
+    _quality_prediction_loss,
     _reconstruction_training_loss,
     _split_model_output,
     _target_scaler_tensors,
@@ -185,15 +188,29 @@ def _hetero_batch_loss(
     mass_focal_gamma: float,
     mass_ranking_weight: float,
     mass_ranking_margin: float,
+    quality_prediction: bool,
+    quality_loss_weight: float,
+    quality_angular_scale_deg: float,
+    quality_core_scale_km: float,
+    quality_energy_scale: float,
+    error_prediction: bool,
+    error_loss_weight: float,
+    error_angular_scale_deg: float,
+    error_core_scale_km: float,
+    error_energy_scale: float,
+    nll_loss_weight: float,
+    nll_sigma_energy_floor: float,
+    nll_sigma_angle_floor_deg: float,
+    nll_sigma_core_floor_km: float,
 ) -> tuple[Any, dict[str, Any]]:
     pred_all = model(batch)
     target = batch.target.to(device=device, dtype=pred_all.dtype)
-    pred_scaled, mass_logit, _quality_logit, _error_raw = _split_model_output(
+    pred_scaled, mass_logit, quality_logit, error_raw = _split_model_output(
         pred_all,
         target_dim,
         mass_classification,
-        quality_prediction=False,
-        error_prediction=False,
+        quality_prediction=quality_prediction,
+        error_prediction=error_prediction,
     )
     target_mean, target_std = _target_scaler_tensors(scalers, device)
     labels = (
@@ -204,7 +221,7 @@ def _hetero_batch_loss(
     loss, components = _reconstruction_training_loss(
         pred_scaled,
         target,
-        None,
+        error_raw,
         labels,
         mode=loss_mode,
         target_mean=target_mean,
@@ -214,19 +231,45 @@ def _hetero_batch_loss(
         direction_weight=direction_loss_weight,
         core_scale_km=core_loss_scale_km,
         angular_loss_scale_deg=angular_loss_scale_deg,
-        nll_loss_weight=0.0,
-        error_angular_scale_deg=1.0,
-        error_core_scale_km=0.05,
-        error_energy_scale=0.10,
-        nll_sigma_energy_floor=0.01,
-        nll_sigma_angle_floor_deg=0.05,
-        nll_sigma_core_floor_km=0.005,
+        nll_loss_weight=nll_loss_weight,
+        error_angular_scale_deg=error_angular_scale_deg,
+        error_core_scale_km=error_core_scale_km,
+        error_energy_scale=error_energy_scale,
+        nll_sigma_energy_floor=nll_sigma_energy_floor,
+        nll_sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
+        nll_sigma_core_floor_km=nll_sigma_core_floor_km,
         energy_bias_loss_weight=energy_bias_loss_weight,
         energy_particle_bias_loss_weight=energy_particle_bias_loss_weight,
         energy_bias_bin_width=energy_bias_bin_width,
         energy_bias_min_bin_count=energy_bias_min_bin_count,
     )
     components["reconstruction"] = loss
+    if quality_prediction and quality_logit is not None:
+        quality_loss = _quality_prediction_loss(
+            quality_logit,
+            pred_scaled,
+            target,
+            target_mean=target_mean,
+            target_std=target_std,
+            angular_scale_deg=quality_angular_scale_deg,
+            core_scale_km=quality_core_scale_km,
+            energy_scale=quality_energy_scale,
+        )
+        loss = loss + float(quality_loss_weight) * quality_loss
+        components["quality"] = quality_loss
+    if error_prediction and error_raw is not None and float(error_loss_weight) > 0.0:
+        error_loss = _error_prediction_loss(
+            error_raw,
+            pred_scaled,
+            target,
+            target_mean=target_mean,
+            target_std=target_std,
+            angular_scale_deg=error_angular_scale_deg,
+            core_scale_km=error_core_scale_km,
+            energy_scale=error_energy_scale,
+        )
+        loss = loss + float(error_loss_weight) * error_loss
+        components["error"] = error_loss
     if mass_classification and mass_logit is not None and labels is not None:
         mass_loss = _mass_classification_loss(
             mass_logit,
@@ -250,9 +293,14 @@ def _predict_hetero_numpy(
     *,
     target_dim: int,
     mass_classification: bool,
+    quality_prediction: bool,
+    error_prediction: bool,
+    error_angular_scale_deg: float,
+    error_core_scale_km: float,
+    error_energy_scale: float,
     desc: str,
     show_progress: bool,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     import torch
 
     model.eval()
@@ -260,27 +308,41 @@ def _predict_hetero_numpy(
     target_rows: list[np.ndarray] = []
     mass_logit_rows: list[np.ndarray] = []
     mass_label_rows: list[np.ndarray] = []
+    quality_score_rows: list[np.ndarray] = []
+    error_prediction_rows: list[np.ndarray] = []
     with torch.no_grad():
         for batch in _progress(loader, desc=desc, total=len(loader), enabled=show_progress, leave=False):
             batch = batch.to(device)
             pred_all = model(batch)
-            pred_scaled, mass_logit, _quality_logit, _error_raw = _split_model_output(
+            pred_scaled, mass_logit, quality_logit, error_raw = _split_model_output(
                 pred_all,
                 target_dim,
                 mass_classification,
-                quality_prediction=False,
-                error_prediction=False,
+                quality_prediction=quality_prediction,
+                error_prediction=error_prediction,
             )
             pred_rows.append(scalers["target"].inverse_transform(pred_scaled.detach().cpu().numpy()))
             target_rows.append(scalers["target"].inverse_transform(batch.target.detach().cpu().numpy()))
             if mass_classification and mass_logit is not None and "particle_label" in batch:
                 mass_logit_rows.append(mass_logit.detach().cpu().numpy())
                 mass_label_rows.append(batch.particle_label.detach().cpu().numpy())
+            if quality_prediction and quality_logit is not None:
+                quality_score_rows.append(torch.sigmoid(quality_logit).detach().cpu().numpy())
+            if error_prediction and error_raw is not None:
+                predicted_errors = _physical_error_predictions(
+                    error_raw,
+                    angular_scale_deg=error_angular_scale_deg,
+                    core_scale_km=error_core_scale_km,
+                    energy_scale=error_energy_scale,
+                )
+                error_prediction_rows.append(predicted_errors.detach().cpu().numpy())
     return (
         np.concatenate(pred_rows, axis=0),
         np.concatenate(target_rows, axis=0),
         np.concatenate(mass_logit_rows, axis=0) if mass_logit_rows else None,
         np.concatenate(mass_label_rows, axis=0) if mass_label_rows else None,
+        np.concatenate(quality_score_rows, axis=0) if quality_score_rows else None,
+        np.concatenate(error_prediction_rows, axis=0) if error_prediction_rows else None,
     )
 
 
@@ -320,6 +382,20 @@ def train_hetero_model(
     mass_focal_gamma: float = 2.0,
     mass_ranking_weight: float = 0.0,
     mass_ranking_margin: float = 1.0,
+    quality_prediction: bool = False,
+    quality_loss_weight: float = 0.2,
+    quality_angular_scale_deg: float = 1.0,
+    quality_core_scale_km: float = 0.05,
+    quality_energy_scale: float = 0.10,
+    error_prediction: bool = False,
+    error_loss_weight: float = 0.2,
+    error_angular_scale_deg: float = 1.0,
+    error_core_scale_km: float = 0.05,
+    error_energy_scale: float = 0.10,
+    nll_loss_weight: float = 0.2,
+    nll_sigma_energy_floor: float = 0.01,
+    nll_sigma_angle_floor_deg: float = 0.05,
+    nll_sigma_core_floor_km: float = 0.005,
     val_fraction: float = 0.1,
     test_fraction: float = 0.1,
     source_val_fraction: float = 0.10,
@@ -340,6 +416,16 @@ def train_hetero_model(
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = resolve_device(device)
+    loss_mode = str(loss_mode).lower()
+    valid_loss_modes = {"scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics", "physics-nll", "nll"}
+    if loss_mode not in valid_loss_modes:
+        raise ValueError(
+            "loss_mode must be 'scaled-mse', 'weighted-scaled-mse', 'hybrid-angle', "
+            "'physics', 'physics-nll', or 'nll'"
+        )
+    if loss_mode in {"physics-nll", "nll"} and not error_prediction:
+        error_prediction = True
+        error_loss_weight = 0.0
     base_dataset = H5HeteroGraphDataset(
         graphs_path,
         require_target=True,
@@ -368,10 +454,14 @@ def train_hetero_model(
     first = base_dataset[train_indices[0]]
     target_dim = int(first["target"].shape[0])
     classification_dim = 1 if mass_classification else 0
+    quality_dim = 1 if quality_prediction else 0
+    error_dim = 3 if error_prediction else 0
     model = MinimalHeteroTaleSdGNN.from_sample(
         first,
         target_dim=target_dim,
         classification_dim=classification_dim,
+        quality_dim=quality_dim,
+        error_dim=error_dim,
         hidden_dim=hidden_dim,
         num_layers=num_layers,
         dropout=dropout,
@@ -425,6 +515,20 @@ def train_hetero_model(
                 mass_focal_gamma=mass_focal_gamma,
                 mass_ranking_weight=mass_ranking_weight,
                 mass_ranking_margin=mass_ranking_margin,
+                quality_prediction=quality_prediction,
+                quality_loss_weight=quality_loss_weight,
+                quality_angular_scale_deg=quality_angular_scale_deg,
+                quality_core_scale_km=quality_core_scale_km,
+                quality_energy_scale=quality_energy_scale,
+                error_prediction=error_prediction,
+                error_loss_weight=error_loss_weight,
+                error_angular_scale_deg=error_angular_scale_deg,
+                error_core_scale_km=error_core_scale_km,
+                error_energy_scale=error_energy_scale,
+                nll_loss_weight=nll_loss_weight,
+                nll_sigma_energy_floor=nll_sigma_energy_floor,
+                nll_sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
+                nll_sigma_core_floor_km=nll_sigma_core_floor_km,
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -461,6 +565,20 @@ def train_hetero_model(
                     mass_focal_gamma=mass_focal_gamma,
                     mass_ranking_weight=mass_ranking_weight,
                     mass_ranking_margin=mass_ranking_margin,
+                    quality_prediction=quality_prediction,
+                    quality_loss_weight=quality_loss_weight,
+                    quality_angular_scale_deg=quality_angular_scale_deg,
+                    quality_core_scale_km=quality_core_scale_km,
+                    quality_energy_scale=quality_energy_scale,
+                    error_prediction=error_prediction,
+                    error_loss_weight=error_loss_weight,
+                    error_angular_scale_deg=error_angular_scale_deg,
+                    error_core_scale_km=error_core_scale_km,
+                    error_energy_scale=error_energy_scale,
+                    nll_loss_weight=nll_loss_weight,
+                    nll_sigma_energy_floor=nll_sigma_energy_floor,
+                    nll_sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
+                    nll_sigma_core_floor_km=nll_sigma_core_floor_km,
                 )
                 val_losses.append(float(loss.detach().cpu()))
                 for name, value in components.items():
@@ -473,23 +591,33 @@ def train_hetero_model(
         _append_component_mean(epoch_row, "train", train_components)
         _append_component_mean(epoch_row, "val", val_components)
         history.append(epoch_row)
-    pred_val, target_val, mass_logit_val, mass_label_val = _predict_hetero_numpy(
+    pred_val, target_val, mass_logit_val, mass_label_val, quality_val, error_val = _predict_hetero_numpy(
         model,
         val_loader,
         scalers,
         device,
         target_dim=target_dim,
         mass_classification=mass_classification,
+        quality_prediction=quality_prediction,
+        error_prediction=error_prediction,
+        error_angular_scale_deg=error_angular_scale_deg,
+        error_core_scale_km=error_core_scale_km,
+        error_energy_scale=error_energy_scale,
         desc="hetero validation predict",
         show_progress=show_progress,
     )
-    pred_test, target_test, mass_logit_test, mass_label_test = _predict_hetero_numpy(
+    pred_test, target_test, mass_logit_test, mass_label_test, quality_test, error_test = _predict_hetero_numpy(
         model,
         test_loader,
         scalers,
         device,
         target_dim=target_dim,
         mass_classification=mass_classification,
+        quality_prediction=quality_prediction,
+        error_prediction=error_prediction,
+        error_angular_scale_deg=error_angular_scale_deg,
+        error_core_scale_km=error_core_scale_km,
+        error_energy_scale=error_energy_scale,
         desc="hetero test predict",
         show_progress=show_progress,
     )
@@ -516,6 +644,10 @@ def train_hetero_model(
             else None,
             validation_particle_labels=mass_label_val,
             test_particle_labels=mass_label_test,
+            validation_quality=quality_val,
+            test_quality=quality_test,
+            validation_predicted_errors=error_val,
+            test_predicted_errors=error_test,
             energy_bin_width=diagnostic_energy_bin_width,
             min_bin_count=diagnostic_min_bin_count,
             save_reconstruction=target_dim >= 6,
@@ -566,6 +698,20 @@ def train_hetero_model(
             "mass_focal_gamma": float(mass_focal_gamma),
             "mass_ranking_weight": float(mass_ranking_weight),
             "mass_ranking_margin": float(mass_ranking_margin),
+            "quality_prediction": bool(quality_prediction),
+            "quality_loss_weight": float(quality_loss_weight),
+            "quality_angular_scale_deg": float(quality_angular_scale_deg),
+            "quality_core_scale_km": float(quality_core_scale_km),
+            "quality_energy_scale": float(quality_energy_scale),
+            "error_prediction": bool(error_prediction),
+            "error_loss_weight": float(error_loss_weight),
+            "error_angular_scale_deg": float(error_angular_scale_deg),
+            "error_core_scale_km": float(error_core_scale_km),
+            "error_energy_scale": float(error_energy_scale),
+            "nll_loss_weight": float(nll_loss_weight),
+            "nll_sigma_energy_floor": float(nll_sigma_energy_floor),
+            "nll_sigma_angle_floor_deg": float(nll_sigma_angle_floor_deg),
+            "nll_sigma_core_floor_km": float(nll_sigma_core_floor_km),
             "waveform_length": int(resolved_waveform_length),
         },
     }

@@ -249,14 +249,6 @@ if [[ "${TRAINING_BACKEND}" == "hetero" ]]; then
     echo "hetero training backend currently supports reconstruction training only; TRAINING_TASK=${TRAINING_TASK}" >&2
     exit 2
   fi
-  if [[ "${QUALITY_PREDICTION}" == "1" ]]; then
-    echo "hetero quality head is not implemented yet; set QUALITY_PREDICTION=0" >&2
-    exit 2
-  fi
-  if [[ "${ERROR_PREDICTION}" == "1" ]]; then
-    echo "hetero error head is not implemented yet; set ERROR_PREDICTION=0" >&2
-    exit 2
-  fi
   if [[ "${FEATURE_IMPORTANCE}" == "1" ]]; then
     echo "hetero feature importance is not implemented yet; set FEATURE_IMPORTANCE=0" >&2
     exit 2

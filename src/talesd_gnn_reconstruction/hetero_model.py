@@ -100,6 +100,8 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         waveform_length: int,
         target_dim: int = 6,
         classification_dim: int = 0,
+        quality_dim: int = 0,
+        error_dim: int = 0,
         hidden_dim: int = 128,
         num_layers: int = 2,
         dropout: float = 0.05,
@@ -117,6 +119,8 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             "waveform_length": int(waveform_length),
             "target_dim": int(target_dim),
             "classification_dim": int(classification_dim),
+            "quality_dim": int(quality_dim),
+            "error_dim": int(error_dim),
             "hidden_dim": int(hidden_dim),
             "num_layers": int(num_layers),
             "dropout": float(dropout),
@@ -126,6 +130,8 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         self.hidden_dim = int(hidden_dim)
         self.target_dim = max(int(target_dim), 0)
         self.classification_dim = max(int(classification_dim), 0)
+        self.quality_dim = max(int(quality_dim), 0)
+        self.error_dim = max(int(error_dim), 0)
         self.detector_feature_encoder = _make_mlp(detector_dim, hidden_dim, hidden_dim, dropout)
         self.detector_context_encoder = _make_mlp(detector_context_dim, hidden_dim, hidden_dim, dropout)
         self.waveform_encoder = WaveformEncoder(
@@ -171,6 +177,26 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             if self.classification_dim > 0
             else None
         )
+        self.quality_head = (
+            nn.Sequential(
+                nn.Linear(readout_dim, hidden_dim),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, self.quality_dim),
+            )
+            if self.quality_dim > 0
+            else None
+        )
+        self.error_head = (
+            nn.Sequential(
+                nn.Linear(readout_dim, hidden_dim),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, self.error_dim),
+            )
+            if self.error_dim > 0
+            else None
+        )
 
     @classmethod
     def from_sample(
@@ -179,6 +205,8 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         *,
         target_dim: int = 6,
         classification_dim: int = 0,
+        quality_dim: int = 0,
+        error_dim: int = 0,
         hidden_dim: int = 128,
         num_layers: int = 2,
         dropout: float = 0.05,
@@ -200,6 +228,8 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             waveform_length=int(waveform_length) if waveform_length is not None else int(waveform_shape[2]),
             target_dim=target_dim,
             classification_dim=classification_dim,
+            quality_dim=quality_dim,
+            error_dim=error_dim,
             hidden_dim=hidden_dim,
             num_layers=num_layers,
             dropout=dropout,
@@ -255,6 +285,10 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             outputs.append(self.reconstruction_head(readout))
         if self.classification_head is not None:
             outputs.append(self.classification_head(readout))
+        if self.quality_head is not None:
+            outputs.append(self.quality_head(readout))
+        if self.error_head is not None:
+            outputs.append(self.error_head(readout))
         if not outputs:
             return readout
         return torch.cat(outputs, dim=-1)

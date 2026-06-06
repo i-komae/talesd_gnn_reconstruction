@@ -1675,6 +1675,20 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         mass_focal_gamma=args.mass_focal_gamma,
         mass_ranking_weight=args.mass_ranking_weight,
         mass_ranking_margin=args.mass_ranking_margin,
+        quality_prediction=args.quality_prediction,
+        quality_loss_weight=args.quality_loss_weight,
+        quality_angular_scale_deg=args.quality_angular_scale_deg,
+        quality_core_scale_km=args.quality_core_scale_km,
+        quality_energy_scale=args.quality_energy_scale,
+        error_prediction=args.error_prediction,
+        error_loss_weight=args.error_loss_weight,
+        error_angular_scale_deg=args.error_angular_scale_deg,
+        error_core_scale_km=args.error_core_scale_km,
+        error_energy_scale=args.error_energy_scale,
+        nll_loss_weight=args.nll_loss_weight,
+        nll_sigma_energy_floor=args.nll_sigma_energy_floor,
+        nll_sigma_angle_floor_deg=args.nll_sigma_angle_floor_deg,
+        nll_sigma_core_floor_km=args.nll_sigma_core_floor_km,
         val_fraction=args.val_fraction,
         test_fraction=args.test_fraction,
         source_val_fraction=args.source_val_fraction,
@@ -2005,7 +2019,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train_hetero.add_argument(
         "--loss-mode",
-        choices=["scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics"],
+        choices=["scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics", "physics-nll", "nll"],
         default="physics",
     )
     train_hetero.add_argument("--energy-loss-weight", type=float, default=1.0)
@@ -2023,6 +2037,20 @@ def build_parser() -> argparse.ArgumentParser:
     train_hetero.add_argument("--mass-focal-gamma", type=float, default=2.0)
     train_hetero.add_argument("--mass-ranking-weight", type=float, default=0.0)
     train_hetero.add_argument("--mass-ranking-margin", type=float, default=1.0)
+    train_hetero.add_argument("--quality-prediction", action="store_true", help="quality headも同時に学習する")
+    train_hetero.add_argument("--quality-loss-weight", type=float, default=0.2)
+    train_hetero.add_argument("--quality-angular-scale-deg", type=float, default=1.0)
+    train_hetero.add_argument("--quality-core-scale-km", type=float, default=0.05)
+    train_hetero.add_argument("--quality-energy-scale", type=float, default=0.10)
+    train_hetero.add_argument("--error-prediction", action="store_true", help="event-wise predicted error headを同時に学習する")
+    train_hetero.add_argument("--error-loss-weight", type=float, default=0.2)
+    train_hetero.add_argument("--error-angular-scale-deg", type=float, default=1.0)
+    train_hetero.add_argument("--error-core-scale-km", type=float, default=0.05)
+    train_hetero.add_argument("--error-energy-scale", type=float, default=0.10)
+    train_hetero.add_argument("--nll-loss-weight", type=float, default=0.2)
+    train_hetero.add_argument("--nll-sigma-energy-floor", type=float, default=0.01)
+    train_hetero.add_argument("--nll-sigma-angle-floor-deg", type=float, default=0.05)
+    train_hetero.add_argument("--nll-sigma-core-floor-km", type=float, default=0.005)
     train_hetero.add_argument("--val-fraction", type=float, default=0.1)
     train_hetero.add_argument("--test-fraction", type=float, default=0.1)
     train_hetero.add_argument("--source-val-fraction", type=float, default=0.10)

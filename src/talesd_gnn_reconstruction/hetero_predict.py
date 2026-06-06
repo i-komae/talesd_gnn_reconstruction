@@ -56,6 +56,11 @@ def _prediction_rows(
     *,
     target_dim: int,
     classification_dim: int,
+    quality_dim: int,
+    error_dim: int,
+    error_energy_scale: float,
+    error_angular_scale_deg: float,
+    error_core_scale_km: float,
 ) -> list[dict[str, Any]]:
     pred = None
     zenith = None
@@ -69,6 +74,21 @@ def _prediction_rows(
     if classification_dim > 0:
         logits = pred_all[:, target_dim]
         p_iron = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
+    offset = target_dim + max(int(classification_dim), 0)
+    quality = None
+    if quality_dim > 0:
+        quality_logits = pred_all[:, offset]
+        offset += quality_dim
+        quality = 1.0 / (1.0 + np.exp(-np.clip(quality_logits, -80.0, 80.0)))
+    predicted_errors = None
+    if error_dim > 0:
+        raw = pred_all[:, offset : offset + error_dim]
+        raw = raw[:, :3]
+        softplus = np.log1p(np.exp(-np.abs(raw))) + np.maximum(raw, 0.0)
+        predicted_errors = softplus * np.asarray(
+            [error_energy_scale, error_angular_scale_deg, error_core_scale_km],
+            dtype=np.float64,
+        )
 
     rows = []
     for index, sample in enumerate(samples):
@@ -104,6 +124,16 @@ def _prediction_rows(
                     "p_iron": float(p_iron[index]),
                     "p_proton": float(1.0 - p_iron[index]),
                     "pred_parttype": 5626 if p_iron[index] >= 0.5 else 14,
+                }
+            )
+        if quality is not None:
+            row["quality"] = float(quality[index])
+        if predicted_errors is not None:
+            row.update(
+                {
+                    "pred_energy_abs_relative_error": float(predicted_errors[index, 0]),
+                    "pred_opening_angle_deg": float(predicted_errors[index, 1]),
+                    "pred_core_error_km": float(predicted_errors[index, 2]),
                 }
             )
         rows.append(row)
@@ -143,7 +173,13 @@ def reconstruct_dst(
     model.eval()
     target_dim = int(model_config.get("target_dim", 6))
     classification_dim = int(model_config.get("classification_dim", 0))
+    quality_dim = int(model_config.get("quality_dim", 0))
+    error_dim = int(model_config.get("error_dim", 0))
     waveform_length = int(model_config["waveform_length"])
+    runtime = dict(checkpoint.get("runtime", {}))
+    error_energy_scale = float(runtime.get("error_energy_scale", runtime.get("quality_energy_scale", 0.10)))
+    error_angular_scale_deg = float(runtime.get("error_angular_scale_deg", runtime.get("quality_angular_scale_deg", 1.0)))
+    error_core_scale_km = float(runtime.get("error_core_scale_km", runtime.get("quality_core_scale_km", 0.05)))
 
     input_list = [Path(inputs).expanduser()] if isinstance(inputs, (str, Path)) else [Path(item).expanduser() for item in inputs]
     graphs = tale_graph.iter_graphs(
@@ -179,6 +215,10 @@ def reconstruct_dst(
         fieldnames.extend(["log10_energy_eV", "energy_eV", "core_x_km", "core_y_km", "zenith_deg", "azimuth_deg"])
     if classification_dim > 0:
         fieldnames.extend(["p_iron", "p_proton", "pred_parttype"])
+    if quality_dim > 0:
+        fieldnames.append("quality")
+    if error_dim > 0:
+        fieldnames.extend(["pred_energy_abs_relative_error", "pred_opening_angle_deg", "pred_core_error_km"])
 
     output = Path(output_csv).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -207,6 +247,11 @@ def reconstruct_dst(
                     pred_all,
                     target_dim=target_dim,
                     classification_dim=classification_dim,
+                    quality_dim=quality_dim,
+                    error_dim=error_dim,
+                    error_energy_scale=error_energy_scale,
+                    error_angular_scale_deg=error_angular_scale_deg,
+                    error_core_scale_km=error_core_scale_km,
                 ):
                     writer.writerow(row)
                     written += 1
