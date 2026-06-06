@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="720" viewBox="0 0 1180 720" role="img" aria-labelledby="title desc">
+  <title id="title">TALE-SD heterogeneous DST reconstruction workflow</title>
+  <desc id="desc">DST files are streamed through dstio.tale.graph into GraphEvent detector and pulse nodes. Training can write a heterogeneous HDF5 cache, while direct reconstruction streams the same graph schema directly into a checkpoint and CSV output.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#263238"/>
+    </marker>
+    <style>
+      .title { font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #17212b; }
+      .label { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #17212b; }
+      .small { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #263238; }
+      .tiny { font: 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #455a64; }
+      .box { stroke: #263238; stroke-width: 1.4; rx: 8; ry: 8; }
+      .soft { fill: #eef7f4; }
+      .cache { fill: #fff3d6; }
+      .model { fill: #e9f1ff; }
+      .out { fill: #f5eef8; }
+      .node { fill: #ffffff; stroke: #607d8b; stroke-width: 1.2; rx: 7; ry: 7; }
+      .arrow { stroke: #263238; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #607d8b; stroke-width: 1.5; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1180" height="720" fill="#ffffff"/>
+  <text x="40" y="42" class="title">Heterogeneous graph path for training cache and direct DST reconstruction</text>
+
+  <rect x="40" y="82" width="180" height="82" class="box soft"/>
+  <text x="66" y="112" class="label">DST files</text>
+  <text x="66" y="136" class="small">data: talesdcalibev</text>
+  <text x="66" y="154" class="small">MC: rusdraw + rusdmc</text>
+
+  <rect x="285" y="74" width="260" height="108" class="box soft"/>
+  <text x="314" y="103" class="label">dstio.tale.graph.iter_graphs</text>
+  <text x="314" y="128" class="small">cleaning = ising</text>
+  <text x="314" y="148" class="small">node_policy = all_candidates_with_ising</text>
+  <text x="314" y="168" class="small">training: require_reference_core</text>
+
+  <path d="M220,123 C245,123 258,123 285,123" class="arrow"/>
+
+  <rect x="620" y="62" width="460" height="245" class="box soft"/>
+  <text x="646" y="92" class="label">GraphEvent: tale_sd_hetero_ising_pulse_detector_graph_v1</text>
+
+  <rect x="648" y="116" width="176" height="138" class="node"/>
+  <text x="668" y="142" class="label">detector node</text>
+  <text x="668" y="166" class="small">detector_features</text>
+  <text x="668" y="186" class="small">detector_context_features</text>
+  <text x="668" y="206" class="small">detector_positions_km</text>
+  <text x="668" y="226" class="small">detector_waveforms</text>
+
+  <rect x="862" y="116" width="176" height="138" class="node"/>
+  <text x="882" y="142" class="label">pulse node</text>
+  <text x="882" y="166" class="small">pulse_features</text>
+  <text x="882" y="186" class="small">ising_keep / removed</text>
+  <text x="882" y="206" class="small">pulse_detector_index</text>
+  <text x="882" y="226" class="small">pulse_bounds</text>
+
+  <path d="M862,204 C838,204 835,204 824,204" class="dash"/>
+  <text x="762" y="276" class="tiny">pulse_detector_index maps each pulse to one detector waveform</text>
+  <path d="M950,254 C950,282 770,282 738,254" class="dash"/>
+  <text x="858" y="296" class="tiny">pulse_bounds marks the waveform window, not a copied waveform</text>
+
+  <path d="M545,128 C570,128 590,128 620,128" class="arrow"/>
+
+  <rect x="142" y="248" width="318" height="84" class="box cache"/>
+  <text x="166" y="278" class="label">export-hetero</text>
+  <text x="166" y="302" class="small">writes detector/pulse nodes and typed edges</text>
+  <text x="166" y="322" class="small">HDF5 is a training cache only</text>
+
+  <rect x="142" y="392" width="318" height="92" class="box cache"/>
+  <text x="166" y="422" class="label">heterogeneous HDF5 shards</text>
+  <text x="166" y="446" class="small">detector_waveforms stored once per detector</text>
+  <text x="166" y="466" class="small">pulse nodes keep Ising annotation features</text>
+
+  <rect x="142" y="544" width="318" height="82" class="box model"/>
+  <text x="166" y="574" class="label">train-hetero</text>
+  <text x="166" y="598" class="small">common GraphEvent to model-input conversion</text>
+  <text x="166" y="618" class="small">saves scalers and heterogeneous checkpoint</text>
+
+  <path d="M642,307 C552,342 482,346 444,392" class="arrow"/>
+  <path d="M301,332 L301,392" class="arrow"/>
+  <path d="M301,484 L301,544" class="arrow"/>
+
+  <rect x="648" y="392" width="344" height="92" class="box model"/>
+  <text x="674" y="422" class="label">MinimalHeteroTaleSdGNN checkpoint</text>
+  <text x="674" y="446" class="small">detector branch + waveform encoder</text>
+  <text x="674" y="466" class="small">pulse branch + typed graph relations</text>
+
+  <path d="M460,585 C530,585 588,484 648,448" class="arrow"/>
+
+  <rect x="648" y="544" width="344" height="96" class="box out"/>
+  <text x="674" y="574" class="label">reconstruct-dst</text>
+  <text x="674" y="598" class="small">DST -> same GraphEvent schema -> checkpoint</text>
+  <text x="674" y="618" class="small">no intermediate HDF5 for one-pass reconstruction</text>
+
+  <rect x="1032" y="562" width="112" height="58" class="box out"/>
+  <text x="1058" y="594" class="label">CSV</text>
+  <text x="1050" y="612" class="tiny">reco output</text>
+
+  <path d="M850,307 C850,362 846,487 812,544" class="arrow"/>
+  <path d="M992,592 C1006,592 1018,592 1032,592" class="arrow"/>
+
+  <text x="40" y="682" class="tiny">Key boundary: dstio builds TALE graph semantics; this repo stores training cache, converts model input, trains checkpoints, and runs direct DST reconstruction.</text>
+</svg>
