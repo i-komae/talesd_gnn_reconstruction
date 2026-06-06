@@ -81,6 +81,8 @@ fi
 mkdir -p "${RUN_DIR}/slurm" "${GRAPH_RUN_DIR}/summaries"
 SBATCH_FILE="${RUN_DIR}/slurm/${RUN_NAME}.sbatch"
 SLURM_LOG_DIR="${RUN_DIR}/slurm"
+LOG_DIR="${RUN_DIR}/logs"
+mkdir -p "${LOG_DIR}"
 
 input_args=()
 if [[ -n "${INPUT_DIRS}" ]]; then
@@ -140,6 +142,25 @@ cat > "${SBATCH_FILE}" <<EOF
 #SBATCH --error=${SLURM_LOG_DIR}/%x_%j.err
 
 set -euo pipefail
+JOB_LOG_PATH="${LOG_DIR}/${RUN_NAME}.job.log"
+mkdir -p "${LOG_DIR}" "${SLURM_LOG_DIR}" "${GRAPH_RUN_DIR}/summaries"
+exec > >(tee -a "\${JOB_LOG_PATH}") 2>&1
+
+echo "======================================================================"
+echo "HETERO BALANCED GRAPH EXPORT"
+echo "date=\$(date)"
+echo "hostname=\$(hostname 2>/dev/null || true)"
+echo "slurm_job_id=\${SLURM_JOB_ID:-}"
+echo "job_log=\${JOB_LOG_PATH}"
+echo "slurm_stdout=${SLURM_LOG_DIR}/%x_%j.out"
+echo "slurm_stderr=${SLURM_LOG_DIR}/%x_%j.err"
+echo "run_name=${RUN_NAME}"
+echo "graph_output=${GRAPH_OUTPUT}"
+echo "energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}"
+echo "export_workers=${EXPORT_WORKERS}"
+echo "selection_strategy=source_group_manifest_filename_energy_v1"
+echo "======================================================================"
+
 cd "${REPO}"
 export UV_CACHE_DIR="${UV_CACHE_DIR}"
 export UV_LINK_MODE="${UV_LINK_MODE}"

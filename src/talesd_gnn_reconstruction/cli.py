@@ -7,6 +7,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 from collections import deque
 from collections.abc import Iterable, Iterator
@@ -24,6 +25,8 @@ MAX_CONFIG_PATHS = 200
 DEFAULT_WORKER_MAX_FILES = 0
 DEFAULT_TRAIN_WORKERS = -1
 SelectedEntry = tuple[int | tuple[str, int], str, str, int, float, int, int]
+_DAT_TAG_RE = re.compile(r"(DAT\d{6})", re.IGNORECASE)
+_GEA_TRG_RE = re.compile(r"_gea_trg_(\d+)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,33 @@ class HeteroSelectionCandidate:
     time_value: int
     sort_key: float
     balance_key: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class HeteroSourceFileManifest:
+    path: str
+    source_group: str
+    dat_tag: str
+    energy_bin_code: str
+    particle: str
+    gea_trg_index: int
+    source_zenith_deg: float
+    eligible_event_count: int
+    date_counts: dict[str, int]
+    cell_counts: dict[tuple[str, ...], int]
+
+
+@dataclass(frozen=True, slots=True)
+class HeteroSourceGroupManifest:
+    source_group: str
+    dat_tag: str
+    energy_bin_code: str
+    particle: str
+    source_zenith_deg: float
+    eligible_event_count: int
+    files: tuple[HeteroSourceFileManifest, ...]
+    date_counts: dict[str, int]
+    cell_counts: dict[tuple[str, ...], int]
 
 
 class DstUnitExhaustionError(RuntimeError):
@@ -249,6 +279,41 @@ def _source_group_key_for_path(source_path: str) -> str:
     return source_group_key(source_path)
 
 
+def _dat_tag_from_path(source_path: str) -> str:
+    match = _DAT_TAG_RE.search(Path(source_path).name)
+    if match is None:
+        raise ValueError(f"DST filename does not contain DAT?????? tag: {source_path}")
+    return match.group(1).upper()
+
+
+def _energy_bin_code_from_dat_tag(dat_tag: str) -> str:
+    digits = str(dat_tag).upper().replace("DAT", "")
+    if len(digits) < 2 or not digits[-2:].isdigit():
+        raise ValueError(f"DAT tag does not contain a two-digit energy code: {dat_tag}")
+    return digits[-2:]
+
+
+def _gea_trg_index_from_path(source_path: str) -> int:
+    match = _GEA_TRG_RE.search(Path(source_path).name)
+    return -1 if match is None else int(match.group(1))
+
+
+def _particle_stratum_from_path(source_path: str) -> str:
+    parts = [part.lower() for part in Path(source_path).parts]
+    joined = "/".join(parts)
+    if "proton" in joined:
+        return "proton"
+    if "iron" in joined:
+        return "iron"
+    return "unknown"
+
+
+def _source_group_bin_key(group: HeteroSourceGroupManifest, *, stratify_particle: bool) -> str:
+    if stratify_particle:
+        return f"{group.particle}:{group.energy_bin_code}"
+    return group.energy_bin_code
+
+
 def _candidate_balance_key(
     *,
     zenith_deg: float,
@@ -268,6 +333,28 @@ def _candidate_balance_key(
         _finite_bin_label(core_x_km, core_bin_width_km),
         _finite_bin_label(core_y_km, core_bin_width_km),
         str(_time_seconds_from_hhmmss(time_value) // time_bin_width),
+    )
+
+
+def _event_balance_key_from_mc_event(
+    event: dict[str, Any],
+    *,
+    azimuth_bin_width_deg: float,
+    core_bin_width_km: float,
+    time_bin_width_sec: int,
+) -> tuple[str, ...]:
+    rusdraw = event.get("rusdraw") or {}
+    rusdmc = event.get("rusdmc") or {}
+    phi = float(rusdmc.get("phi", float("nan")) or float("nan")) + math.pi
+    azimuth_deg = math.degrees(phi) % 360.0 if math.isfinite(phi) else float("nan")
+    core_x_km = _nested_float(rusdmc.get("corexyz"), 0, default=float("nan")) / 1.0e5
+    core_y_km = _nested_float(rusdmc.get("corexyz"), 1, default=float("nan")) / 1.0e5
+    time_value = int(rusdraw.get("hhmmss", 0) or 0)
+    return (
+        _finite_bin_label(azimuth_deg, azimuth_bin_width_deg, circular=360.0),
+        _finite_bin_label(core_x_km, core_bin_width_km),
+        _finite_bin_label(core_y_km, core_bin_width_km),
+        str(_time_seconds_from_hhmmss(time_value) // max(int(time_bin_width_sec), 1)),
     )
 
 
@@ -691,6 +778,136 @@ def _scan_hetero_selection_candidates_for_file(
         "seen_by_bin": seen_by_bin,
         "raw_events": raw_events,
         "hit_events": hit_events,
+        "missing_calibration_events": missing_calibration_events,
+        "error": None,
+    }
+
+
+def _scan_hetero_source_file_manifest(
+    payload: tuple[
+        str,
+        bool,
+        int,
+        float,
+        int | None,
+        str | None,
+        bool,
+        int | None,
+        float,
+        float,
+        int,
+    ],
+) -> dict[str, Any]:
+    import dstio
+
+    (
+        path,
+        skip_errors,
+        open_retries,
+        open_retry_delay,
+        min_event_date,
+        mc_calib_dir,
+        skip_missing_mc_calibration,
+        max_events,
+        azimuth_bin_width_deg,
+        core_bin_width_km,
+        time_bin_width_sec,
+    ) = payload
+    dat_tag = _dat_tag_from_path(path)
+    energy_bin_code = _energy_bin_code_from_dat_tag(dat_tag)
+    source_group = _source_group_key_for_path(path)
+    gea_trg_index = _gea_trg_index_from_path(path)
+    particle = _particle_stratum_from_path(path)
+    mc_calibration = None
+    if mc_calib_dir and skip_missing_mc_calibration:
+        from .mc_calibration import get_cached_mc_calibration_db
+
+        mc_calibration = get_cached_mc_calibration_db(Path(mc_calib_dir))
+    raw_events = 0
+    missing_calibration_events = 0
+    eligible_event_count = 0
+    source_zenith_deg = float("nan")
+    date_counts: dict[str, int] = {}
+    cell_counts: dict[tuple[str, ...], int] = {}
+    try:
+        dst_handle = None
+        last_exc: Exception | None = None
+        for attempt in range(max(int(open_retries), 1)):
+            try:
+                dst_handle = dstio.open(path, banks=["rusdraw", "rusdmc"])
+                break
+            except Exception as exc:
+                if _is_dst_unit_exhaustion(exc):
+                    _raise_dst_unit_exhaustion(exc)
+                last_exc = exc
+                if attempt + 1 < max(int(open_retries), 1):
+                    time.sleep(max(float(open_retry_delay), 0.0) * (attempt + 1))
+        if dst_handle is None:
+            if last_exc is not None:
+                raise last_exc
+            raise OSError(f"failed to open DST: {path}")
+        with dst_handle as dst:
+            for _source_index, event in enumerate(dst):
+                if max_events is not None and raw_events >= int(max_events):
+                    break
+                raw_events += 1
+                rusdraw = event.get("rusdraw") or {}
+                rusdmc = event.get("rusdmc") or {}
+                date = int(rusdraw.get("yymmdd", 0) or 0)
+                if min_event_date is not None and (date <= 0 or date < int(min_event_date)):
+                    continue
+                time_value = int(rusdraw.get("hhmmss", 0) or 0)
+                if mc_calibration is not None and not mc_calibration.has_calibration_time(date, time_value):
+                    missing_calibration_events += 1
+                    continue
+                xxyy = rusdraw.get("xxyy", [])
+                if len(xxyy) <= 0:
+                    continue
+                theta = float(rusdmc.get("theta", float("nan")) or float("nan"))
+                if not math.isfinite(theta):
+                    continue
+                if particle == "unknown":
+                    particle = _particle_stratum_from_parttype(rusdmc.get("parttype", -1))
+                if not math.isfinite(source_zenith_deg):
+                    source_zenith_deg = math.degrees(theta)
+                eligible_event_count += 1
+                date_key = f"{date:06d}"
+                date_counts[date_key] = date_counts.get(date_key, 0) + 1
+                cell_key = _event_balance_key_from_mc_event(
+                    event,
+                    azimuth_bin_width_deg=azimuth_bin_width_deg,
+                    core_bin_width_km=core_bin_width_km,
+                    time_bin_width_sec=time_bin_width_sec,
+                )
+                cell_counts[cell_key] = cell_counts.get(cell_key, 0) + 1
+    except Exception as exc:
+        if _is_dst_unit_exhaustion(exc):
+            _raise_dst_unit_exhaustion(exc)
+        if not skip_errors:
+            raise
+        return {
+            "path": path,
+            "manifest": None,
+            "raw_events": raw_events,
+            "missing_calibration_events": missing_calibration_events,
+            "error": str(exc),
+        }
+    manifest = HeteroSourceFileManifest(
+        path=path,
+        source_group=source_group,
+        dat_tag=dat_tag,
+        energy_bin_code=energy_bin_code,
+        particle=particle,
+        gea_trg_index=gea_trg_index,
+        source_zenith_deg=float(source_zenith_deg),
+        eligible_event_count=int(eligible_event_count),
+        date_counts=date_counts,
+        cell_counts=cell_counts,
+    )
+    return {
+        "path": path,
+        "manifest": manifest,
+        "raw_events": raw_events,
         "missing_calibration_events": missing_calibration_events,
         "error": None,
     }
@@ -1380,6 +1597,46 @@ def _iter_hetero_selection_scan_results(
             yield _scan_hetero_selection_candidates_for_file(payload)
 
 
+def _iter_hetero_source_file_manifest_results(
+    inputs: list[str],
+    args: argparse.Namespace,
+) -> Iterator[dict[str, Any]]:
+    payloads = [
+        (
+            path,
+            bool(args.skip_errors),
+            int(args.open_retries),
+            float(args.open_retry_delay),
+            None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date),
+            str(Path(args.mc_calib_dir).expanduser()) if args.mc_calib_dir else None,
+            bool(args.skip_missing_mc_calibration and args.kind == "mc"),
+            None if args.max_events is None or int(args.max_events) <= 0 else int(args.max_events),
+            float(args.balance_azimuth_bin_width_deg),
+            float(args.balance_core_bin_width_km),
+            int(args.balance_time_bin_width_sec),
+        )
+        for path in inputs
+    ]
+    workers = max(int(args.workers), 1)
+    if workers == 1:
+        for payload in _progress(payloads, desc="scan hetero source files", total=len(payloads)):
+            yield _scan_hetero_source_file_manifest(payload)
+        return
+
+    try:
+        yield from _iter_process_pool(
+            payloads,
+            _scan_hetero_source_file_manifest,
+            workers,
+            "scan hetero source files",
+            max_tasks_per_child=max(int(args.worker_max_files), 0),
+        )
+    except (OSError, PermissionError) as exc:
+        _progress_write(f"warning: file-parallel hetero source scan failed ({exc}); falling back to single-process scan")
+        for payload in _progress(payloads, desc="scan hetero source files", total=len(payloads)):
+            yield _scan_hetero_source_file_manifest(payload)
+
+
 def _iter_selected_hetero_graphs(
     inputs: list[str],
     args: argparse.Namespace,
@@ -1747,6 +2004,382 @@ def _validate_mc_calibration_dates(calib_dir: Path, event_dates: dict[int, int],
     )
 
 
+def _merge_counter(target: dict[str, int], source: dict[str, int]) -> None:
+    for key, count in source.items():
+        target[key] = target.get(key, 0) + int(count)
+
+
+def _cell_label(cell: tuple[str, ...]) -> str:
+    return "|".join(str(item) for item in cell)
+
+
+def _merge_hetero_source_file_manifests(
+    scan_results: Iterable[dict[str, Any]],
+) -> tuple[dict[str, HeteroSourceGroupManifest], dict[str, Any]]:
+    files_by_group: dict[str, list[HeteroSourceFileManifest]] = {}
+    raw_events = 0
+    missing_calibration_events = 0
+    unreadable_files = 0
+    skipped_empty_files = 0
+    for result in scan_results:
+        raw_events += int(result.get("raw_events", 0))
+        missing_calibration_events += int(result.get("missing_calibration_events", 0))
+        if result.get("error"):
+            unreadable_files += 1
+            _progress_write(f"warning: skipping unreadable DST {result['path']}: {result['error']}")
+            continue
+        manifest = result.get("manifest")
+        if manifest is None or int(manifest.eligible_event_count) <= 0:
+            skipped_empty_files += 1
+            continue
+        files_by_group.setdefault(manifest.source_group, []).append(manifest)
+
+    groups: dict[str, HeteroSourceGroupManifest] = {}
+    for source_group, files in files_by_group.items():
+        files = sorted(files, key=lambda item: (item.gea_trg_index, item.path))
+        dat_tags = {item.dat_tag for item in files}
+        energy_codes = {item.energy_bin_code for item in files}
+        particles = {item.particle for item in files}
+        if len(dat_tags) != 1:
+            raise ValueError(f"source group {source_group} mixes DAT tags: {sorted(dat_tags)}")
+        if len(energy_codes) != 1:
+            raise ValueError(f"source group {source_group} mixes filename energy codes: {sorted(energy_codes)}")
+        known_particles = {particle for particle in particles if particle != "unknown"}
+        if len(known_particles) > 1:
+            raise ValueError(f"source group {source_group} mixes particles: {sorted(known_particles)}")
+        zenith_values = [
+            float(item.source_zenith_deg)
+            for item in files
+            if math.isfinite(float(item.source_zenith_deg))
+        ]
+        if not zenith_values:
+            continue
+        if max(zenith_values) - min(zenith_values) > 1.0e-6:
+            raise ValueError(
+                f"source group {source_group} has inconsistent source zenith values: "
+                f"{min(zenith_values):.9f}..{max(zenith_values):.9f}"
+            )
+        date_counts: dict[str, int] = {}
+        cell_counts: dict[tuple[str, ...], int] = {}
+        eligible_event_count = 0
+        for item in files:
+            eligible_event_count += int(item.eligible_event_count)
+            _merge_counter(date_counts, item.date_counts)
+            for cell, count in item.cell_counts.items():
+                cell_counts[cell] = cell_counts.get(cell, 0) + int(count)
+        groups[source_group] = HeteroSourceGroupManifest(
+            source_group=source_group,
+            dat_tag=next(iter(dat_tags)),
+            energy_bin_code=next(iter(energy_codes)),
+            particle=next(iter(known_particles)) if known_particles else "unknown",
+            source_zenith_deg=float(zenith_values[0]),
+            eligible_event_count=int(eligible_event_count),
+            files=tuple(files),
+            date_counts=date_counts,
+            cell_counts=cell_counts,
+        )
+
+    by_bin: dict[str, dict[str, int]] = {}
+    for group in groups.values():
+        for stratify_particle in (False, True):
+            key = _source_group_bin_key(group, stratify_particle=stratify_particle)
+            bucket = by_bin.setdefault(
+                ("particle:" if stratify_particle else "energy:") + key,
+                {"source_groups": 0, "eligible_events": 0},
+            )
+            bucket["source_groups"] += 1
+            bucket["eligible_events"] += int(group.eligible_event_count)
+    summary = {
+        "input_files": sum(len(files) for files in files_by_group.values()) + unreadable_files + skipped_empty_files,
+        "unreadable_files": unreadable_files,
+        "skipped_empty_files": skipped_empty_files,
+        "raw_events": raw_events,
+        "missing_calibration_events": missing_calibration_events,
+        "source_groups": len(groups),
+        "source_files": sum(len(group.files) for group in groups.values()),
+        "eligible_events": sum(int(group.eligible_event_count) for group in groups.values()),
+        "by_bin": by_bin,
+    }
+    return groups, summary
+
+
+def _allocate_hetero_source_group_quotas(
+    groups: dict[str, HeteroSourceGroupManifest],
+    *,
+    per_bin: int,
+    seed: int,
+    stratify_particle: bool,
+) -> tuple[dict[str, int], dict[str, Any]]:
+    groups_by_bin: dict[str, list[HeteroSourceGroupManifest]] = {}
+    for group in groups.values():
+        if int(group.eligible_event_count) <= 0:
+            continue
+        groups_by_bin.setdefault(
+            _source_group_bin_key(group, stratify_particle=stratify_particle),
+            [],
+        ).append(group)
+
+    quotas: dict[str, int] = {}
+    by_bin: dict[str, Any] = {}
+    target = max(int(per_bin), 1)
+    for bin_key, bin_groups in sorted(groups_by_bin.items()):
+        ordered = sorted(bin_groups, key=lambda item: item.source_group)
+        base = target // max(len(ordered), 1)
+        remainder = target % max(len(ordered), 1)
+        remainder_groups = {
+            item.source_group
+            for item in sorted(
+                ordered,
+                key=lambda item: _sample_key_from_parts(int(seed), item.source_group, "quota-remainder", 0),
+            )[:remainder]
+        }
+        assigned = 0
+        short_by_availability = 0
+        for group in ordered:
+            requested = base + (1 if group.source_group in remainder_groups else 0)
+            quota = min(int(group.eligible_event_count), int(requested))
+            quotas[group.source_group] = quota
+            assigned += quota
+            short_by_availability += int(requested) - quota
+        by_bin[bin_key] = {
+            "target_events": target,
+            "source_groups": len(ordered),
+            "eligible_events": sum(int(group.eligible_event_count) for group in ordered),
+            "base_quota_per_source_group": base,
+            "remainder_source_groups": remainder,
+            "assigned_events": assigned,
+            "short_by_availability": short_by_availability,
+        }
+    return quotas, {"by_bin": by_bin, "events": sum(quotas.values()), "source_groups": len(quotas)}
+
+
+def _allocate_cell_quotas(
+    cell_counts: dict[tuple[str, ...], int],
+    *,
+    target: int,
+    seed: int,
+    source_group: str,
+) -> dict[tuple[str, ...], int]:
+    target = max(int(target), 0)
+    items = [(cell, int(count)) for cell, count in cell_counts.items() if int(count) > 0]
+    total = sum(count for _cell, count in items)
+    if target <= 0 or total <= 0:
+        return {}
+    target = min(target, total)
+    quotas: dict[tuple[str, ...], int] = {}
+    fractions: list[tuple[float, float, tuple[str, ...]]] = []
+    assigned = 0
+    for cell, count in items:
+        exact = float(target) * float(count) / float(total)
+        quota = min(int(math.floor(exact)), count)
+        quotas[cell] = quota
+        assigned += quota
+        if quota < count:
+            fractions.append(
+                (
+                    exact - math.floor(exact),
+                    _sample_key_from_parts(seed, source_group, _cell_label(cell), 0),
+                    cell,
+                )
+            )
+    remaining = target - assigned
+    fractions.sort(key=lambda item: (-item[0], item[1], _cell_label(item[2])))
+    while remaining > 0 and fractions:
+        next_fractions: list[tuple[float, float, tuple[str, ...]]] = []
+        for fraction, key, cell in fractions:
+            if remaining <= 0:
+                next_fractions.append((fraction, key, cell))
+                continue
+            count = int(cell_counts[cell])
+            if quotas[cell] < count:
+                quotas[cell] += 1
+                remaining -= 1
+            if quotas[cell] < count:
+                next_fractions.append((fraction, key, cell))
+        if len(next_fractions) == len(fractions) and remaining > 0:
+            break
+        fractions = next_fractions
+    return {cell: quota for cell, quota in quotas.items() if quota > 0}
+
+
+def _select_hetero_events_for_source_group(
+    group: HeteroSourceGroupManifest,
+    *,
+    quota: int,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    import dstio
+
+    quota = max(int(quota), 0)
+    cell_quotas = _allocate_cell_quotas(
+        group.cell_counts,
+        target=quota,
+        seed=int(args.seed),
+        source_group=group.source_group,
+    )
+    selected_heaps: dict[tuple[str, ...], list[tuple[float, str, str, int, str]]] = {
+        cell: [] for cell in cell_quotas
+    }
+    if quota <= 0 or not cell_quotas:
+        return {
+            "source_group": group.source_group,
+            "selected_by_path": {},
+            "selected_event_dates": {},
+            "selected_cell_counts": {},
+            "selected_events": 0,
+        }
+    min_event_date = None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date)
+    mc_calibration = None
+    if args.mc_calib_dir and bool(args.skip_missing_mc_calibration and args.kind == "mc"):
+        from .mc_calibration import get_cached_mc_calibration_db
+
+        mc_calibration = get_cached_mc_calibration_db(Path(args.mc_calib_dir).expanduser())
+    for file_info in group.files:
+        dst_handle = None
+        last_exc: Exception | None = None
+        for attempt in range(max(int(args.open_retries), 1)):
+            try:
+                dst_handle = dstio.open(file_info.path, banks=["rusdraw", "rusdmc"])
+                break
+            except Exception as exc:
+                if _is_dst_unit_exhaustion(exc):
+                    _raise_dst_unit_exhaustion(exc)
+                last_exc = exc
+                if attempt + 1 < max(int(args.open_retries), 1):
+                    time.sleep(max(float(args.open_retry_delay), 0.0) * (attempt + 1))
+        if dst_handle is None:
+            if last_exc is not None:
+                if args.skip_errors:
+                    _progress_write(f"warning: skipping unreadable DST {file_info.path}: {last_exc}")
+                    continue
+                raise last_exc
+            raise OSError(f"failed to open DST: {file_info.path}")
+        with dst_handle as dst:
+            raw_events = 0
+            for source_index, event in enumerate(dst):
+                if args.max_events is not None and raw_events >= int(args.max_events):
+                    break
+                raw_events += 1
+                rusdraw = event.get("rusdraw") or {}
+                rusdmc = event.get("rusdmc") or {}
+                date = int(rusdraw.get("yymmdd", 0) or 0)
+                if min_event_date is not None and (date <= 0 or date < int(min_event_date)):
+                    continue
+                time_value = int(rusdraw.get("hhmmss", 0) or 0)
+                if mc_calibration is not None and not mc_calibration.has_calibration_time(date, time_value):
+                    continue
+                xxyy = rusdraw.get("xxyy", [])
+                if len(xxyy) <= 0:
+                    continue
+                theta = float(rusdmc.get("theta", float("nan")) or float("nan"))
+                if not math.isfinite(theta):
+                    continue
+                cell = _event_balance_key_from_mc_event(
+                    event,
+                    azimuth_bin_width_deg=float(args.balance_azimuth_bin_width_deg),
+                    core_bin_width_km=float(args.balance_core_bin_width_km),
+                    time_bin_width_sec=int(args.balance_time_bin_width_sec),
+                )
+                cell_quota = int(cell_quotas.get(cell, 0))
+                if cell_quota <= 0:
+                    continue
+                event_id = _candidate_event_id(file_info.path, source_index, event)
+                score = _sample_key_from_parts(int(args.seed), event_id, file_info.path, int(source_index))
+                entry = (-score, event_id, file_info.path, int(source_index), f"{date:06d}")
+                bucket = selected_heaps[cell]
+                if len(bucket) < cell_quota:
+                    heapq.heappush(bucket, entry)
+                elif entry[0] > bucket[0][0]:
+                    heapq.heapreplace(bucket, entry)
+
+    selected_by_path: dict[str, set[int]] = {}
+    selected_event_dates: dict[str, int] = {}
+    selected_cell_counts: dict[str, int] = {}
+    selected_events = 0
+    for cell, entries in selected_heaps.items():
+        selected_cell_counts[_cell_label(cell)] = len(entries)
+        selected_events += len(entries)
+        for _neg_score, _event_id, path, source_index, date_key in entries:
+            selected_by_path.setdefault(path, set()).add(int(source_index))
+            selected_event_dates[date_key] = selected_event_dates.get(date_key, 0) + 1
+    return {
+        "source_group": group.source_group,
+        "selected_by_path": selected_by_path,
+        "selected_event_dates": selected_event_dates,
+        "selected_cell_counts": selected_cell_counts,
+        "selected_events": selected_events,
+    }
+
+
+def _build_source_group_balanced_hetero_selection(
+    inputs: list[str],
+    args: argparse.Namespace,
+) -> tuple[dict[str, set[int]], dict[str, Any]]:
+    groups, scan_summary = _merge_hetero_source_file_manifests(
+        _iter_hetero_source_file_manifest_results(inputs, args)
+    )
+    quotas, quota_summary = _allocate_hetero_source_group_quotas(
+        groups,
+        per_bin=max(int(args.energy_sample_per_bin), 1),
+        seed=int(args.seed),
+        stratify_particle=bool(args.energy_sample_stratify_particle),
+    )
+    selected_by_path: dict[str, set[int]] = {}
+    selected_event_dates: dict[str, int] = {}
+    selected_by_bin: dict[str, int] = {}
+    selected_by_particle: dict[str, int] = {}
+    selected_cell_counts: dict[str, int] = {}
+    selected_source_groups: set[str] = set()
+    iterator = _progress(
+        sorted(groups.values(), key=lambda item: item.source_group),
+        desc="select hetero event indices",
+        total=len(groups),
+    )
+    for group in iterator:
+        result = _select_hetero_events_for_source_group(group, quota=int(quotas.get(group.source_group, 0)), args=args)
+        for path, indices in result["selected_by_path"].items():
+            selected_by_path.setdefault(path, set()).update(indices)
+        _merge_counter(selected_event_dates, result["selected_event_dates"])
+        _merge_counter(selected_cell_counts, result["selected_cell_counts"])
+        selected_count = int(result["selected_events"])
+        if selected_count > 0:
+            selected_source_groups.add(group.source_group)
+        bin_key = _source_group_bin_key(group, stratify_particle=bool(args.energy_sample_stratify_particle))
+        selected_by_bin[bin_key] = selected_by_bin.get(bin_key, 0) + selected_count
+        selected_by_particle[group.particle] = selected_by_particle.get(group.particle, 0) + selected_count
+
+    selected_events = sum(len(indices) for indices in selected_by_path.values())
+    source_counts_by_bin: dict[str, int] = {}
+    for group in groups.values():
+        key = _source_group_bin_key(group, stratify_particle=bool(args.energy_sample_stratify_particle))
+        source_counts_by_bin[key] = source_counts_by_bin.get(key, 0) + 1
+    selection_summary = {
+        "config": {
+            "selection_strategy": "source_group_manifest_filename_energy_v1",
+            "energy_sample_per_bin": int(args.energy_sample_per_bin),
+            "energy_bin_source": "DAT tag suffix",
+            "energy_sample_stratify_particle": bool(args.energy_sample_stratify_particle),
+            "balance_azimuth_bin_width_deg": float(args.balance_azimuth_bin_width_deg),
+            "balance_core_bin_width_km": float(args.balance_core_bin_width_km),
+            "balance_time_bin_width_sec": int(args.balance_time_bin_width_sec),
+            "seed": int(args.seed),
+        },
+        "scan": scan_summary,
+        "quota": quota_summary,
+        "source_groups_by_bin": dict(sorted(source_counts_by_bin.items())),
+        "selected": {
+            "events": selected_events,
+            "files": len(selected_by_path),
+            "source_groups": len(selected_source_groups),
+            "by_filename_energy_bin": dict(sorted(selected_by_bin.items())),
+            "by_particle": dict(sorted(selected_by_particle.items())),
+            "by_date": dict(sorted(selected_event_dates.items())),
+            "by_core_azimuth_time_cell": dict(sorted(selected_cell_counts.items())),
+        },
+    }
+    return selected_by_path, selection_summary
+
+
 def _cmd_export(args: argparse.Namespace) -> None:
     from .dst_reader import iter_dst_banks
 
@@ -2010,77 +2643,19 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
     if args.energy_sample_per_bin is not None:
         if args.kind not in {"mc", "auto"}:
             raise ValueError("balanced energy sampling for export-hetero currently requires MC rusdraw/rusdmc input")
-        all_candidates: list[HeteroSelectionCandidate] = []
-        seen_by_bin: dict[int | tuple[str, int], int] = {}
-        raw_events = 0
-        hit_events = 0
-        missing_calibration_events = 0
-        unreadable_files = 0
-        for result in _iter_hetero_selection_scan_results(inputs, args):
-            if result.get("error"):
-                unreadable_files += 1
-                _progress_write(f"warning: skipping unreadable DST {result['path']}: {result['error']}")
-            raw_events += int(result.get("raw_events", 0))
-            hit_events += int(result.get("hit_events", 0))
-            missing_calibration_events += int(result.get("missing_calibration_events", 0))
-            all_candidates.extend(result.get("candidates", []))
-            for bin_key, count in result.get("seen_by_bin", {}).items():
-                seen_by_bin[bin_key] = seen_by_bin.get(bin_key, 0) + int(count)
-        all_candidates = _cap_hetero_candidates_by_cell(
-            all_candidates,
-            cap=max(int(args.balance_cell_preselect), 1),
-        )
-        selected_candidates = _select_balanced_hetero_candidates(
-            all_candidates,
-            per_bin=max(int(args.energy_sample_per_bin), 1),
-            seed=int(args.seed),
-        )
-        selected_by_path = _selected_by_path_from_candidates(selected_candidates)
-        selected_event_dates = _count_by(f"{candidate.date:06d}" for candidate in selected_candidates)
+        selected_by_path, selection_summary = _build_source_group_balanced_hetero_selection(inputs, args)
+        selected_event_dates = selection_summary["selected"]["by_date"]
         if args.kind == "mc" and mc_calib_dir is not None:
             _validate_mc_calibration_dates(
                 mc_calib_dir,
                 {int(date): count for date, count in selected_event_dates.items()},
                 context="hetero balanced preselection",
             )
-        selection_summary = {
-            "config": {
-                "energy_sample_per_bin": int(args.energy_sample_per_bin),
-                "energy_sample_stratify_particle": bool(args.energy_sample_stratify_particle),
-                "energy_bin_width": float(args.energy_bin_width),
-                "balance_cell_preselect": int(args.balance_cell_preselect),
-                "balance_zenith_bin_width_deg": float(args.balance_zenith_bin_width_deg),
-                "balance_azimuth_bin_width_deg": float(args.balance_azimuth_bin_width_deg),
-                "balance_core_bin_width_km": float(args.balance_core_bin_width_km),
-                "balance_time_bin_width_sec": int(args.balance_time_bin_width_sec),
-                "seed": int(args.seed),
-            },
-            "scan": {
-                "input_files": len(inputs),
-                "unreadable_files": unreadable_files,
-                "raw_events": raw_events,
-                "hit_events": hit_events,
-                "candidate_events_after_cell_cap": len(all_candidates),
-                "missing_calibration_events": missing_calibration_events,
-                "seen_by_bin": {
-                    _energy_sample_bin_label(bin_key, float(args.energy_bin_width)): count
-                    for bin_key, count in sorted(seen_by_bin.items(), key=lambda item: str(item[0]))
-                },
-            },
-            "selected": _hetero_selection_summary(
-                selected_candidates,
-                bin_width=float(args.energy_bin_width),
-                zenith_bin_width_deg=float(args.balance_zenith_bin_width_deg),
-                azimuth_bin_width_deg=float(args.balance_azimuth_bin_width_deg),
-                core_bin_width_km=float(args.balance_core_bin_width_km),
-                time_bin_width_sec=int(args.balance_time_bin_width_sec),
-            ),
-            "selected_files": len(selected_by_path),
-        }
+        scan_summary = selection_summary["scan"]
         config["balanced_selection_summary"] = selection_summary
-        config["scan_raw_events"] = raw_events
-        config["scan_hit_events"] = hit_events
-        config["scan_missing_calibration_events"] = missing_calibration_events
+        config["scan_raw_events"] = int(scan_summary.get("raw_events", 0))
+        config["scan_hit_events"] = int(scan_summary.get("eligible_events", 0))
+        config["scan_missing_calibration_events"] = int(scan_summary.get("missing_calibration_events", 0))
         config["scan_selected_files"] = len(selected_by_path)
         if args.selection_summary:
             summary_path = Path(args.selection_summary).expanduser()
@@ -2091,8 +2666,9 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
         _progress_write(
             "hetero balanced preselection: "
             f"selected_events={selected_event_count} selected_files={len(selected_by_path)} "
-            f"source_groups={selection_summary['selected']['source_groups']} raw_events={raw_events} "
-            f"hit_events={hit_events} missing_calibration_events={missing_calibration_events}"
+            f"source_groups={selection_summary['selected']['source_groups']} "
+            f"raw_events={config['scan_raw_events']} eligible_events={config['scan_hit_events']} "
+            f"missing_calibration_events={config['scan_missing_calibration_events']}"
         )
         if args.dry_run_selection:
             print("dry-run selection complete; no hetero HDF5 was written")
@@ -2469,14 +3045,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export_hetero.add_argument("--max-events", type=int, default=None, help="読み込む最大イベント数")
     export_hetero.add_argument("--min-event-date", type=int, default=None, help="YYMMDD形式。この日付より前のeventをDST読み込み時に除外する")
-    export_hetero.add_argument("--energy-sample-per-bin", type=int, default=None, help="log10(E/eV) binごとに残す最大hetero graph数。source group / geometry balanced preselectionを使う")
-    export_hetero.add_argument("--energy-sample-stratify-particle", action="store_true", help="energy samplingをproton/iron別のlog10(E/eV) binで行う")
-    export_hetero.add_argument("--energy-bin-width", type=float, default=0.1, help="energy samplingのlog10(E/eV) bin幅")
+    export_hetero.add_argument("--energy-sample-per-bin", type=int, default=None, help="DAT filename energy codeごとに残す最大hetero graph数。source group均等割りを使う")
+    export_hetero.add_argument("--energy-sample-stratify-particle", action="store_true", help="energy samplingをproton/iron別のDAT filename energy codeで行う")
+    export_hetero.add_argument("--energy-bin-width", type=float, default=0.1, help="旧event-level sampling用。source-group manifest方式ではselectionに使わない")
     export_hetero.add_argument("--seed", type=int, default=12345, help="balanced selectionのdeterministic seed")
     export_hetero.add_argument("--workers", type=int, default=1, help="DST metadata scanに使うfile worker数")
     export_hetero.add_argument("--worker-max-files", type=int, default=DEFAULT_WORKER_MAX_FILES, help="scan workerをNファイル処理ごとに再起動する。0なら無効")
-    export_hetero.add_argument("--balance-cell-preselect", type=int, default=8, help="各energy/source_group/geometry-time cellからmetadata scanで残す候補上限")
-    export_hetero.add_argument("--balance-zenith-bin-width-deg", type=float, default=10.0, help="balanced selection用zenith bin幅")
+    export_hetero.add_argument("--balance-cell-preselect", type=int, default=8, help="旧event-level candidate scan用。source-group manifest方式ではselectionに使わない")
+    export_hetero.add_argument("--balance-zenith-bin-width-deg", type=float, default=10.0, help="旧event-level selection用。source-group manifest方式ではselectionに使わない")
     export_hetero.add_argument("--balance-azimuth-bin-width-deg", type=float, default=30.0, help="balanced selection用azimuth bin幅")
     export_hetero.add_argument("--balance-core-bin-width-km", type=float, default=0.5, help="balanced selection用core x/y bin幅")
     export_hetero.add_argument("--balance-time-bin-width-sec", type=int, default=3600, help="balanced selection用時刻bin幅")

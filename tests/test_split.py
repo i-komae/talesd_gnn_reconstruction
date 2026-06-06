@@ -7,6 +7,7 @@ import numpy as np
 
 from talesd_gnn_reconstruction.train import (
     _assign_source_group,
+    _source_stratification_keys,
     source_group_key,
     split_indices_by_source_path,
     split_indices_by_stratified_source_path,
@@ -157,6 +158,14 @@ class SourceSplitTest(unittest.TestCase):
                 group = source_group_key(dataset.source_path(index))
                 previous = group_to_split.setdefault(group, split_name)
                 self.assertEqual(previous, split_name)
+
+    def test_source_stratification_energy_uses_dat_suffix(self) -> None:
+        target = np.asarray([18.9, 0.0, 0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+
+        keys = _source_stratification_keys("/mc/proton/DAT123416", target, 0.0)
+
+        self.assertEqual(keys["fine"][2], "16")
+        self.assertEqual(keys["mid"][2], "16")
 
     def test_source_path_split_keeps_corsika_chunks_in_same_split(self) -> None:
         source_counts = {}

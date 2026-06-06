@@ -5,12 +5,19 @@ import unittest
 from pathlib import Path
 
 from talesd_gnn_reconstruction.cli import (
+    HeteroSourceFileManifest,
+    HeteroSourceGroupManifest,
     HeteroSelectionCandidate,
+    _allocate_cell_quotas,
+    _allocate_hetero_source_group_quotas,
+    _dat_tag_from_path,
+    _energy_bin_code_from_dat_tag,
     _hetero_selection_summary,
     _interleaved_selected_entries,
     _merge_candidate_reservoirs,
     _select_balanced_hetero_candidates,
     _selected_path_chunks,
+    _source_group_key_for_path,
     _validate_mc_calibration_dates,
 )
 from talesd_gnn_reconstruction.dst_reader import _event_date
@@ -162,6 +169,63 @@ class ExportDateFilterTest(unittest.TestCase):
         selected = _select_balanced_hetero_candidates(candidates, per_bin=4, seed=456)
         cells = {candidate.balance_key for candidate in selected}
         self.assertEqual(cells, {("cell-a",), ("cell-b",)})
+
+    def test_hetero_filename_energy_code_comes_from_dat_tag(self) -> None:
+        path = "/mc/proton/DAT123416_gea_trg_007.dst.gz"
+
+        self.assertEqual(_dat_tag_from_path(path), "DAT123416")
+        self.assertEqual(_energy_bin_code_from_dat_tag("DAT123416"), "16")
+        self.assertTrue(_source_group_key_for_path(path).endswith("DAT123416"))
+
+    def test_hetero_source_group_quotas_are_group_balanced(self) -> None:
+        groups = {}
+        for index in range(3):
+            source_group = f"/mc/proton/DAT0001{index}16"
+            file_manifest = HeteroSourceFileManifest(
+                path=f"{source_group}_gea_trg_000.dst.gz",
+                source_group=source_group,
+                dat_tag=f"DAT0001{index}16",
+                energy_bin_code="16",
+                particle="proton",
+                gea_trg_index=0,
+                source_zenith_deg=20.0 + index,
+                eligible_event_count=100,
+                date_counts={"260606": 100},
+                cell_counts={("0", "0", "0", "0"): 100},
+            )
+            groups[source_group] = HeteroSourceGroupManifest(
+                source_group=source_group,
+                dat_tag=file_manifest.dat_tag,
+                energy_bin_code="16",
+                particle="proton",
+                source_zenith_deg=file_manifest.source_zenith_deg,
+                eligible_event_count=100,
+                files=(file_manifest,),
+                date_counts={"260606": 100},
+                cell_counts={("0", "0", "0", "0"): 100},
+            )
+
+        quotas, summary = _allocate_hetero_source_group_quotas(
+            groups,
+            per_bin=10,
+            seed=123,
+            stratify_particle=True,
+        )
+
+        self.assertEqual(sum(quotas.values()), 10)
+        self.assertEqual(max(quotas.values()) - min(quotas.values()), 1)
+        self.assertEqual(summary["by_bin"]["proton:16"]["source_groups"], 3)
+
+    def test_hetero_cell_quotas_follow_cell_counts(self) -> None:
+        quotas = _allocate_cell_quotas(
+            {("az0", "x0", "y0", "t0"): 80, ("az1", "x0", "y0", "t0"): 20},
+            target=10,
+            seed=123,
+            source_group="DAT000116",
+        )
+
+        self.assertEqual(quotas[("az0", "x0", "y0", "t0")], 8)
+        self.assertEqual(quotas[("az1", "x0", "y0", "t0")], 2)
 
     def test_hetero_selection_summary_includes_time_and_dynamic_bins(self) -> None:
         candidates = [

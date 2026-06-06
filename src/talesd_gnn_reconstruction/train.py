@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 
 _CORSIKA_SPLIT_DST_RE = re.compile(r"^(DAT\d+)_gea_trg_\d+(?:\.dst(?:\.gz)?)?$", re.IGNORECASE)
+_DAT_TAG_RE = re.compile(r"(DAT\d{6})", re.IGNORECASE)
 
 
 def resolve_device(device: str = "auto") -> str:
@@ -267,18 +268,25 @@ def _finite_bin(value: float, width: float) -> str:
     return str(int(math.floor(value / max(float(width), 1.0e-12))))
 
 
+def _filename_energy_code(source_path: str) -> str:
+    match = _DAT_TAG_RE.search(Path(str(source_path)).name)
+    if match is None:
+        return "nan"
+    digits = match.group(1).upper().replace("DAT", "")
+    return digits[-2:] if len(digits) >= 2 else "nan"
+
+
 def _source_stratification_keys(source_path: str, target: np.ndarray | None, particle_label: float | None) -> dict[str, tuple[str, ...]]:
     parent = str(Path(source_path).parent)
     particle = "unknown"
     if particle_label is not None and math.isfinite(float(particle_label)):
         particle = "iron" if float(particle_label) >= 0.5 else "proton"
-    loge_bin = "nan"
+    loge_bin = _filename_energy_code(source_path)
     zenith_bin = "nan"
     if target is not None and target.shape[0] >= 6:
         direction_slice = direction_columns_for_dim(target.shape[0])
-        finite_columns = [0, *range(direction_slice.start, direction_slice.stop)]
+        finite_columns = [*range(direction_slice.start, direction_slice.stop)]
         if np.all(np.isfinite(target[finite_columns])):
-            loge_bin = _finite_bin(float(target[0]), 0.1)
             zenith, _azimuth = direction_to_angles(target[None, direction_slice])
             zenith_bin = _finite_bin(float(zenith[0]), 10.0)
     return {
