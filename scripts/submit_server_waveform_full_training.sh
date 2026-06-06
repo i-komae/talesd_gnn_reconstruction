@@ -6,6 +6,20 @@ DEFAULT_GRAPH_INPUT="${DEFAULT_GRAPH_INPUT:-/dicos_ui_home/ikomae/work/gnn/graph
 GRAPH_INPUT="${GRAPH_INPUT:-${DEFAULT_GRAPH_INPUT}}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_reconstruction}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+TRAINING_BACKEND="${TRAINING_BACKEND:-homogeneous}"
+
+case "${TRAINING_BACKEND}" in
+  homogeneous)
+    TRAINING_SCRIPT="scripts/train_large_existing_graphs.sh"
+    ;;
+  hetero)
+    TRAINING_SCRIPT="scripts/train_hetero_existing_graphs.sh"
+    ;;
+  *)
+    echo "TRAINING_BACKEND must be homogeneous or hetero: ${TRAINING_BACKEND}" >&2
+    exit 2
+    ;;
+esac
 
 PARTITION="${PARTITION:-b6000-al9_long}"
 NODELIST="${NODELIST:-}"
@@ -65,6 +79,7 @@ CLASSIFICATION_ARCH="${CLASSIFICATION_ARCH:-enhanced}"
 DETECTOR_EMBEDDING_DIM="${DETECTOR_EMBEDDING_DIM:-0}"
 WAVEFORM_ENCODER="${WAVEFORM_ENCODER:-cnn-gru}"
 WAVEFORM_EMBEDDING_DIM="${WAVEFORM_EMBEDDING_DIM:-64}"
+WAVEFORM_LENGTH="${WAVEFORM_LENGTH:-}"
 WAVEFORM_TRANSFORMER_HEADS="${WAVEFORM_TRANSFORMER_HEADS:-4}"
 WAVEFORM_TRANSFORMER_LAYERS="${WAVEFORM_TRANSFORMER_LAYERS:-1}"
 LR="${LR:-3e-4}"
@@ -89,7 +104,11 @@ else
 fi
 ENERGY_BIAS_BIN_WIDTH="${ENERGY_BIAS_BIN_WIDTH:-0.1}"
 ENERGY_BIAS_MIN_BIN_COUNT="${ENERGY_BIAS_MIN_BIN_COUNT:-8}"
-QUALITY_PREDICTION="${QUALITY_PREDICTION:-1}"
+if [[ "${TRAINING_BACKEND}" == "hetero" ]]; then
+  QUALITY_PREDICTION="${QUALITY_PREDICTION:-0}"
+else
+  QUALITY_PREDICTION="${QUALITY_PREDICTION:-1}"
+fi
 QUALITY_WEIGHT="${QUALITY_WEIGHT:-0.2}"
 QUALITY_ANGULAR_SCALE_DEG="${QUALITY_ANGULAR_SCALE_DEG:-1.0}"
 QUALITY_CORE_SCALE_KM="${QUALITY_CORE_SCALE_KM:-0.05}"
@@ -115,6 +134,13 @@ MAX_GRAPHS="${MAX_GRAPHS:-}"
 
 RUN_BUILD="${RUN_BUILD:-0}"
 SUMMARIZE_GRAPHS="${SUMMARIZE_GRAPHS:-0}"
+if [[ "${TRAINING_BACKEND}" == "hetero" ]]; then
+  FEATURE_IMPORTANCE="${FEATURE_IMPORTANCE:-0}"
+  DIAGNOSTICS="${DIAGNOSTICS:-1}"
+else
+  FEATURE_IMPORTANCE="${FEATURE_IMPORTANCE:-1}"
+  DIAGNOSTICS="${DIAGNOSTICS:-1}"
+fi
 LOCAL_GRAPH_CACHE="${LOCAL_GRAPH_CACHE:-auto}"
 LOCAL_GRAPH_ROOT="${LOCAL_GRAPH_ROOT:-auto}"
 LOCAL_GRAPH_ROOT_CANDIDATES="${LOCAL_GRAPH_ROOT_CANDIDATES:-/ssd/${USER:-ikomae}/talesd_gnn:/tmp/${USER:-ikomae}/talesd_gnn}"
@@ -216,6 +242,29 @@ Use B6000 or V100:
 If A100 is explicitly required, set ALLOW_A100=1.
 EOF
   exit 2
+fi
+
+if [[ "${TRAINING_BACKEND}" == "hetero" ]]; then
+  if [[ "${TRAINING_TASK}" != "reconstruction" ]]; then
+    echo "hetero training backend currently supports reconstruction training only; TRAINING_TASK=${TRAINING_TASK}" >&2
+    exit 2
+  fi
+  if [[ "${QUALITY_PREDICTION}" == "1" ]]; then
+    echo "hetero quality head is not implemented yet; set QUALITY_PREDICTION=0" >&2
+    exit 2
+  fi
+  if [[ "${ERROR_PREDICTION}" == "1" ]]; then
+    echo "hetero error head is not implemented yet; set ERROR_PREDICTION=0" >&2
+    exit 2
+  fi
+  if [[ "${FEATURE_IMPORTANCE}" == "1" ]]; then
+    echo "hetero feature importance is not implemented yet; set FEATURE_IMPORTANCE=0" >&2
+    exit 2
+  fi
+  if [[ "${SUMMARIZE_GRAPHS}" == "1" ]]; then
+    echo "hetero graph summary is not implemented in submit_server_waveform_full_training.sh; set SUMMARIZE_GRAPHS=0" >&2
+    exit 2
+  fi
 fi
 
 if [[ ! -d "${REPO}" ]]; then
@@ -887,6 +936,8 @@ echo "local_graph_cleanup=${LOCAL_GRAPH_CLEANUP}"
 echo "local_graph_copy_tool=${LOCAL_GRAPH_COPY_TOOL}"
 echo "local_graph_wait_timeout_sec=${LOCAL_GRAPH_WAIT_TIMEOUT_SEC}"
 echo "local_graph_stale_lock_sec=${LOCAL_GRAPH_STALE_LOCK_SEC}"
+echo "training_backend=${TRAINING_BACKEND}"
+echo "training_script=${TRAINING_SCRIPT}"
 echo "run_dir=${RUN_DIR}"
 echo "job_log=${LOG_DIR}/${RUN_NAME}.job.log"
 echo "epochs=${TRAIN_EPOCHS}"
@@ -908,6 +959,7 @@ echo "mass_loss_mode=${MASS_LOSS_MODE}"
 echo "mass_ranking_weight=${MASS_RANKING_WEIGHT}"
 echo "mass_ranking_margin=${MASS_RANKING_MARGIN}"
 echo "classification_arch=${CLASSIFICATION_ARCH}"
+echo "waveform_length=${WAVEFORM_LENGTH}"
 echo "loss_mode=${LOSS_MODE}"
 echo "energy_bias_weight=${ENERGY_BIAS_WEIGHT}"
 echo "energy_particle_bias_weight=${ENERGY_PARTICLE_BIAS_WEIGHT}"
@@ -915,6 +967,8 @@ echo "energy_bias_bin_width=${ENERGY_BIAS_BIN_WIDTH}"
 echo "energy_bias_min_bin_count=${ENERGY_BIAS_MIN_BIN_COUNT}"
 echo "quality_prediction=${QUALITY_PREDICTION}"
 echo "error_prediction=${ERROR_PREDICTION}"
+echo "feature_importance=${FEATURE_IMPORTANCE}"
+echo "hetero_diagnostics=${DIAGNOSTICS}"
 echo "nll_weight=${NLL_WEIGHT}"
 echo "device=${DEVICE}"
 echo "This job does not read DST files."
@@ -946,6 +1000,7 @@ fi
 
 env \\
   SKIP_BUILD=1 \\
+  TRAINING_BACKEND="${TRAINING_BACKEND}" \\
   OUTPUT_ROOT="${OUTPUT_ROOT}" \\
   RUN_ID="${RUN_ID}" \\
   RUN_NAME="${RUN_NAME}" \\
@@ -960,6 +1015,7 @@ env \\
   DETECTOR_EMBEDDING_DIM="${DETECTOR_EMBEDDING_DIM}" \\
   WAVEFORM_ENCODER="${WAVEFORM_ENCODER}" \\
   WAVEFORM_EMBEDDING_DIM="${WAVEFORM_EMBEDDING_DIM}" \\
+  WAVEFORM_LENGTH="${WAVEFORM_LENGTH}" \\
   WAVEFORM_TRANSFORMER_HEADS="${WAVEFORM_TRANSFORMER_HEADS}" \\
   WAVEFORM_TRANSFORMER_LAYERS="${WAVEFORM_TRANSFORMER_LAYERS}" \\
   TRAIN_EPOCHS="${TRAIN_EPOCHS}" \\
@@ -1005,6 +1061,7 @@ env \\
   EPOCH_LEARNING_CURVE="${EPOCH_LEARNING_CURVE}" \\
   BEST_DIAGNOSTICS="${BEST_DIAGNOSTICS}" \\
   BEST_DIAGNOSTIC_MAX_GRAPHS="${BEST_DIAGNOSTIC_MAX_GRAPHS}" \\
+  FEATURE_IMPORTANCE="${FEATURE_IMPORTANCE}" \\
   TRAINING_TASK="${TRAINING_TASK}" \\
   MASS_CLASSIFICATION="${MASS_CLASSIFICATION}" \\
   MASS_LOSS_WEIGHT="${MASS_LOSS_WEIGHT}" \\
@@ -1023,10 +1080,11 @@ env \\
   SPLIT_MODE="${SPLIT_MODE}" \\
   PARTICLE_FILTER="${PARTICLE_FILTER}" \\
   DEVICE="${DEVICE}" \\
+  DIAGNOSTICS="${DIAGNOSTICS}" \\
   DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT}" \\
   PRECISION_MIN_BIN_COUNT="${PRECISION_MIN_BIN_COUNT}" \\
   MAX_GRAPHS="${MAX_GRAPHS}" \\
-  scripts/train_large_existing_graphs.sh
+  ${TRAINING_SCRIPT}
 EOF
 
 cat <<EOF
@@ -1081,6 +1139,8 @@ persistent_workers=${PERSISTENT_WORKERS}
 h5_max_open_files=${H5_MAX_OPEN_FILES}
 pin_memory=${PIN_MEMORY}
 collate_threads=${COLLATE_THREADS}
+training_backend=${TRAINING_BACKEND}
+training_script=${TRAINING_SCRIPT}
 epoch_learning_curve=${EPOCH_LEARNING_CURVE}
 best_diagnostics=${BEST_DIAGNOSTICS}
 best_diagnostic_max_graphs=${BEST_DIAGNOSTIC_MAX_GRAPHS}
@@ -1099,6 +1159,8 @@ energy_bias_bin_width=${ENERGY_BIAS_BIN_WIDTH}
 energy_bias_min_bin_count=${ENERGY_BIAS_MIN_BIN_COUNT}
 quality_prediction=${QUALITY_PREDICTION}
 error_prediction=${ERROR_PREDICTION}
+feature_importance=${FEATURE_IMPORTANCE}
+hetero_diagnostics=${DIAGNOSTICS}
 nll_weight=${NLL_WEIGHT}
 graph_summary_log=${SUMMARY_DIR}/graph_summary.log
 
