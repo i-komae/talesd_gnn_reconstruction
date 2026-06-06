@@ -268,6 +268,14 @@ def _finite_bin(value: float, width: float) -> str:
     return str(int(math.floor(value / max(float(width), 1.0e-12))))
 
 
+def _centered_finite_bin(value: float, width: float) -> str:
+    value = float(value)
+    width = max(float(width), 1.0e-12)
+    if not math.isfinite(value):
+        return "nan"
+    return str(int(math.floor((value + 0.5 * width) / width + 1.0e-9)))
+
+
 def _filename_energy_code(source_path: str) -> str:
     match = _DAT_TAG_RE.search(Path(str(source_path)).name)
     if match is None:
@@ -289,6 +297,8 @@ def _source_stratification_keys(source_path: str, target: np.ndarray | None, par
         if np.all(np.isfinite(target[finite_columns])):
             zenith, _azimuth = direction_to_angles(target[None, direction_slice])
             zenith_bin = _finite_bin(float(zenith[0]), 10.0)
+        if loge_bin == "nan" and math.isfinite(float(target[0])):
+            loge_bin = _centered_finite_bin(float(target[0]), 0.1)
     return {
         "fine": (parent, particle, loge_bin, zenith_bin),
         "mid": (parent, particle, loge_bin),

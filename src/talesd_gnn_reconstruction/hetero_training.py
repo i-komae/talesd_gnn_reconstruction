@@ -18,6 +18,7 @@ from .metrics import binary_classification_metrics, reconstruction_metrics
 from .progress import progress as _progress
 from .train import (
     _error_prediction_loss,
+    _loader_worker_init,
     _mass_classification_loss,
     _physical_error_predictions,
     _quality_prediction_loss,
@@ -43,7 +44,7 @@ def _finite_rows(values: np.ndarray) -> np.ndarray:
 def fit_hetero_scalers(dataset: H5HeteroGraphDataset, indices: Sequence[int]) -> dict[str, StandardScaler]:
     if not indices:
         raise ValueError("cannot fit hetero scalers with no training indices")
-    first = dataset[int(indices[0])]
+    first = dataset.scaler_sample(int(indices[0]))
     detector_stats = RunningFeatureStats(int(first["detector_features"].shape[1]))
     detector_context_stats = RunningFeatureStats(int(first["detector_context_features"].shape[1]))
     pulse_stats = RunningFeatureStats(int(first["pulse_features"].shape[1]))
@@ -57,7 +58,7 @@ def fit_hetero_scalers(dataset: H5HeteroGraphDataset, indices: Sequence[int]) ->
         for relation in EDGE_TYPE_BY_RELATION
     }
     for index in indices:
-        sample = dataset[int(index)]
+        sample = dataset.scaler_sample(int(index))
         detector_stats.update(_finite_rows(sample["detector_features"]))
         detector_context_stats.update(_finite_rows(sample["detector_context_features"]))
         pulse_stats.update(_finite_rows(sample["pulse_features"]))
@@ -94,14 +95,13 @@ def _resolve_waveform_shape(
     waveform_channels: int | None = None
     max_length = 0
     for index in indices:
-        sample = dataset[int(index)]
-        waveforms = np.asarray(sample["detector_waveforms"])
-        if waveforms.ndim != 3:
+        waveform_shape = dataset.detector_waveform_shape(int(index))
+        if len(waveform_shape) != 3:
             raise ValueError(
                 "detector_waveforms must be 3D [detector, channel, time], "
-                f"got shape={waveforms.shape} at graph index {index}"
+                f"got shape={waveform_shape} at graph index {index}"
             )
-        channels = int(waveforms.shape[1])
+        channels = int(waveform_shape[1])
         if waveform_channels is None:
             waveform_channels = channels
         elif waveform_channels != channels:
@@ -109,7 +109,7 @@ def _resolve_waveform_shape(
                 f"detector waveform channel mismatch: expected {waveform_channels}, "
                 f"got {channels} at graph index {index}"
             )
-        max_length = max(max_length, int(waveforms.shape[2]))
+        max_length = max(max_length, int(waveform_shape[2]))
     resolved_length = requested_length if requested_length is not None else max_length
     if waveform_channels is None or resolved_length <= 0:
         raise ValueError("training graphs have no detector waveform samples")
@@ -163,6 +163,138 @@ def _split_dataset(
             source_test_fraction=source_test_fraction,
         )
     raise ValueError("split_mode must be 'event', 'source-path', or 'source-stratified'")
+
+
+def _memory_bytes_from_slurm_env() -> int | None:
+    mem_per_node = os.environ.get("SLURM_MEM_PER_NODE")
+    if mem_per_node:
+        try:
+            return int(mem_per_node) * 1024 * 1024
+        except ValueError:
+            pass
+    mem_per_cpu = os.environ.get("SLURM_MEM_PER_CPU")
+    cpus_per_task = os.environ.get("SLURM_CPUS_PER_TASK")
+    if mem_per_cpu and cpus_per_task:
+        try:
+            return int(mem_per_cpu) * int(cpus_per_task) * 1024 * 1024
+        except ValueError:
+            pass
+    return None
+
+
+def _cpu_worker_limit() -> int:
+    slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+    if slurm_cpus:
+        try:
+            return max(int(slurm_cpus), 0)
+        except ValueError:
+            pass
+    return max(os.cpu_count() or 1, 0)
+
+
+def _sample_indices(indices: Sequence[int], *, max_samples: int) -> list[int]:
+    if not indices or max_samples <= 0:
+        return []
+    if len(indices) <= max_samples:
+        return [int(index) for index in indices]
+    positions = np.linspace(0, len(indices) - 1, num=max_samples, dtype=np.int64)
+    return [int(indices[int(position)]) for position in positions]
+
+
+def _estimate_graph_bytes(
+    dataset: H5HeteroGraphDataset,
+    indices: Sequence[int],
+    *,
+    max_samples: int,
+) -> dict[str, Any]:
+    sampled = _sample_indices(indices, max_samples=max_samples)
+    values = np.asarray([dataset.graph_nbytes(index) for index in sampled], dtype=np.float64)
+    if values.size == 0:
+        return {
+            "sampled_graphs": 0,
+            "mean_graph_bytes": 0,
+            "p95_graph_bytes": 0,
+            "max_graph_bytes": 0,
+        }
+    return {
+        "sampled_graphs": int(values.size),
+        "mean_graph_bytes": int(np.mean(values)),
+        "p95_graph_bytes": int(np.percentile(values, 95)),
+        "max_graph_bytes": int(np.max(values)),
+    }
+
+
+def _resolve_loader_settings(
+    *,
+    requested_workers: int,
+    batch_size: int,
+    prefetch_factor: int,
+    pin_memory: bool,
+    loader_memory_budget_gib: float | None,
+    graph_byte_summary: dict[str, Any],
+) -> dict[str, Any]:
+    cpu_limit = _cpu_worker_limit()
+    if requested_workers < 0:
+        requested = cpu_limit
+    else:
+        requested = min(max(int(requested_workers), 0), cpu_limit)
+    batch_size = max(int(batch_size), 1)
+    prefetch_factor = max(int(prefetch_factor), 1)
+    budget_bytes = None
+    if loader_memory_budget_gib is not None and float(loader_memory_budget_gib) > 0:
+        budget_bytes = int(float(loader_memory_budget_gib) * (1024**3))
+    else:
+        budget_bytes = _memory_bytes_from_slurm_env()
+    p95_graph_bytes = max(int(graph_byte_summary.get("p95_graph_bytes", 0)), 1)
+    pinned_copy_batches = 1 if pin_memory else 0
+    memory_limited_workers = requested
+    if budget_bytes is not None and budget_bytes > 0:
+        per_batch_bytes = batch_size * p95_graph_bytes
+        fixed_batches = 1 + pinned_copy_batches
+        available_batches = (budget_bytes // max(per_batch_bytes, 1)) - fixed_batches
+        memory_limited_workers = max(int(available_batches // prefetch_factor), 0)
+    resolved_workers = min(requested, memory_limited_workers)
+    held_batches = 1 + resolved_workers * prefetch_factor + pinned_copy_batches
+    estimated_loader_bytes = held_batches * batch_size * p95_graph_bytes
+    return {
+        "requested_workers": int(requested_workers),
+        "cpu_worker_limit": int(cpu_limit),
+        "resolved_workers": int(resolved_workers),
+        "prefetch_factor": int(prefetch_factor),
+        "pin_memory": bool(pin_memory),
+        "loader_memory_budget_bytes": None if budget_bytes is None else int(budget_bytes),
+        "estimated_loader_bytes": int(estimated_loader_bytes),
+        "held_batches_estimate": int(held_batches),
+    }
+
+
+def _make_hetero_loader(
+    dataset: H5PyGHeteroGraphDataset,
+    indices: Sequence[int],
+    *,
+    batch_size: int,
+    shuffle: bool,
+    num_workers: int,
+    prefetch_factor: int,
+    pin_memory: bool,
+    persistent_workers: bool,
+) -> Any:
+    from torch.utils.data import Subset
+    from torch_geometric.loader import DataLoader
+
+    worker_count = min(max(int(num_workers), 0), max(len(indices), 1))
+    kwargs: dict[str, Any] = {
+        "batch_size": max(int(batch_size), 1),
+        "shuffle": bool(shuffle),
+        "num_workers": worker_count,
+        "pin_memory": bool(pin_memory),
+    }
+    if worker_count > 0:
+        kwargs["multiprocessing_context"] = "spawn"
+        kwargs["prefetch_factor"] = max(int(prefetch_factor), 1)
+        kwargs["persistent_workers"] = bool(persistent_workers)
+        kwargs["worker_init_fn"] = _loader_worker_init
+    return DataLoader(Subset(dataset, list(indices)), **kwargs)
 
 
 def _hetero_batch_loss(
@@ -406,16 +538,23 @@ def train_hetero_model(
     save_diagnostics: bool = False,
     diagnostic_energy_bin_width: float = 0.1,
     diagnostic_min_bin_count: int = 20,
+    num_workers: int = -1,
+    prefetch_factor: int = 2,
+    persistent_workers: bool = False,
+    pin_memory: bool | None = None,
+    loader_memory_budget_gib: float | None = None,
+    loader_memory_estimate_samples: int = 512,
     show_progress: bool = True,
 ) -> dict[str, Any]:
     import torch
-    from torch.utils.data import Subset
-    from torch_geometric.loader import DataLoader
 
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = resolve_device(device)
+    prefetch_factor = max(int(prefetch_factor), 1)
+    persistent_workers = bool(persistent_workers)
+    pin_memory = device.startswith("cuda") if pin_memory is None else bool(pin_memory)
     loss_mode = str(loss_mode).lower()
     valid_loss_modes = {"scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics", "physics-nll", "nll"}
     if loss_mode not in valid_loss_modes:
@@ -445,6 +584,36 @@ def train_hetero_model(
     )
     train_indices = split["train"]
     val_indices = split["val"]
+    graph_byte_summary = _estimate_graph_bytes(
+        base_dataset,
+        train_indices,
+        max_samples=max(int(loader_memory_estimate_samples), 1),
+    )
+    loader_settings = _resolve_loader_settings(
+        requested_workers=int(num_workers),
+        batch_size=max(int(batch_size), 1),
+        prefetch_factor=prefetch_factor,
+        pin_memory=pin_memory,
+        loader_memory_budget_gib=loader_memory_budget_gib,
+        graph_byte_summary=graph_byte_summary,
+    )
+    num_workers = int(loader_settings["resolved_workers"])
+    print(
+        "hetero_loader_memory "
+        f"sampled_graphs={graph_byte_summary['sampled_graphs']} "
+        f"mean_graph_bytes={graph_byte_summary['mean_graph_bytes']} "
+        f"p95_graph_bytes={graph_byte_summary['p95_graph_bytes']} "
+        f"max_graph_bytes={graph_byte_summary['max_graph_bytes']} "
+        f"batch_size={max(int(batch_size), 1)} "
+        f"requested_workers={loader_settings['requested_workers']} "
+        f"resolved_workers={loader_settings['resolved_workers']} "
+        f"cpu_worker_limit={loader_settings['cpu_worker_limit']} "
+        f"prefetch_factor={loader_settings['prefetch_factor']} "
+        f"pin_memory={int(loader_settings['pin_memory'])} "
+        f"held_batches_estimate={loader_settings['held_batches_estimate']} "
+        f"estimated_loader_bytes={loader_settings['estimated_loader_bytes']} "
+        f"loader_memory_budget_bytes={loader_settings['loader_memory_budget_bytes']}"
+    )
     _waveform_channels, resolved_waveform_length = _resolve_waveform_shape(
         base_dataset,
         train_indices,
@@ -478,12 +647,35 @@ def train_hetero_model(
         scalers=scalers,
         waveform_length=resolved_waveform_length,
     )
-    train_loader = DataLoader(Subset(pyg_dataset, train_indices), batch_size=max(int(batch_size), 1), shuffle=True)
-    val_loader = DataLoader(Subset(pyg_dataset, val_indices), batch_size=max(int(batch_size), 1), shuffle=False)
-    test_loader = DataLoader(
-        Subset(pyg_dataset, split["test"]),
+    train_loader = _make_hetero_loader(
+        pyg_dataset,
+        train_indices,
+        batch_size=max(int(batch_size), 1),
+        shuffle=True,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+    )
+    val_loader = _make_hetero_loader(
+        pyg_dataset,
+        val_indices,
         batch_size=max(int(batch_size), 1),
         shuffle=False,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+    )
+    test_loader = _make_hetero_loader(
+        pyg_dataset,
+        split["test"],
+        batch_size=max(int(batch_size), 1),
+        shuffle=False,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
+        pin_memory=pin_memory,
+        persistent_workers=False,
     )
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     history: list[dict[str, Any]] = []
@@ -713,6 +905,14 @@ def train_hetero_model(
             "nll_sigma_angle_floor_deg": float(nll_sigma_angle_floor_deg),
             "nll_sigma_core_floor_km": float(nll_sigma_core_floor_km),
             "waveform_length": int(resolved_waveform_length),
+            "data_loader": {
+                **loader_settings,
+                **graph_byte_summary,
+                "loader_memory_budget_gib": None
+                if loader_memory_budget_gib is None
+                else float(loader_memory_budget_gib),
+                "loader_memory_estimate_samples": int(loader_memory_estimate_samples),
+            },
         },
     }
     tmp_path = output.with_name(f".{output.name}.tmp-{os.getpid()}")

@@ -167,6 +167,14 @@ class SourceSplitTest(unittest.TestCase):
         self.assertEqual(keys["fine"][2], "16")
         self.assertEqual(keys["mid"][2], "16")
 
+    def test_source_stratification_energy_falls_back_for_non_dat_sources(self) -> None:
+        target = np.asarray([18.9, 0.0, 0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+
+        keys = _source_stratification_keys("/mc/proton/source_without_dat.dst.gz", target, 0.0)
+
+        self.assertEqual(keys["fine"][2], "189")
+        self.assertEqual(keys["mid"][2], "189")
+
     def test_source_path_split_keeps_corsika_chunks_in_same_split(self) -> None:
         source_counts = {}
         for dat_index in range(18):

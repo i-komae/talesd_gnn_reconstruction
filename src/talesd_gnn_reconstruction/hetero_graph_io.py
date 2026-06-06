@@ -254,6 +254,23 @@ class H5HeteroGraphDataset:
         return {relation: group[relation][()] for relation in group.keys()}
 
     @staticmethod
+    def _dataset_nbytes(dataset: h5py.Dataset) -> int:
+        dtype = np.dtype(dataset.dtype)
+        if dtype.hasobject:
+            return int(dataset.id.get_storage_size())
+        return int(np.prod(dataset.shape, dtype=np.int64)) * int(dtype.itemsize)
+
+    @classmethod
+    def _group_nbytes(cls, group: h5py.Group) -> int:
+        total = 0
+        for value in group.values():
+            if isinstance(value, h5py.Dataset):
+                total += cls._dataset_nbytes(value)
+            elif isinstance(value, h5py.Group):
+                total += cls._group_nbytes(value)
+        return int(total)
+
+    @staticmethod
     def _decode_text(value: Any) -> str:
         if isinstance(value, bytes):
             return value.decode("utf-8", errors="replace")
@@ -324,6 +341,32 @@ class H5HeteroGraphDataset:
             if label is not None:
                 return label
         return self._particle_label_from_group(self._handle(path_index)["events"][key])
+
+    def detector_waveform_shape(self, index: int) -> tuple[int, ...]:
+        path_index, _local_index, key = self._locate(index)
+        return tuple(int(value) for value in self._handle(path_index)["events"][key]["detector_waveforms"].shape)
+
+    def graph_nbytes(self, index: int) -> int:
+        path_index, _local_index, key = self._locate(index)
+        return self._group_nbytes(self._handle(path_index)["events"][key])
+
+    def scaler_sample(self, index: int) -> dict[str, Any]:
+        path_index, _local_index, key = self._locate(index)
+        group = self._handle(path_index)["events"][key]
+        target = group["target"][()].astype(np.float32) if "target" in group else None
+        if self.require_target and target is None:
+            raise ValueError(f"graph has no target: {self.paths[path_index]}::{key}")
+        particle_label = self.particle_label(index)
+        if self.require_particle_label and particle_label is None:
+            raise ValueError(f"graph has no particle label: {self.paths[path_index]}::{key}")
+        return {
+            "detector_features": group["detector_features"][()].astype(np.float32),
+            "detector_context_features": group["detector_context_features"][()].astype(np.float32),
+            "pulse_features": group["pulse_features"][()].astype(np.float32),
+            "edge_features_by_type": self._read_edge_group(group["edge_features_by_type"]),
+            "target": target,
+            "particle_label": particle_label,
+        }
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         path_index, _local_index, key = self._locate(index)

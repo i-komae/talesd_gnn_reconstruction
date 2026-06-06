@@ -31,7 +31,11 @@ from talesd_gnn_reconstruction.hetero_graph_io import (
 )
 from talesd_gnn_reconstruction.hetero_model import MinimalHeteroTaleSdGNN
 from talesd_gnn_reconstruction.hetero_predict import reconstruct_dst
-from talesd_gnn_reconstruction.hetero_training import train_hetero_model
+from talesd_gnn_reconstruction.hetero_training import (
+    _estimate_graph_bytes,
+    _resolve_loader_settings,
+    train_hetero_model,
+)
 from scripts.summarize_split_distributions import summarize
 
 
@@ -104,6 +108,62 @@ def _synthetic_graph(index: int) -> SimpleNamespace:
             "core_relative_features_valid": True,
         },
     )
+
+
+class SyntheticHeteroGraphIoTest(unittest.TestCase):
+    def test_training_scaler_sample_does_not_load_waveforms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "synthetic_hetero.h5"
+            with create_hetero_graph_file(output) as handle:
+                write_hetero_graph(handle, 0, _synthetic_graph(0))
+
+            dataset = H5HeteroGraphDataset(output, require_target=True, require_particle_label=True)
+            try:
+                scaler_sample = dataset.scaler_sample(0)
+                self.assertNotIn("detector_waveforms", scaler_sample)
+                self.assertNotIn("detector_positions_km", scaler_sample)
+                self.assertNotIn("edge_index_by_type", scaler_sample)
+                self.assertEqual(dataset.detector_waveform_shape(0), (3, 2, 16))
+                self.assertGreaterEqual(dataset.graph_nbytes(0), 3 * 2 * 16 * np.dtype(np.float32).itemsize)
+                self.assertEqual(scaler_sample["detector_features"].shape, (3, 10))
+                self.assertEqual(scaler_sample["pulse_features"].shape, (4, 13))
+                self.assertEqual(set(scaler_sample["edge_features_by_type"]), set(EDGE_RELATIONS))
+            finally:
+                dataset.close()
+
+    def test_training_loader_worker_count_is_memory_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "synthetic_hetero.h5"
+            with create_hetero_graph_file(output) as handle:
+                for index in range(4):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            dataset = H5HeteroGraphDataset(output, require_target=True, require_particle_label=True)
+            try:
+                summary = _estimate_graph_bytes(dataset, [0, 1, 2, 3], max_samples=4)
+            finally:
+                dataset.close()
+
+        high_budget = _resolve_loader_settings(
+            requested_workers=2,
+            batch_size=2,
+            prefetch_factor=2,
+            pin_memory=True,
+            loader_memory_budget_gib=1.0,
+            graph_byte_summary=summary,
+        )
+        low_budget = _resolve_loader_settings(
+            requested_workers=2,
+            batch_size=2,
+            prefetch_factor=2,
+            pin_memory=True,
+            loader_memory_budget_gib=1.0e-9,
+            graph_byte_summary=summary,
+        )
+
+        self.assertEqual(high_budget["resolved_workers"], 2)
+        self.assertEqual(low_budget["resolved_workers"], 0)
+        self.assertGreater(high_budget["estimated_loader_bytes"], low_budget["estimated_loader_bytes"])
 
 
 @unittest.skipUnless(DATA_SAMPLE.exists(), "dstio TALE data sample is not available")
@@ -267,6 +327,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                 quality_prediction=True,
                 split_mode="event",
                 device="cpu",
+                num_workers=0,
                 show_progress=False,
             )
 
@@ -310,6 +371,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                 error_loss_weight=0.2,
                 split_mode="event",
                 device="cpu",
+                num_workers=0,
                 show_progress=False,
             )
 
@@ -343,6 +405,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                 mass_classification=True,
                 split_mode="event",
                 device="cpu",
+                num_workers=0,
                 show_progress=False,
             )
 
@@ -432,6 +495,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                 mass_classification=True,
                 split_mode="event",
                 device="cpu",
+                num_workers=0,
                 show_progress=False,
             )
             result = reconstruct_dst(

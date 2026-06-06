@@ -2862,6 +2862,12 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         save_diagnostics=args.diagnostics,
         diagnostic_energy_bin_width=args.diagnostic_energy_bin_width,
         diagnostic_min_bin_count=args.diagnostic_min_bin_count,
+        num_workers=args.num_workers,
+        prefetch_factor=args.prefetch_factor,
+        persistent_workers=args.persistent_workers,
+        pin_memory=None if not args.no_pin_memory else False,
+        loader_memory_budget_gib=args.loader_memory_budget_gib,
+        loader_memory_estimate_samples=args.loader_memory_estimate_samples,
         show_progress=not args.no_progress,
     )
     print(f"checkpoint: {result['checkpoint']}")
@@ -3252,6 +3258,17 @@ def build_parser() -> argparse.ArgumentParser:
     train_hetero.add_argument("--diagnostics", action="store_true", help="training後に既存diagnostics PDF/JSONを生成する")
     train_hetero.add_argument("--diagnostic-energy-bin-width", type=float, default=0.1)
     train_hetero.add_argument("--diagnostic-min-bin-count", type=int, default=20)
+    train_hetero.add_argument("--num-workers", type=int, default=DEFAULT_TRAIN_WORKERS, help="hetero DataLoader worker数。-1ならCPUとメモリ見積もりから決める")
+    train_hetero.add_argument("--prefetch-factor", type=int, default=2, help="各hetero DataLoader workerが先読みするbatch数")
+    train_hetero.add_argument("--persistent-workers", action="store_true", help="hetero DataLoader workerをepoch間で保持する")
+    train_hetero.add_argument("--no-pin-memory", action="store_true", help="CUDA転送用のpinned memoryを使わない")
+    train_hetero.add_argument(
+        "--loader-memory-budget-gib",
+        type=float,
+        default=None,
+        help="DataLoader prefetchに使うCPU memory上限GiB。省略時はSlurmの割当memoryから読む",
+    )
+    train_hetero.add_argument("--loader-memory-estimate-samples", type=int, default=512)
     train_hetero.add_argument("--no-progress", action="store_true")
     train_hetero.set_defaults(func=_cmd_train_hetero)
 
