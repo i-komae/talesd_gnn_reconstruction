@@ -32,6 +32,7 @@ from talesd_gnn_reconstruction.hetero_graph_io import (
 from talesd_gnn_reconstruction.hetero_model import MinimalHeteroTaleSdGNN
 from talesd_gnn_reconstruction.hetero_predict import reconstruct_dst
 from talesd_gnn_reconstruction.hetero_training import train_hetero_model
+from scripts.summarize_split_distributions import summarize
 
 
 DATA_SAMPLE = Path("/Users/ikomae/TALE/dstio/test/data/tale_data_talesdcalibev_single_event.dst")
@@ -363,6 +364,37 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertEqual(payload["n_graphs"], 1)
             self.assertTrue(payload["groups"])
             self.assertIn("baseline", payload)
+
+    def test_hetero_split_distribution_summary_reads_counts_and_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(12):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            dataset = H5HeteroGraphDataset(graph_path, require_target=True, require_particle_label=True)
+            try:
+                payload = summarize(
+                    dataset,
+                    val_fraction=0.20,
+                    test_fraction=0.20,
+                    source_val_fraction=0.20,
+                    source_test_fraction=0.20,
+                    seed=123,
+                    energy_bin_width=0.1,
+                    split_workers=1,
+                    show_progress=False,
+                )
+            finally:
+                dataset.close()
+
+        self.assertEqual(payload["config"]["graph_format"], "hetero")
+        total_events = sum(split["events"] for split in payload["totals"].values())
+        self.assertEqual(total_events, 12)
+        for split in payload["totals"].values():
+            self.assertGreater(split["detector_nodes"]["n"], 0)
+            self.assertGreater(split["pulse_nodes"]["n"], 0)
+            self.assertGreater(split["event_time_hour"]["n"], 0)
 
     @unittest.skipUnless(
         MC_SAMPLE.exists() and CONST_DST.exists() and MC_CALIB_DIR.exists(),

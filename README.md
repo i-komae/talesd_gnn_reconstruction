@@ -305,6 +305,24 @@ PARTITION=v100-al9_long \
 scripts/submit_server_hetero_training.sh
 ```
 
+source group / geometry / time balance を取った heterogeneous HDF5 を3サイズで作る:
+
+```bash
+RUN_ID=hetero_balance_$(date +%Y%m%d_%H%M%S) \
+scripts/submit_server_hetero_dataset_size_sweep.sh
+```
+
+これは既定で各 energy/particle bin あたり `50000`, `20000`, `10000` event の3種類を作ります。
+selection summary と split distribution summary を確認してから、同じ `RUN_ID` で6本の比較学習を投げます。
+既定 split は train/validation/test の source group を約 `45/10/45` にし、同じ `DAT??????` source group を split 間で共有しません。
+
+```bash
+RUN_ID=<exportで使ったRUN_ID> \
+SUBMIT_EXPORTS=0 \
+SUBMIT_TRAINING=1 \
+scripts/submit_server_hetero_dataset_size_sweep.sh
+```
+
 次の比較では、同じ reco+mass 条件で quality-only と predicted-error-only を別々に投げます。
 
 ```bash

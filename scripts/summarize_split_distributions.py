@@ -8,13 +8,19 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import h5py
 import numpy as np
 
 from talesd_gnn_reconstruction.cli import _expand_h5_graph_paths
 from talesd_gnn_reconstruction.dataset import H5GraphDataset
+from talesd_gnn_reconstruction.hetero_graph_io import FORMAT_NAME as HETERO_FORMAT_NAME
+from talesd_gnn_reconstruction.hetero_graph_io import H5HeteroGraphDataset
 from talesd_gnn_reconstruction.metrics import direction_columns_for_dim, direction_to_angles
 from talesd_gnn_reconstruction.progress import progress
 from talesd_gnn_reconstruction.train import source_group_key, split_indices_by_stratified_source_path
+
+
+GraphDataset = H5GraphDataset | H5HeteroGraphDataset
 
 
 def _finite(value: Any) -> float | None:
@@ -59,16 +65,54 @@ def _new_bucket() -> dict[str, Any]:
         "core_radius_km": [],
         "zenith_deg": [],
         "azimuth_deg": [],
+        "event_time_hour": [],
         "nodes": [],
+        "detector_nodes": [],
+        "pulse_nodes": [],
         "edges": [],
     }
 
 
-def _add(bucket: dict[str, Any], *, source_path: str, target: np.ndarray | None, particle_label: float | None, n_nodes: int | None, n_edges: int | None) -> None:
+def _hhmmss_to_hour(value: Any) -> float | None:
+    number = _finite(value)
+    if number is None:
+        return None
+    time_value = int(number)
+    hours = time_value // 10000
+    minutes = (time_value // 100) % 100
+    seconds = time_value % 100
+    if hours < 0 or hours > 23 or minutes < 0 or minutes > 59 or seconds < 0 or seconds > 59:
+        return None
+    return float(hours + minutes / 60.0 + seconds / 3600.0)
+
+
+def _add(
+    bucket: dict[str, Any],
+    *,
+    source_path: str,
+    target: np.ndarray | None,
+    particle_label: float | None,
+    event_time: Any = None,
+    n_nodes: int | None,
+    n_edges: int | None,
+    n_detector_nodes: int | None = None,
+    n_pulse_nodes: int | None = None,
+) -> None:
     bucket["events"] += 1
     bucket["sources"].add(source_path)
     if particle_label is not None and math.isfinite(float(particle_label)):
         bucket["particle_labels"].append(float(particle_label))
+    event_hour = _hhmmss_to_hour(event_time)
+    if event_hour is not None:
+        bucket["event_time_hour"].append(event_hour)
+    if n_nodes is not None:
+        bucket["nodes"].append(float(n_nodes))
+    if n_detector_nodes is not None:
+        bucket["detector_nodes"].append(float(n_detector_nodes))
+    if n_pulse_nodes is not None:
+        bucket["pulse_nodes"].append(float(n_pulse_nodes))
+    if n_edges is not None:
+        bucket["edges"].append(float(n_edges))
     if target is None or target.shape[0] < 6 or not np.all(np.isfinite(target)):
         return
     log10_energy = float(target[0])
@@ -82,10 +126,6 @@ def _add(bucket: dict[str, Any], *, source_path: str, target: np.ndarray | None,
     zenith, azimuth = direction_to_angles(target[None, direction_slice])
     bucket["zenith_deg"].append(float(zenith[0]))
     bucket["azimuth_deg"].append(float(azimuth[0]))
-    if n_nodes is not None:
-        bucket["nodes"].append(float(n_nodes))
-    if n_edges is not None:
-        bucket["edges"].append(float(n_edges))
 
 
 def _finish_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
@@ -104,7 +144,10 @@ def _finish_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
         "core_radius_km": _stats(bucket["core_radius_km"]),
         "zenith_deg": _stats(bucket["zenith_deg"]),
         "azimuth_deg": _stats(bucket["azimuth_deg"]),
+        "event_time_hour": _stats(bucket["event_time_hour"]),
         "nodes": _stats(bucket["nodes"]),
+        "detector_nodes": _stats(bucket["detector_nodes"]),
+        "pulse_nodes": _stats(bucket["pulse_nodes"]),
         "edges": _stats(bucket["edges"]),
     }
 
@@ -161,12 +204,14 @@ def _plot_split_distributions(
         ("core_radius_km", "core radius [km]"),
         ("zenith_deg", "zenith [deg]"),
         ("azimuth_deg", "azimuth [deg]"),
-        ("nodes", "accepted pulses / event"),
+        ("event_time_hour", "event time [hour]"),
+        ("detector_nodes", "detectors / event"),
+        ("pulse_nodes", "pulses / event"),
         ("edges", "edges / event"),
         ("particle_labels", "particle label"),
     ]
-    fig, axes = plt.subplots(3, 3, figsize=FIGSIZE_GRID)
-    for ax, (key, xlabel) in zip(axes.reshape(-1), features, strict=True):
+    fig, axes = plt.subplots(4, 3, figsize=(FIGSIZE_GRID[0], FIGSIZE_GRID[1] * 1.25))
+    for ax, (key, xlabel) in zip(axes.reshape(-1), features):
         arrays = [_finite_array(totals[name][key]) for name in split_order]
         if key == "particle_labels":
             bins = np.array([-0.5, 0.5, 1.5], dtype=np.float64)
@@ -188,6 +233,8 @@ def _plot_split_distributions(
         ax.set_xlabel(xlabel)
         ax.set_ylabel("density")
         _style_axes(ax)
+    for ax in axes.reshape(-1)[len(features) :]:
+        ax.axis("off")
     axes.reshape(-1)[0].legend(frameon=False)
     fig.suptitle("Train/validation/test parameter distributions")
     fig.tight_layout()
@@ -228,16 +275,47 @@ def _plot_split_distributions(
     return pdf_files
 
 
-def _shape_counts(dataset: H5GraphDataset, index: int) -> tuple[int | None, int | None]:
+def _shape_counts(dataset: GraphDataset, index: int) -> tuple[int | None, int | None, int | None, int | None]:
     path_index, _local_index, key = dataset._locate(index)  # noqa: SLF001 - summary script uses dataset internals for cheap shapes.
     group = dataset._handle(path_index)["events"][key]  # noqa: SLF001
+    if isinstance(dataset, H5HeteroGraphDataset):
+        n_detector_nodes = int(group["detector_features"].shape[0]) if "detector_features" in group else None
+        n_pulse_nodes = int(group["pulse_features"].shape[0]) if "pulse_features" in group else None
+        n_nodes = (
+            (n_detector_nodes or 0) + (n_pulse_nodes or 0)
+            if n_detector_nodes is not None or n_pulse_nodes is not None
+            else None
+        )
+        n_edges = 0
+        edge_group = group.get("edge_features_by_type")
+        if edge_group is None:
+            n_edges = None
+        else:
+            for relation in edge_group.keys():
+                n_edges += int(edge_group[relation].shape[0])
+        return n_nodes, n_edges, n_detector_nodes, n_pulse_nodes
     n_nodes = int(group["node_features"].shape[0]) if "node_features" in group else None
     n_edges = int(group["edge_features"].shape[0]) if "edge_features" in group else None
-    return n_nodes, n_edges
+    return n_nodes, n_edges, None, n_nodes
+
+
+def _event_attrs(dataset: GraphDataset, index: int) -> dict[str, Any]:
+    path_index, _local_index, key = dataset._locate(index)  # noqa: SLF001 - summary script uses dataset internals for cheap attrs.
+    group = dataset._handle(path_index)["events"][key]  # noqa: SLF001
+    attrs = dict(group.attrs.items())
+    metadata_json = attrs.get("metadata_json")
+    if metadata_json is not None:
+        if isinstance(metadata_json, bytes):
+            metadata_json = metadata_json.decode("utf-8", errors="replace")
+        try:
+            attrs.update(json.loads(str(metadata_json)))
+        except json.JSONDecodeError:
+            pass
+    return attrs
 
 
 def summarize(
-    dataset: H5GraphDataset,
+    dataset: GraphDataset,
     *,
     val_fraction: float,
     test_fraction: float,
@@ -275,14 +353,18 @@ def summarize(
             particle_label = dataset.particle_label(index)
             source_path = dataset.source_path(index) or f"unknown:{index}"
             source_group = source_group_key(source_path)
-            n_nodes, n_edges = _shape_counts(dataset, index)
+            attrs = _event_attrs(dataset, index)
+            n_nodes, n_edges, n_detector_nodes, n_pulse_nodes = _shape_counts(dataset, index)
             _add(
                 totals[split_name],
                 source_path=source_group,
                 target=target,
                 particle_label=particle_label,
+                event_time=attrs.get("time", attrs.get("hhmmss")),
                 n_nodes=n_nodes,
                 n_edges=n_edges,
+                n_detector_nodes=n_detector_nodes,
+                n_pulse_nodes=n_pulse_nodes,
             )
             if target is not None and target.shape[0] > 0 and math.isfinite(float(target[0])):
                 bin_key = _energy_bin(float(target[0]), energy_bin_width)
@@ -291,8 +373,11 @@ def summarize(
                     source_path=source_group,
                     target=target,
                     particle_label=particle_label,
+                    event_time=attrs.get("time", attrs.get("hhmmss")),
                     n_nodes=n_nodes,
                     n_edges=n_edges,
+                    n_detector_nodes=n_detector_nodes,
+                    n_pulse_nodes=n_pulse_nodes,
                 )
     total_events = max(sum(len(indices) for indices in split.values()), 1)
     total_sources = sum(len(totals[name]["sources"]) for name in split)
@@ -308,6 +393,7 @@ def summarize(
             "seed": int(seed),
             "energy_bin_width": float(energy_bin_width),
             "split_mode": "source-stratified",
+            "graph_format": "hetero" if isinstance(dataset, H5HeteroGraphDataset) else "homogeneous",
             "plot_files": plot_files,
         },
         "totals": {
@@ -346,15 +432,25 @@ def main() -> None:
     paths = _expand_h5_graph_paths(args.graphs)
     if not paths:
         raise SystemExit("no graph files matched")
-    dataset = H5GraphDataset(
-        paths,
-        require_target=True,
-        require_particle_label=True,
-        load_node_positions=False,
-        load_attrs=False,
-        load_particle_label=True,
-        show_progress=not args.no_progress,
-    )
+    with h5py.File(paths[0], "r") as handle:
+        is_hetero = str(handle.attrs.get("format", "")) == HETERO_FORMAT_NAME
+    if is_hetero:
+        dataset: GraphDataset = H5HeteroGraphDataset(
+            paths,
+            require_target=True,
+            require_particle_label=True,
+            load_attrs=False,
+        )
+    else:
+        dataset = H5GraphDataset(
+            paths,
+            require_target=True,
+            require_particle_label=True,
+            load_node_positions=False,
+            load_attrs=False,
+            load_particle_label=True,
+            show_progress=not args.no_progress,
+        )
     try:
         payload = summarize(
             dataset,

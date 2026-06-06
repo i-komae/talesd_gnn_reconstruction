@@ -27,6 +27,8 @@ Standard submitters
      - ``scripts/submit_server_hetero_reco_mass_quality_training.sh``
    * - Heterogeneous reco+mass, predicted-error-only auxiliary head
      - ``scripts/submit_server_hetero_reco_mass_error_training.sh``
+   * - Balanced heterogeneous HDF5 export and size sweep
+     - ``scripts/submit_server_hetero_dataset_size_sweep.sh``
 
 Reconstruction quality-only example
 -----------------------------------
@@ -75,6 +77,43 @@ They should be compared as separate runs on the same heterogeneous graph input.
 
 ``scripts/submit_server_hetero_training.sh`` sets ``FEATURE_IMPORTANCE=0`` by default.
 Set ``FEATURE_IMPORTANCE=1`` only when post-training group ablation should run in the same Slurm job.
+
+Balanced heterogeneous HDF5 size sweep
+--------------------------------------
+
+Use ``scripts/submit_server_hetero_dataset_size_sweep.sh`` to make the next balanced datasets.
+The default sizes are ``50000``, ``20000``, and ``10000`` selected events per true-energy/particle bin.
+The balanced export preselects candidates by ``DAT??????`` source group, zenith bin, azimuth bin, core-position bin, and event-time bin, then writes a selection summary and a train/validation/test split distribution summary.
+
+The default split for this sweep is source-group based ``45/10/45`` for train/validation/test.
+The same ``DAT??????`` source group is not shared across splits.
+Validation is kept as an independent source-group holdout for early stopping and model selection; the test split is left for final comparison.
+
+First submit the three export jobs:
+
+.. code-block:: bash
+
+   RUN_ID=hetero_balance_$(date +%Y%m%d_%H%M%S) \
+   scripts/submit_server_hetero_dataset_size_sweep.sh
+
+After the three HDF5 exports and their summaries are complete, inspect:
+
+.. code-block:: text
+
+   /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/hetero_selection_summary.json
+   /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distribution_summary.json
+   /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distributions/
+
+Then submit the six reco+mass comparison runs on those HDF5 files:
+
+.. code-block:: bash
+
+   RUN_ID=<same RUN_ID used for export> \
+   SUBMIT_EXPORTS=0 \
+   SUBMIT_TRAINING=1 \
+   scripts/submit_server_hetero_dataset_size_sweep.sh
+
+The six training jobs are ``quality-only`` and ``predicted-error-only`` for each of ``50000``, ``20000``, and ``10000`` events per bin.
 
 Rules
 -----

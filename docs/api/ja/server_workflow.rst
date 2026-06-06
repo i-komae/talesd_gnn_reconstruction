@@ -27,6 +27,8 @@ Slurmでの本番実行では、直接 ``talesd-gnn`` を打つよりもsubmitte
      - ``scripts/submit_server_hetero_reco_mass_quality_training.sh``
    * - heterogeneous reco+mass, predicted-error-only補助head
      - ``scripts/submit_server_hetero_reco_mass_error_training.sh``
+   * - balanced heterogeneous HDF5 export とサイズ比較
+     - ``scripts/submit_server_hetero_dataset_size_sweep.sh``
 
 再構成quality-onlyの例
 ----------------------
@@ -75,6 +77,43 @@ heterogeneous reco+mass比較
 
 ``scripts/submit_server_hetero_training.sh`` は既定では ``FEATURE_IMPORTANCE=0`` です。
 同じSlurm job内で学習後のgroup ablationも走らせる場合だけ ``FEATURE_IMPORTANCE=1`` を指定します。
+
+balanced heterogeneous HDF5 サイズ比較
+---------------------------------------
+
+次の balanced dataset 作成には ``scripts/submit_server_hetero_dataset_size_sweep.sh`` を使います。
+既定では true energy / particle bin ごとに ``50000``, ``20000``, ``10000`` event を選ぶ3種類のHDF5を作ります。
+balanced export は ``DAT??????`` source group、zenith bin、azimuth bin、core位置bin、event時刻binで候補を分散させ、selection summary と train/validation/test split distribution summary を出します。
+
+この sweep の既定 split は、train/validation/test の source group が約 ``45/10/45`` です。
+同じ ``DAT??????`` source group は split 間で共有しません。
+validation は early stopping と model selection 用の独立 source-group holdout とし、test は最終比較用として触らない split にします。
+
+まず3本の export job を投げます。
+
+.. code-block:: bash
+
+   RUN_ID=hetero_balance_$(date +%Y%m%d_%H%M%S) \
+   scripts/submit_server_hetero_dataset_size_sweep.sh
+
+3種類のHDF5とsummaryが完了したら、以下を確認します。
+
+.. code-block:: text
+
+   /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/hetero_selection_summary.json
+   /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distribution_summary.json
+   /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distributions/
+
+その後、同じHDF5に対して6本の reco+mass 比較学習を投げます。
+
+.. code-block:: bash
+
+   RUN_ID=<exportで使った同じRUN_ID> \
+   SUBMIT_EXPORTS=0 \
+   SUBMIT_TRAINING=1 \
+   scripts/submit_server_hetero_dataset_size_sweep.sh
+
+6本の内訳は、``50000``, ``20000``, ``10000`` events/bin それぞれに対する ``quality-only`` と ``predicted-error-only`` です。
 
 注意点
 ------

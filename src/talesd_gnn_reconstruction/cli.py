@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import heapq
+import json
 import math
 import os
 import random
@@ -10,6 +11,7 @@ import time
 from collections import deque
 from collections.abc import Iterable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,25 @@ MAX_CONFIG_PATHS = 200
 DEFAULT_WORKER_MAX_FILES = 0
 DEFAULT_TRAIN_WORKERS = -1
 SelectedEntry = tuple[int | tuple[str, int], str, str, int, float, int, int]
+
+
+@dataclass(frozen=True)
+class HeteroSelectionCandidate:
+    bin_key: int | tuple[str, int]
+    unique_id: str
+    source_path: str
+    source_group: str
+    source_index: int
+    log10_energy: float
+    particle: str
+    zenith_deg: float
+    azimuth_deg: float
+    core_x_km: float
+    core_y_km: float
+    date: int
+    time_value: int
+    sort_key: float
+    balance_key: tuple[str, ...]
 
 
 class DstUnitExhaustionError(RuntimeError):
@@ -192,6 +213,262 @@ def _energy_sample_bin_label(bin_key: int | tuple[str, int], bin_width: float) -
     return f"{bin_key * bin_width:.3f}_{(bin_key + 1) * bin_width:.3f}"
 
 
+def _nested_float(value: Any, *keys: int, default: float = float("nan")) -> float:
+    try:
+        obj = value
+        for key in keys:
+            obj = obj[key]
+        return float(obj)
+    except Exception:
+        return float(default)
+
+
+def _time_seconds_from_hhmmss(value: int) -> int:
+    value = max(int(value), 0)
+    hh = value // 10000
+    mm = (value // 100) % 100
+    ss = value % 100
+    if hh > 23 or mm > 59 or ss > 59:
+        return 0
+    return hh * 3600 + mm * 60 + ss
+
+
+def _finite_bin_label(value: float, width: float, *, circular: float | None = None) -> str:
+    value = float(value)
+    width = max(float(width), 1.0e-12)
+    if not math.isfinite(value):
+        return "nan"
+    if circular is not None:
+        value = value % float(circular)
+    return str(int(math.floor(value / width)))
+
+
+def _source_group_key_for_path(source_path: str) -> str:
+    from .train import source_group_key
+
+    return source_group_key(source_path)
+
+
+def _candidate_balance_key(
+    *,
+    zenith_deg: float,
+    azimuth_deg: float,
+    core_x_km: float,
+    core_y_km: float,
+    time_value: int,
+    zenith_bin_width_deg: float,
+    azimuth_bin_width_deg: float,
+    core_bin_width_km: float,
+    time_bin_width_sec: int,
+) -> tuple[str, ...]:
+    time_bin_width = max(int(time_bin_width_sec), 1)
+    return (
+        _finite_bin_label(zenith_deg, zenith_bin_width_deg),
+        _finite_bin_label(azimuth_deg, azimuth_bin_width_deg, circular=360.0),
+        _finite_bin_label(core_x_km, core_bin_width_km),
+        _finite_bin_label(core_y_km, core_bin_width_km),
+        str(_time_seconds_from_hhmmss(time_value) // time_bin_width),
+    )
+
+
+def _candidate_from_mc_event(
+    path: str,
+    source_index: int,
+    event: dict[str, Any],
+    *,
+    bin_width: float,
+    seed: int,
+    stratify_particle: bool,
+    zenith_bin_width_deg: float,
+    azimuth_bin_width_deg: float,
+    core_bin_width_km: float,
+    time_bin_width_sec: int,
+) -> HeteroSelectionCandidate | None:
+    rusdraw = event.get("rusdraw") or {}
+    rusdmc = event.get("rusdmc") or {}
+    energy_eev = float(rusdmc.get("energy", 0.0) or 0.0)
+    if energy_eev <= 0.0 or not math.isfinite(energy_eev):
+        return None
+    theta = float(rusdmc.get("theta", float("nan")) or float("nan"))
+    phi = float(rusdmc.get("phi", float("nan")) or float("nan")) + math.pi
+    zenith_deg = math.degrees(theta) if math.isfinite(theta) else float("nan")
+    azimuth_deg = math.degrees(phi) % 360.0 if math.isfinite(phi) else float("nan")
+    core_x_km = _nested_float(rusdmc.get("corexyz"), 0, default=float("nan")) / 1.0e5
+    core_y_km = _nested_float(rusdmc.get("corexyz"), 1, default=float("nan")) / 1.0e5
+    date = int(rusdraw.get("yymmdd", 0) or 0)
+    time_value = int(rusdraw.get("hhmmss", 0) or 0)
+    log10_energy = math.log10(energy_eev * 1.0e18)
+    particle = _particle_stratum_from_parttype(rusdmc.get("parttype", -1))
+    bin_particle = particle if stratify_particle else None
+    bin_key = _energy_sample_bin_key(log10_energy, bin_width, particle=bin_particle)
+    event_id = _candidate_event_id(path, source_index, event)
+    sort_key = _sample_key_from_parts(seed, event_id, path, source_index)
+    source_group = _source_group_key_for_path(path)
+    return HeteroSelectionCandidate(
+        bin_key=bin_key,
+        unique_id=f"{path}:{source_index}",
+        source_path=path,
+        source_group=source_group,
+        source_index=int(source_index),
+        log10_energy=float(log10_energy),
+        particle=particle,
+        zenith_deg=float(zenith_deg),
+        azimuth_deg=float(azimuth_deg),
+        core_x_km=float(core_x_km),
+        core_y_km=float(core_y_km),
+        date=date,
+        time_value=time_value,
+        sort_key=float(sort_key),
+        balance_key=_candidate_balance_key(
+            zenith_deg=zenith_deg,
+            azimuth_deg=azimuth_deg,
+            core_x_km=core_x_km,
+            core_y_km=core_y_km,
+            time_value=time_value,
+            zenith_bin_width_deg=zenith_bin_width_deg,
+            azimuth_bin_width_deg=azimuth_bin_width_deg,
+            core_bin_width_km=core_bin_width_km,
+            time_bin_width_sec=time_bin_width_sec,
+        ),
+    )
+
+
+def _cap_hetero_candidates_by_cell(
+    candidates: Iterable[HeteroSelectionCandidate],
+    *,
+    cap: int,
+) -> list[HeteroSelectionCandidate]:
+    cap = max(int(cap), 1)
+    heaps: dict[tuple[int | tuple[str, int], str, tuple[str, ...]], list[tuple[float, str, HeteroSelectionCandidate]]] = {}
+    for candidate in candidates:
+        key = (candidate.bin_key, candidate.source_group, candidate.balance_key)
+        entry = (-candidate.sort_key, candidate.unique_id, candidate)
+        bucket = heaps.setdefault(key, [])
+        if len(bucket) < cap:
+            heapq.heappush(bucket, entry)
+        elif entry[0] > bucket[0][0]:
+            heapq.heapreplace(bucket, entry)
+    merged: list[HeteroSelectionCandidate] = []
+    for entries in heaps.values():
+        merged.extend(entry[2] for entry in entries)
+    return merged
+
+
+def _interleaved_candidates_by_cell(
+    candidates: list[HeteroSelectionCandidate],
+    *,
+    seed: int,
+) -> list[HeteroSelectionCandidate]:
+    cells: dict[tuple[str, ...], list[HeteroSelectionCandidate]] = {}
+    for candidate in candidates:
+        cells.setdefault(candidate.balance_key, []).append(candidate)
+    for bucket in cells.values():
+        bucket.sort(key=lambda item: (item.sort_key, item.unique_id))
+    cell_order = sorted(
+        cells,
+        key=lambda key: _sample_key_from_parts(seed, "|".join(key), "cell", 0),
+    )
+    out: list[HeteroSelectionCandidate] = []
+    while cell_order:
+        next_order: list[tuple[str, ...]] = []
+        for key in cell_order:
+            bucket = cells[key]
+            if bucket:
+                out.append(bucket.pop(0))
+            if bucket:
+                next_order.append(key)
+        cell_order = next_order
+    return out
+
+
+def _select_balanced_hetero_candidates(
+    candidates: Iterable[HeteroSelectionCandidate],
+    *,
+    per_bin: int,
+    seed: int,
+) -> list[HeteroSelectionCandidate]:
+    by_bin: dict[int | tuple[str, int], dict[str, list[HeteroSelectionCandidate]]] = {}
+    for candidate in candidates:
+        by_bin.setdefault(candidate.bin_key, {}).setdefault(candidate.source_group, []).append(candidate)
+
+    selected: list[HeteroSelectionCandidate] = []
+    for bin_key in sorted(by_bin, key=lambda key: str(key)):
+        source_candidates = {
+            source_group: _interleaved_candidates_by_cell(bucket, seed=seed)
+            for source_group, bucket in by_bin[bin_key].items()
+        }
+        source_order = sorted(
+            source_candidates,
+            key=lambda source_group: _sample_key_from_parts(seed, source_group, str(bin_key), 0),
+        )
+        selected_in_bin = 0
+        while source_order and selected_in_bin < int(per_bin):
+            next_order: list[str] = []
+            for source_group in source_order:
+                bucket = source_candidates[source_group]
+                if bucket and selected_in_bin < int(per_bin):
+                    selected.append(bucket.pop(0))
+                    selected_in_bin += 1
+                if bucket:
+                    next_order.append(source_group)
+            source_order = next_order
+    random.Random(seed).shuffle(selected)
+    return selected
+
+
+def _count_by(items: Iterable[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        key = str(item)
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _hetero_selection_summary(
+    candidates: list[HeteroSelectionCandidate],
+    *,
+    bin_width: float,
+    zenith_bin_width_deg: float,
+    azimuth_bin_width_deg: float,
+    core_bin_width_km: float,
+    time_bin_width_sec: int,
+) -> dict[str, Any]:
+    source_counts = _count_by(candidate.source_group for candidate in candidates)
+    top_sources = sorted(source_counts.items(), key=lambda item: item[1], reverse=True)[:20]
+    time_bin_width = max(int(time_bin_width_sec), 1)
+    return {
+        "events": len(candidates),
+        "source_groups": len(source_counts),
+        "by_energy_bin": _count_by(_energy_sample_bin_label(candidate.bin_key, bin_width) for candidate in candidates),
+        "by_particle": _count_by(candidate.particle for candidate in candidates),
+        "by_zenith_bin": _count_by(
+            _finite_bin_label(candidate.zenith_deg, zenith_bin_width_deg) for candidate in candidates
+        ),
+        "by_azimuth_bin": _count_by(
+            _finite_bin_label(candidate.azimuth_deg, azimuth_bin_width_deg, circular=360.0)
+            for candidate in candidates
+        ),
+        "by_core_x_bin": _count_by(
+            _finite_bin_label(candidate.core_x_km, core_bin_width_km) for candidate in candidates
+        ),
+        "by_core_y_bin": _count_by(
+            _finite_bin_label(candidate.core_y_km, core_bin_width_km) for candidate in candidates
+        ),
+        "by_time_bin": _count_by(
+            str(_time_seconds_from_hhmmss(candidate.time_value) // time_bin_width) for candidate in candidates
+        ),
+        "by_date": _count_by(f"{candidate.date:06d}" for candidate in candidates),
+        "top_source_groups": dict(top_sources),
+    }
+
+
+def _selected_by_path_from_candidates(candidates: Iterable[HeteroSelectionCandidate]) -> dict[str, set[int]]:
+    selected_by_path: dict[str, set[int]] = {}
+    for candidate in candidates:
+        selected_by_path.setdefault(candidate.source_path, set()).add(int(candidate.source_index))
+    return selected_by_path
+
+
 def _scan_energy_candidates_for_file(
     payload: tuple[str, float, int, int, bool, int, float, bool, int | None, str | None, bool]
 ) -> dict[str, Any]:
@@ -285,6 +562,132 @@ def _scan_energy_candidates_for_file(
     return {
         "path": path,
         "reservoirs": reservoirs,
+        "seen_by_bin": seen_by_bin,
+        "raw_events": raw_events,
+        "hit_events": hit_events,
+        "missing_calibration_events": missing_calibration_events,
+        "error": None,
+    }
+
+
+def _scan_hetero_selection_candidates_for_file(
+    payload: tuple[
+        str,
+        float,
+        int,
+        int,
+        bool,
+        int,
+        float,
+        bool,
+        int | None,
+        str | None,
+        bool,
+        int | None,
+        float,
+        float,
+        float,
+        int,
+    ],
+) -> dict[str, Any]:
+    import dstio
+
+    (
+        path,
+        bin_width,
+        seed,
+        cell_cap,
+        skip_errors,
+        open_retries,
+        open_retry_delay,
+        stratify_particle,
+        min_event_date,
+        mc_calib_dir,
+        skip_missing_mc_calibration,
+        max_events,
+        zenith_bin_width_deg,
+        azimuth_bin_width_deg,
+        core_bin_width_km,
+        time_bin_width_sec,
+    ) = payload
+    mc_calibration = None
+    if mc_calib_dir and skip_missing_mc_calibration:
+        from .mc_calibration import get_cached_mc_calibration_db
+
+        mc_calibration = get_cached_mc_calibration_db(Path(mc_calib_dir))
+    candidates: list[HeteroSelectionCandidate] = []
+    seen_by_bin: dict[int | tuple[str, int], int] = {}
+    raw_events = 0
+    hit_events = 0
+    missing_calibration_events = 0
+    try:
+        dst_handle = None
+        last_exc: Exception | None = None
+        for attempt in range(max(int(open_retries), 1)):
+            try:
+                dst_handle = dstio.open(path, banks=["rusdraw", "rusdmc"])
+                break
+            except Exception as exc:
+                if _is_dst_unit_exhaustion(exc):
+                    _raise_dst_unit_exhaustion(exc)
+                last_exc = exc
+                if attempt + 1 < max(int(open_retries), 1):
+                    time.sleep(max(float(open_retry_delay), 0.0) * (attempt + 1))
+        if dst_handle is None:
+            if last_exc is not None:
+                raise last_exc
+            raise OSError(f"failed to open DST: {path}")
+        with dst_handle as dst:
+            for source_index, event in enumerate(dst):
+                if max_events is not None and raw_events >= int(max_events):
+                    break
+                raw_events += 1
+                rusdraw = event.get("rusdraw") or {}
+                date = int(rusdraw.get("yymmdd", 0) or 0)
+                if min_event_date is not None and (date <= 0 or date < int(min_event_date)):
+                    continue
+                time_value = int(rusdraw.get("hhmmss", 0) or 0)
+                if mc_calibration is not None and not mc_calibration.has_calibration_time(date, time_value):
+                    missing_calibration_events += 1
+                    continue
+                xxyy = rusdraw.get("xxyy", [])
+                if len(xxyy) <= 0:
+                    continue
+                candidate = _candidate_from_mc_event(
+                    path,
+                    source_index,
+                    event,
+                    bin_width=bin_width,
+                    seed=seed,
+                    stratify_particle=stratify_particle,
+                    zenith_bin_width_deg=zenith_bin_width_deg,
+                    azimuth_bin_width_deg=azimuth_bin_width_deg,
+                    core_bin_width_km=core_bin_width_km,
+                    time_bin_width_sec=time_bin_width_sec,
+                )
+                if candidate is None:
+                    continue
+                hit_events += 1
+                seen_by_bin[candidate.bin_key] = seen_by_bin.get(candidate.bin_key, 0) + 1
+                candidates.append(candidate)
+    except Exception as exc:
+        if _is_dst_unit_exhaustion(exc):
+            _raise_dst_unit_exhaustion(exc)
+        if not skip_errors:
+            raise
+        return {
+            "path": path,
+            "candidates": [],
+            "seen_by_bin": {},
+            "raw_events": raw_events,
+            "hit_events": hit_events,
+            "missing_calibration_events": missing_calibration_events,
+            "error": str(exc),
+        }
+    candidates = _cap_hetero_candidates_by_cell(candidates, cap=cell_cap)
+    return {
+        "path": path,
+        "candidates": candidates,
         "seen_by_bin": seen_by_bin,
         "raw_events": raw_events,
         "hit_events": hit_events,
@@ -932,6 +1335,86 @@ def _iter_scan_results(
             yield _scan_energy_candidates_for_file(payload)
 
 
+def _iter_hetero_selection_scan_results(
+    inputs: list[str],
+    args: argparse.Namespace,
+) -> Iterator[dict[str, Any]]:
+    payloads = [
+        (
+            path,
+            float(args.energy_bin_width),
+            int(args.seed),
+            int(args.balance_cell_preselect),
+            bool(args.skip_errors),
+            int(args.open_retries),
+            float(args.open_retry_delay),
+            bool(args.energy_sample_stratify_particle),
+            None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date),
+            str(Path(args.mc_calib_dir).expanduser()) if args.mc_calib_dir else None,
+            bool(args.skip_missing_mc_calibration and args.kind == "mc"),
+            None if args.max_events is None or int(args.max_events) <= 0 else int(args.max_events),
+            float(args.balance_zenith_bin_width_deg),
+            float(args.balance_azimuth_bin_width_deg),
+            float(args.balance_core_bin_width_km),
+            int(args.balance_time_bin_width_sec),
+        )
+        for path in inputs
+    ]
+    workers = max(int(args.workers), 1)
+    if workers == 1:
+        for payload in _progress(payloads, desc="scan hetero candidates", total=len(payloads)):
+            yield _scan_hetero_selection_candidates_for_file(payload)
+        return
+
+    try:
+        yield from _iter_process_pool(
+            payloads,
+            _scan_hetero_selection_candidates_for_file,
+            workers,
+            "scan hetero candidates",
+            max_tasks_per_child=max(int(args.worker_max_files), 0),
+        )
+    except (OSError, PermissionError) as exc:
+        _progress_write(f"warning: file-parallel hetero scan failed ({exc}); falling back to single-process scan")
+        for payload in _progress(payloads, desc="scan hetero candidates", total=len(payloads)):
+            yield _scan_hetero_selection_candidates_for_file(payload)
+
+
+def _iter_selected_hetero_graphs(
+    inputs: list[str],
+    args: argparse.Namespace,
+    const_dst: Path | None,
+    mc_calib_dir: Path | None,
+    selected_indices_by_path: dict[str, set[int]],
+) -> Iterator[Any]:
+    import dstio.tale.graph as tale_graph
+
+    min_event_date = None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date)
+    selected_inputs = [path for path in inputs if selected_indices_by_path.get(path)]
+    iterator = _progress(selected_inputs, desc="build selected hetero graphs", total=len(selected_inputs))
+    for path in iterator:
+        selected_indices = selected_indices_by_path.get(path)
+        if not selected_indices:
+            continue
+        yield from tale_graph.iter_graphs(
+            path,
+            kind=args.kind,
+            cleaning=args.cleaning,
+            node_policy=args.node_policy,
+            const_dst=const_dst,
+            mc_calib_dir=mc_calib_dir,
+            max_events=None,
+            require_trigger_mode0=not args.keep_non_mode0,
+            require_reference_core=bool(args.require_reference_core),
+            skip_errors=bool(args.skip_errors),
+            skip_missing_mc_calibration=bool(args.skip_missing_mc_calibration),
+            source_indices=selected_indices,
+            min_event_date=min_event_date,
+            open_retries=args.open_retries,
+            open_retry_delay=args.open_retry_delay,
+        )
+
+
 def _shard_path(output: str | Path, shard_index: int) -> Path:
     base = Path(output).expanduser()
     suffix = base.suffix if base.suffix else ".h5"
@@ -1506,28 +1989,132 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
         "cleaning": args.cleaning,
         "node_policy": args.node_policy,
         "require_reference_core": bool(args.require_reference_core),
+        "energy_sample_per_bin": args.energy_sample_per_bin,
+        "energy_sample_stratify_particle": bool(args.energy_sample_stratify_particle),
+        "energy_bin_width": args.energy_bin_width,
+        "balanced_selection": bool(args.energy_sample_per_bin is not None),
+        "balance_cell_preselect": args.balance_cell_preselect,
+        "balance_zenith_bin_width_deg": args.balance_zenith_bin_width_deg,
+        "balance_azimuth_bin_width_deg": args.balance_azimuth_bin_width_deg,
+        "balance_core_bin_width_km": args.balance_core_bin_width_km,
+        "balance_time_bin_width_sec": args.balance_time_bin_width_sec,
+        "seed": args.seed,
+        "workers": args.workers,
+        "worker_max_files": args.worker_max_files,
         "shard_size": args.shard_size,
         "open_retries": args.open_retries,
         "open_retry_delay": args.open_retry_delay,
         "min_event_date": min_event_date,
         "skip_missing_mc_calibration": bool(args.skip_missing_mc_calibration),
     }
-    graphs = tale_graph.iter_graphs(
-        inputs,
-        kind=args.kind,
-        cleaning=args.cleaning,
-        node_policy=args.node_policy,
-        const_dst=const_dst,
-        mc_calib_dir=mc_calib_dir,
-        max_events=args.max_events,
-        require_trigger_mode0=not args.keep_non_mode0,
-        require_reference_core=bool(args.require_reference_core),
-        skip_errors=bool(args.skip_errors),
-        skip_missing_mc_calibration=bool(args.skip_missing_mc_calibration),
-        min_event_date=min_event_date,
-        open_retries=args.open_retries,
-        open_retry_delay=args.open_retry_delay,
-    )
+    if args.energy_sample_per_bin is not None:
+        if args.kind not in {"mc", "auto"}:
+            raise ValueError("balanced energy sampling for export-hetero currently requires MC rusdraw/rusdmc input")
+        all_candidates: list[HeteroSelectionCandidate] = []
+        seen_by_bin: dict[int | tuple[str, int], int] = {}
+        raw_events = 0
+        hit_events = 0
+        missing_calibration_events = 0
+        unreadable_files = 0
+        for result in _iter_hetero_selection_scan_results(inputs, args):
+            if result.get("error"):
+                unreadable_files += 1
+                _progress_write(f"warning: skipping unreadable DST {result['path']}: {result['error']}")
+            raw_events += int(result.get("raw_events", 0))
+            hit_events += int(result.get("hit_events", 0))
+            missing_calibration_events += int(result.get("missing_calibration_events", 0))
+            all_candidates.extend(result.get("candidates", []))
+            for bin_key, count in result.get("seen_by_bin", {}).items():
+                seen_by_bin[bin_key] = seen_by_bin.get(bin_key, 0) + int(count)
+        all_candidates = _cap_hetero_candidates_by_cell(
+            all_candidates,
+            cap=max(int(args.balance_cell_preselect), 1),
+        )
+        selected_candidates = _select_balanced_hetero_candidates(
+            all_candidates,
+            per_bin=max(int(args.energy_sample_per_bin), 1),
+            seed=int(args.seed),
+        )
+        selected_by_path = _selected_by_path_from_candidates(selected_candidates)
+        selected_event_dates = _count_by(f"{candidate.date:06d}" for candidate in selected_candidates)
+        if args.kind == "mc" and mc_calib_dir is not None:
+            _validate_mc_calibration_dates(
+                mc_calib_dir,
+                {int(date): count for date, count in selected_event_dates.items()},
+                context="hetero balanced preselection",
+            )
+        selection_summary = {
+            "config": {
+                "energy_sample_per_bin": int(args.energy_sample_per_bin),
+                "energy_sample_stratify_particle": bool(args.energy_sample_stratify_particle),
+                "energy_bin_width": float(args.energy_bin_width),
+                "balance_cell_preselect": int(args.balance_cell_preselect),
+                "balance_zenith_bin_width_deg": float(args.balance_zenith_bin_width_deg),
+                "balance_azimuth_bin_width_deg": float(args.balance_azimuth_bin_width_deg),
+                "balance_core_bin_width_km": float(args.balance_core_bin_width_km),
+                "balance_time_bin_width_sec": int(args.balance_time_bin_width_sec),
+                "seed": int(args.seed),
+            },
+            "scan": {
+                "input_files": len(inputs),
+                "unreadable_files": unreadable_files,
+                "raw_events": raw_events,
+                "hit_events": hit_events,
+                "candidate_events_after_cell_cap": len(all_candidates),
+                "missing_calibration_events": missing_calibration_events,
+                "seen_by_bin": {
+                    _energy_sample_bin_label(bin_key, float(args.energy_bin_width)): count
+                    for bin_key, count in sorted(seen_by_bin.items(), key=lambda item: str(item[0]))
+                },
+            },
+            "selected": _hetero_selection_summary(
+                selected_candidates,
+                bin_width=float(args.energy_bin_width),
+                zenith_bin_width_deg=float(args.balance_zenith_bin_width_deg),
+                azimuth_bin_width_deg=float(args.balance_azimuth_bin_width_deg),
+                core_bin_width_km=float(args.balance_core_bin_width_km),
+                time_bin_width_sec=int(args.balance_time_bin_width_sec),
+            ),
+            "selected_files": len(selected_by_path),
+        }
+        config["balanced_selection_summary"] = selection_summary
+        config["scan_raw_events"] = raw_events
+        config["scan_hit_events"] = hit_events
+        config["scan_missing_calibration_events"] = missing_calibration_events
+        config["scan_selected_files"] = len(selected_by_path)
+        if args.selection_summary:
+            summary_path = Path(args.selection_summary).expanduser()
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text(json.dumps(selection_summary, indent=2, sort_keys=True) + "\n")
+            _progress_write(f"hetero selection summary: {summary_path}")
+        selected_event_count = sum(len(indices) for indices in selected_by_path.values())
+        _progress_write(
+            "hetero balanced preselection: "
+            f"selected_events={selected_event_count} selected_files={len(selected_by_path)} "
+            f"source_groups={selection_summary['selected']['source_groups']} raw_events={raw_events} "
+            f"hit_events={hit_events} missing_calibration_events={missing_calibration_events}"
+        )
+        if args.dry_run_selection:
+            print("dry-run selection complete; no hetero HDF5 was written")
+            return
+        graphs = _iter_selected_hetero_graphs(inputs, args, const_dst, mc_calib_dir, selected_by_path)
+    else:
+        graphs = tale_graph.iter_graphs(
+            inputs,
+            kind=args.kind,
+            cleaning=args.cleaning,
+            node_policy=args.node_policy,
+            const_dst=const_dst,
+            mc_calib_dir=mc_calib_dir,
+            max_events=args.max_events,
+            require_trigger_mode0=not args.keep_non_mode0,
+            require_reference_core=bool(args.require_reference_core),
+            skip_errors=bool(args.skip_errors),
+            skip_missing_mc_calibration=bool(args.skip_missing_mc_calibration),
+            min_event_date=min_event_date,
+            open_retries=args.open_retries,
+            open_retry_delay=args.open_retry_delay,
+        )
     written_total, written_paths = _write_hetero_graph_iterable(graphs, args, config)
     targets = ", ".join(str(path) for path in written_paths) if written_paths else str(args.output)
     print(f"wrote {written_total} hetero graphs to {targets}")
@@ -1882,6 +2469,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export_hetero.add_argument("--max-events", type=int, default=None, help="読み込む最大イベント数")
     export_hetero.add_argument("--min-event-date", type=int, default=None, help="YYMMDD形式。この日付より前のeventをDST読み込み時に除外する")
+    export_hetero.add_argument("--energy-sample-per-bin", type=int, default=None, help="log10(E/eV) binごとに残す最大hetero graph数。source group / geometry balanced preselectionを使う")
+    export_hetero.add_argument("--energy-sample-stratify-particle", action="store_true", help="energy samplingをproton/iron別のlog10(E/eV) binで行う")
+    export_hetero.add_argument("--energy-bin-width", type=float, default=0.1, help="energy samplingのlog10(E/eV) bin幅")
+    export_hetero.add_argument("--seed", type=int, default=12345, help="balanced selectionのdeterministic seed")
+    export_hetero.add_argument("--workers", type=int, default=1, help="DST metadata scanに使うfile worker数")
+    export_hetero.add_argument("--worker-max-files", type=int, default=DEFAULT_WORKER_MAX_FILES, help="scan workerをNファイル処理ごとに再起動する。0なら無効")
+    export_hetero.add_argument("--balance-cell-preselect", type=int, default=8, help="各energy/source_group/geometry-time cellからmetadata scanで残す候補上限")
+    export_hetero.add_argument("--balance-zenith-bin-width-deg", type=float, default=10.0, help="balanced selection用zenith bin幅")
+    export_hetero.add_argument("--balance-azimuth-bin-width-deg", type=float, default=30.0, help="balanced selection用azimuth bin幅")
+    export_hetero.add_argument("--balance-core-bin-width-km", type=float, default=0.5, help="balanced selection用core x/y bin幅")
+    export_hetero.add_argument("--balance-time-bin-width-sec", type=int, default=3600, help="balanced selection用時刻bin幅")
+    export_hetero.add_argument("--selection-summary", default=None, help="balanced preselection summary JSONの出力先")
+    export_hetero.add_argument("--dry-run-selection", action="store_true", help="balanced preselection summaryだけ作成し、HDF5は書かない")
     export_hetero.add_argument("--cleaning", choices=["ising", "none"], default="ising", help="dstio.tale.graph cleaning mode")
     export_hetero.add_argument(
         "--node-policy",

@@ -44,6 +44,8 @@ Heterogeneous HDF5 graph export
 The output is a training/cache format, not a mandatory step for one-pass reconstruction.
 The graph contains detector nodes, pulse nodes, detector-level waveforms, and typed relations.
 For MC training, ``--require-reference-core`` is the normal setting because core-relative pulse features are valid only when the Ising reference core exists.
+For balanced large MC datasets, add ``--energy-sample-per-bin`` with ``--energy-sample-stratify-particle``.
+The balanced selector keeps candidates spread across ``DAT??????`` source groups, zenith, azimuth, core-position, and event-time bins, and can write ``--selection-summary`` before or during HDF5 export.
 
 .. code-block:: bash
 
@@ -55,6 +57,9 @@ For MC training, ``--require-reference-core`` is the normal setting because core
      --require-reference-core \
      --skip-errors \
      --skip-missing-mc-calibration \
+     --energy-sample-per-bin 50000 \
+     --energy-sample-stratify-particle \
+     --selection-summary /path/to/graphs/hetero/summaries/hetero_selection_summary.json \
      --shard-size 50000 \
      -o /path/to/graphs/hetero/hetero.h5
 

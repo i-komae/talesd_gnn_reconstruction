@@ -45,6 +45,8 @@ Heterogeneous HDF5 graph export
 graph は detector node、pulse node、detector-level waveform、型付き relation を持ちます。
 MC 学習用では、Ising reference core がある graph だけを使うため
 ``--require-reference-core`` を付けるのが標準です。
+大規模MCを偏りにくく作る場合は ``--energy-sample-per-bin`` と ``--energy-sample-stratify-particle`` を付けます。
+balanced selector は ``DAT??????`` source group、zenith、azimuth、core位置、event時刻binに候補を分散させ、``--selection-summary`` で選択分布を書き出せます。
 
 .. code-block:: bash
 
@@ -56,6 +58,9 @@ MC 学習用では、Ising reference core がある graph だけを使うため
      --require-reference-core \
      --skip-errors \
      --skip-missing-mc-calibration \
+     --energy-sample-per-bin 50000 \
+     --energy-sample-stratify-particle \
+     --selection-summary /path/to/graphs/hetero/summaries/hetero_selection_summary.json \
      --shard-size 50000 \
      -o /path/to/graphs/hetero/hetero.h5
 

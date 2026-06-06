@@ -5,8 +5,11 @@ import unittest
 from pathlib import Path
 
 from talesd_gnn_reconstruction.cli import (
+    HeteroSelectionCandidate,
+    _hetero_selection_summary,
     _interleaved_selected_entries,
     _merge_candidate_reservoirs,
+    _select_balanced_hetero_candidates,
     _selected_path_chunks,
     _validate_mc_calibration_dates,
 )
@@ -100,6 +103,97 @@ class ExportDateFilterTest(unittest.TestCase):
         )
 
         self.assertEqual(chunks, [["a.dst"], ["b.dst", "d.dst"]])
+
+    def test_balanced_hetero_selection_round_robins_source_groups(self) -> None:
+        candidates = []
+        for source_group in ("DAT000001", "DAT000002", "DAT000003"):
+            for index in range(6):
+                candidates.append(
+                    HeteroSelectionCandidate(
+                        bin_key=("proton", 170),
+                        unique_id=f"{source_group}:{index}",
+                        source_path=f"/mc/{source_group}_gea_trg_001.dst.gz",
+                        source_group=source_group,
+                        source_index=index,
+                        log10_energy=17.0,
+                        particle="proton",
+                        zenith_deg=30.0,
+                        azimuth_deg=30.0 * index,
+                        core_x_km=float(index),
+                        core_y_km=0.0,
+                        date=191004,
+                        time_value=100000 + index,
+                        sort_key=0.01 * index,
+                        balance_key=(str(index % 2), str(index % 3), str(index), "0", "0"),
+                    )
+                )
+
+        selected = _select_balanced_hetero_candidates(candidates, per_bin=6, seed=123)
+        counts: dict[str, int] = {}
+        for candidate in selected:
+            counts[candidate.source_group] = counts.get(candidate.source_group, 0) + 1
+        self.assertEqual(set(counts), {"DAT000001", "DAT000002", "DAT000003"})
+        self.assertTrue(all(count == 2 for count in counts.values()))
+
+    def test_balanced_hetero_selection_interleaves_cells_within_source(self) -> None:
+        candidates = []
+        for index in range(8):
+            cell = ("cell-a",) if index < 4 else ("cell-b",)
+            candidates.append(
+                HeteroSelectionCandidate(
+                    bin_key=("iron", 180),
+                    unique_id=f"DAT000010:{index}",
+                    source_path="/mc/DAT000010_gea_trg_001.dst.gz",
+                    source_group="DAT000010",
+                    source_index=index,
+                    log10_energy=18.0,
+                    particle="iron",
+                    zenith_deg=45.0,
+                    azimuth_deg=45.0 * index,
+                    core_x_km=0.1 * index,
+                    core_y_km=-0.1 * index,
+                    date=191004,
+                    time_value=120000 + index,
+                    sort_key=0.01 * index,
+                    balance_key=cell,
+                )
+            )
+
+        selected = _select_balanced_hetero_candidates(candidates, per_bin=4, seed=456)
+        cells = {candidate.balance_key for candidate in selected}
+        self.assertEqual(cells, {("cell-a",), ("cell-b",)})
+
+    def test_hetero_selection_summary_includes_time_and_dynamic_bins(self) -> None:
+        candidates = [
+            HeteroSelectionCandidate(
+                bin_key=("proton", 175),
+                unique_id="DAT000001:0",
+                source_path="/mc/DAT000001_gea_trg_001.dst.gz",
+                source_group="DAT000001",
+                source_index=0,
+                log10_energy=17.5,
+                particle="proton",
+                zenith_deg=12.0,
+                azimuth_deg=45.0,
+                core_x_km=0.4,
+                core_y_km=-0.6,
+                date=260606,
+                time_value=123000,
+                sort_key=0.1,
+                balance_key=("1", "1", "0", "-1", "12"),
+            )
+        ]
+        summary = _hetero_selection_summary(
+            candidates,
+            bin_width=0.1,
+            zenith_bin_width_deg=10.0,
+            azimuth_bin_width_deg=30.0,
+            core_bin_width_km=0.5,
+            time_bin_width_sec=3600,
+        )
+        self.assertEqual(summary["events"], 1)
+        self.assertEqual(summary["by_time_bin"]["12"], 1)
+        self.assertEqual(summary["by_zenith_bin"]["1"], 1)
 
 
 if __name__ == "__main__":
