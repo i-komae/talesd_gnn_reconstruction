@@ -4,6 +4,8 @@ Heterogeneous DST 再構成 workflow
 heterogeneous path は、学習後に DST を直接再構成するための現行経路です。
 graph の物理的な定義は ``dstio.tale.graph`` に寄せ、この repository では HDF5 学習 cache、model input 変換、学習、診断、直接推論を扱います。
 
+最初の図は workflow 図です。HDF5 学習 cache 経路と DST 直接再構成経路を分けて示します。
+
 .. figure:: ../fig/hetero_dst_workflow.svg
    :alt: DSTからheterogeneous graph、学習cache、直接再構成へ進むTALE-SD workflow。
    :width: 100%
@@ -12,6 +14,17 @@ graph の物理的な定義は ``dstio.tale.graph`` に寄せ、この repositor
 
 Graph schema
 ------------
+
+次の図は graph schema 図です。1つの ``GraphEvent`` の中で使う node type と edge type を graph として示します。
+detector node と pulse node は別の node type です。
+detector waveform は detector node 側に 1 回だけ保存し、pulse node は ``pulse_detector_index`` と ``pulse_bounds`` で waveform の一部を参照します。
+Ising-kept pulse candidate と Ising-rejected pulse candidate はどちらも ML graph に残します。
+
+.. figure:: ../fig/hetero_graph_schema.svg
+   :alt: detector node、pulse node、typed edge、detector waveform、pulse bounds、Ising kept/rejected pulse candidates を示す heterogeneous TALE-SD graph schema。
+   :width: 100%
+
+   detector-detector、pulse-pulse、detector-pulse relation は別 edge type です。Ising rejected pulse candidate は hard drop せず、annotation付きで入力に残します。
 
 ``dstio.tale.graph.iter_graphs`` は
 ``tale_sd_hetero_ising_pulse_detector_graph_v1`` の ``GraphEvent`` を返します。

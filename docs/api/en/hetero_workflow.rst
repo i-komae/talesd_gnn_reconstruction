@@ -4,6 +4,8 @@ Heterogeneous DST Reconstruction Workflow
 The heterogeneous path is the current path for training a model that can later reconstruct DST files directly.
 It uses ``dstio.tale.graph`` for graph semantics and keeps the GNN repository responsible for HDF5 training cache, model input conversion, training, diagnostics, and direct inference.
 
+The first figure is the workflow diagram. It separates the HDF5 training-cache path from the direct DST reconstruction path.
+
 .. figure:: ../fig/hetero_dst_workflow.svg
    :alt: Heterogeneous TALE-SD graph workflow from DST to training cache and direct reconstruction.
    :width: 100%
@@ -12,6 +14,17 @@ It uses ``dstio.tale.graph`` for graph semantics and keeps the GNN repository re
 
 Graph schema
 ------------
+
+The second figure is the graph schema diagram. It shows the actual node and edge types used inside one ``GraphEvent``.
+Detector nodes and pulse nodes are different node types.
+Detector waveforms are stored on detector nodes once, and pulse nodes refer to a waveform segment using ``pulse_detector_index`` and ``pulse_bounds``.
+Both Ising-kept and Ising-rejected pulse candidates remain present in the ML graph.
+
+.. figure:: ../fig/hetero_graph_schema.svg
+   :alt: Heterogeneous TALE-SD graph schema with detector nodes, pulse nodes, typed edges, detector waveforms, pulse bounds, and Ising kept/rejected pulse candidates.
+   :width: 100%
+
+   Detector-detector, pulse-pulse, and detector-pulse relations are separate edge types. Ising-rejected pulse candidates are annotated and kept as input rather than hard-dropped.
 
 ``dstio.tale.graph.iter_graphs`` emits ``GraphEvent`` objects using
 ``tale_sd_hetero_ising_pulse_detector_graph_v1``.
