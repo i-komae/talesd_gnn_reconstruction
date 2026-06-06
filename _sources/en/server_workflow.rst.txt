@@ -21,6 +21,12 @@ Standard submitters
      - ``scripts/submit_server_mass_only_training.sh``
    * - Reco+mass
      - ``scripts/submit_server_reco_mass_training.sh``
+   * - Heterogeneous reco+mass
+     - ``scripts/submit_server_hetero_training.sh``
+   * - Heterogeneous reco+mass, quality-only auxiliary head
+     - ``scripts/submit_server_hetero_reco_mass_quality_training.sh``
+   * - Heterogeneous reco+mass, predicted-error-only auxiliary head
+     - ``scripts/submit_server_hetero_reco_mass_error_training.sh``
 
 Reconstruction quality-only example
 -----------------------------------
@@ -45,6 +51,31 @@ Mass focal example
    MASS_RANKING_WEIGHT=0.5 \
    scripts/submit_server_mass_only_training.sh
 
+Heterogeneous reco+mass comparison
+----------------------------------
+
+These submitters keep the task as reco+mass and keep ``LOSS_MODE=physics``.
+The first run enables the quality head only.
+The second run enables the predicted-error head only.
+They should be compared as separate runs on the same heterogeneous graph input.
+
+.. code-block:: bash
+
+   GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
+   PARTITION=v100-al9_long \
+   RUN_NAME=hetero_reco_mass_quality_v100_128epoch_$(date +%Y%m%d_%H%M%S) \
+   scripts/submit_server_hetero_reco_mass_quality_training.sh
+
+.. code-block:: bash
+
+   GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
+   PARTITION=v100-al9_long \
+   RUN_NAME=hetero_reco_mass_error_v100_128epoch_$(date +%Y%m%d_%H%M%S) \
+   scripts/submit_server_hetero_reco_mass_error_training.sh
+
+``scripts/submit_server_hetero_training.sh`` sets ``FEATURE_IMPORTANCE=0`` by default.
+Set ``FEATURE_IMPORTANCE=1`` only when post-training group ablation should run in the same Slurm job.
+
 Rules
 -----
 
@@ -54,4 +85,3 @@ Rules
 - Do not use B6000 for production until the CUDA/cuBLAS preflight passes.
 - Check driver/CUDA compatibility before using A100.
 - Create local graph cache after Slurm allocation. Do not rsync before submission.
-

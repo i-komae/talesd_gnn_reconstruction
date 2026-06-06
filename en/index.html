@@ -49,11 +49,20 @@
 <li class="toctree-l1"><a class="reference internal" href="../ja/index.html">日本語 API 利用ガイド</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="../ja/cli.html">CLI API</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#heterogeneous-hdf5-graph-export">Heterogeneous HDF5 graph export</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#heterogeneous-training">Heterogeneous training</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../ja/hetero_workflow.html">Heterogeneous DST 再構成 workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../ja/code_map.html">コード読解マップ</a><ul>
@@ -158,6 +167,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#submitter">標準submitter</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#quality-only">再構成quality-onlyの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#mass-focal">mass focalの例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#heterogeneous-reco-mass">heterogeneous reco+mass比較</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#id2">注意点</a></li>
 </ul>
 </li>
@@ -169,11 +179,20 @@
 <li class="toctree-l1 current"><a class="current reference internal" href="#">English API Usage Guide</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="cli.html">CLI API</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#heterogeneous-hdf5-graph-export">Heterogeneous HDF5 graph export</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#heterogeneous-training">Heterogeneous training</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_workflow.html">Heterogeneous DST Reconstruction Workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="code_map.html">Code Reading Map</a><ul>
@@ -237,6 +256,7 @@
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#standard-submitters">Standard submitters</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#mass-focal-example">Mass focal example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#heterogeneous-reco-mass-comparison">Heterogeneous reco+mass comparison</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#rules">Rules</a></li>
 </ul>
 </li>
@@ -295,11 +315,20 @@ It also maps each workflow to the source files that implement it, so the generat
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="cli.html">CLI API</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli.html#heterogeneous-hdf5-graph-export">Heterogeneous HDF5 graph export</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cli.html#training">Training</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli.html#heterogeneous-training">Heterogeneous training</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cli.html#prediction">Prediction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="hetero_workflow.html">Heterogeneous DST Reconstruction Workflow</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="code_map.html">Code Reading Map</a><ul>
@@ -341,6 +370,7 @@ It also maps each workflow to the source files that implement it, so the generat
 <li class="toctree-l2"><a class="reference internal" href="server_workflow.html#standard-submitters">Standard submitters</a></li>
 <li class="toctree-l2"><a class="reference internal" href="server_workflow.html#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
 <li class="toctree-l2"><a class="reference internal" href="server_workflow.html#mass-focal-example">Mass focal example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="server_workflow.html#heterogeneous-reco-mass-comparison">Heterogeneous reco+mass comparison</a></li>
 <li class="toctree-l2"><a class="reference internal" href="server_workflow.html#rules">Rules</a></li>
 </ul>
 </li>

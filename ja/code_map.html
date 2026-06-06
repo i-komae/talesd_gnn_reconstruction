@@ -49,8 +49,11 @@
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">日本語 API 利用ガイド</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="cli.html">CLI API</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#heterogeneous-hdf5-graph-export">Heterogeneous HDF5 graph export</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#heterogeneous-training">Heterogeneous training</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
@@ -158,6 +161,7 @@
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#submitter">標準submitter</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#quality-only">再構成quality-onlyの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#mass-focal">mass focalの例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#heterogeneous-reco-mass">heterogeneous reco+mass比較</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#id2">注意点</a></li>
 </ul>
 </li>
@@ -169,8 +173,11 @@
 <li class="toctree-l1"><a class="reference internal" href="../en/index.html">English API Usage Guide</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="../en/cli.html">CLI API</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#heterogeneous-hdf5-graph-export">Heterogeneous HDF5 graph export</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#heterogeneous-training">Heterogeneous training</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#visualization">Visualization</a></li>
@@ -237,6 +244,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#standard-submitters">Standard submitters</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#mass-focal-example">Mass focal example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#heterogeneous-reco-mass-comparison">Heterogeneous reco+mass comparison</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#rules">Rules</a></li>
 </ul>
 </li>
@@ -295,12 +303,19 @@
 <h2>読む順番<a class="headerlink" href="#id2" title="Link to this heading"></a></h2>
 <p>本番 run の理解では、以下の順番で読むと処理の依存関係が見えます。</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>DST
-  -&gt; talesd-gnn export
-    -&gt; HDF5 graph
+  -&gt; talesd-gnn export / export-hetero
+    -&gt; HDF5 graph cache
       -&gt; H5GraphDataset
         -&gt; train_model
           -&gt; PhysicsTaleSdGNN
             -&gt; loss / metrics / diagnostics
+
+DST
+  -&gt; talesd-gnn reconstruct-dst
+    -&gt; dstio.tale.graph.iter_graphs
+      -&gt; hetero model input
+        -&gt; heterogeneous checkpoint
+          -&gt; reconstruction CSV
 </pre></div>
 </div>
 <p>各段階の役割は次の通りです。</p>
@@ -348,6 +363,22 @@
 <td><p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/feature_analysis.py</span></code></p></td>
 <td><p>入力特徴量分布と post-hoc group ablation を作る。</p></td>
 </tr>
+<tr class="row-odd"><td><p>heterogeneous HDF5 書き込み</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/hetero_graph_io.py</span></code></p></td>
+<td><p>detector/pulse node、型付き edge、detector waveform、schema attrs を書く。</p></td>
+</tr>
+<tr class="row-even"><td><p>heterogeneous 変換</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/hetero_data.py</span></code></p></td>
+<td><p>保存済み <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> sample を tensor または PyG <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> に変換する。</p></td>
+</tr>
+<tr class="row-odd"><td><p>heterogeneous model / training</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/hetero_model.py</span></code>, <code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/hetero_training.py</span></code></p></td>
+<td><p>detector/pulse heterogeneous modelを学習し、互換checkpointを書く。</p></td>
+</tr>
+<tr class="row-even"><td><p>DST 直接再構成</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/hetero_predict.py</span></code></p></td>
+<td><p>HDF5を書かず、<code class="docutils literal notranslate"><span class="pre">dstio.tale.graph</span></code> と heterogeneous checkpoint でDSTをCSVへ再構成する。</p></td>
+</tr>
 </tbody>
 </table>
 </section>
@@ -371,19 +402,31 @@
 <td><p><code class="docutils literal notranslate"><span class="pre">_cmd_train</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">train.train_model</span></code> を呼び、学習と評価を行う。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">predict</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">export-hetero</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">_cmd_export_hetero</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.iter_graphs</span></code> を呼び、heterogeneous HDF5 cacheを書く。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">train-hetero</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">_cmd_train_hetero</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">hetero_training.train_hetero_model</span></code> を呼ぶ。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">reconstruct-dst</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">_cmd_reconstruct_dst</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">hetero_predict.reconstruct_dst</span></code> を呼び、DSTを直接CSVへ流す。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">predict</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">_cmd_predict</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">predict.predict_graphs</span></code> を呼び、checkpoint から CSV を作る。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">input-distributions</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">input-distributions</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">_cmd_input_distributions</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">feature_analysis.save_input_distributions</span></code> を呼ぶ。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">feature-importance</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">feature-importance</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">_cmd_feature_importance</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">feature_analysis.save_feature_group_importance</span></code> を呼ぶ。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">visualize</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">visualize</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">_cmd_visualize</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">visualize.visualize_graphs</span></code> を呼び、event display を作る。</p></td>
 </tr>

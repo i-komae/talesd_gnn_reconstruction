@@ -37,6 +37,36 @@ Implementation path:
        -> event_graph.py
        -> graph_io.py
 
+Heterogeneous HDF5 graph export
+-------------------------------
+
+``export-hetero`` writes the newer ``dstio.tale.graph`` schema.
+The output is a training/cache format, not a mandatory step for one-pass reconstruction.
+The graph contains detector nodes, pulse nodes, detector-level waveforms, and typed relations.
+For MC training, ``--require-reference-core`` is the normal setting because core-relative pulse features are valid only when the Ising reference core exists.
+
+.. code-block:: bash
+
+   .venv/bin/talesd-gnn export-hetero \
+     --input-dir /path/to/mc_dst \
+     --kind mc \
+     --const-dst /path/to/talesdconst_pass2.dst \
+     --mc-calib-dir /path/to/tale_mc_calib \
+     --require-reference-core \
+     --skip-errors \
+     --skip-missing-mc-calibration \
+     --shard-size 50000 \
+     -o /path/to/graphs/hetero/hetero.h5
+
+Implementation path:
+
+.. code-block:: text
+
+   talesd-gnn export-hetero
+     -> cli._cmd_export_hetero()
+       -> dstio.tale.graph.iter_graphs()
+       -> hetero_graph_io.py
+
 Training
 --------
 
@@ -70,6 +100,40 @@ Implementation path:
          -> loss functions in train.py
          -> metrics.py / diagnostics.py
 
+Heterogeneous training
+----------------------
+
+``train-hetero`` trains from HDF5 files written by ``export-hetero``.
+The shared conversion layer is ``hetero_data.sample_to_hetero_data``.
+If PyTorch Geometric is available, the same sample can also be represented as ``HeteroData``; the production training code keeps the tensor conversion explicit.
+
+.. code-block:: bash
+
+   .venv/bin/talesd-gnn train-hetero \
+     --graphs /path/to/graphs/hetero \
+     -o /path/to/output/checkpoints/hetero_reco_mass.pt \
+     --epochs 128 \
+     --batch-size 128 \
+     --waveform-encoder cnn-gru \
+     --loss-mode physics \
+     --mass-classification \
+     --split-mode source-stratified \
+     --val-fraction 0.05 \
+     --test-fraction 0.10 \
+     --diagnostics
+
+Implementation path:
+
+.. code-block:: text
+
+   talesd-gnn train-hetero
+     -> cli._cmd_train_hetero()
+       -> hetero_training.train_hetero_model()
+         -> hetero_graph_io.H5HeteroGraphDataset
+         -> hetero_data.sample_to_hetero_data()
+         -> hetero_model.MinimalHeteroTaleSdGNN
+         -> metrics.py / diagnostics.py
+
 Prediction
 ----------
 
@@ -82,6 +146,36 @@ For MC graphs, truth columns can be included unless ``--no-truth`` is used. For 
      --graphs /path/to/graphs/data_graphs.h5 \
      --checkpoint /path/to/checkpoints/reconstruction.pt \
      -o /path/to/predictions.csv
+
+Direct DST reconstruction
+-------------------------
+
+``reconstruct-dst`` uses a heterogeneous checkpoint and reads DST files directly.
+It does not require an intermediate HDF5 graph.
+It uses the same ``dstio.tale.graph`` schema and the same checkpoint scalers as ``train-hetero``.
+
+.. code-block:: bash
+
+   .venv/bin/talesd-gnn reconstruct-dst \
+     --input-dir /path/to/data_or_mc_dst \
+     --kind auto \
+     --checkpoint /path/to/checkpoints/hetero_reco_mass.pt \
+     --const-dst /path/to/talesdconst_pass2.dst \
+     --mc-calib-dir /path/to/tale_mc_calib \
+     --batch-size 256 \
+     --skip-errors \
+     -o /path/to/reconstruction.csv
+
+Implementation path:
+
+.. code-block:: text
+
+   talesd-gnn reconstruct-dst
+     -> cli._cmd_reconstruct_dst()
+       -> hetero_predict.reconstruct_dst()
+         -> dstio.tale.graph.iter_graphs()
+         -> hetero_data.sample_to_hetero_data()
+         -> hetero_model.MinimalHeteroTaleSdGNN
 
 Input distributions
 -------------------
@@ -111,6 +205,11 @@ This is post-hoc analysis, not retraining. It replaces input groups such as node
      -o /path/to/feature_importance \
      --split validation \
      --max-graphs 50000
+
+For heterogeneous checkpoints, the same command dispatches to
+``hetero_feature_analysis.save_hetero_feature_group_importance``.
+The default groups separate detector signal, detector geometry, detector readout context,
+pulse timing/signal, Ising pulse annotations, detector waveforms, and typed edge groups.
 
 Visualization
 -------------

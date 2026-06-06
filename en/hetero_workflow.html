@@ -6,7 +6,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CLI API &mdash; TALE-SD GNN Reconstruction 0.1.0 documentation</title>
+  <title>Heterogeneous DST Reconstruction Workflow &mdash; TALE-SD GNN Reconstruction 0.1.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
       <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
       <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=751d28fa" />
@@ -22,7 +22,7 @@
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="検索" href="../search.html" />
     <link rel="next" title="Code Reading Map" href="code_map.html" />
-    <link rel="prev" title="English API Usage Guide" href="index.html" /> 
+    <link rel="prev" title="CLI API" href="cli.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -57,6 +57,12 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../ja/hetero_workflow.html">Heterogeneous DST 再構成 workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../ja/code_map.html">コード読解マップ</a><ul>
@@ -171,16 +177,22 @@
 <p class="caption" role="heading"><span class="caption-text">English</span></p>
 <ul class="current">
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">English API Usage Guide</a><ul class="current">
-<li class="toctree-l2 current"><a class="current reference internal" href="#">CLI API</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="#hdf5-graph-export">HDF5 graph export</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#heterogeneous-hdf5-graph-export">Heterogeneous HDF5 graph export</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#training">Training</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#heterogeneous-training">Heterogeneous training</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#prediction">Prediction</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#direct-dst-reconstruction">Direct DST reconstruction</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#input-distributions">Input distributions</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#feature-importance">Feature importance</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#visualization">Visualization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli.html">CLI API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#heterogeneous-hdf5-graph-export">Heterogeneous HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#heterogeneous-training">Heterogeneous training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Heterogeneous DST Reconstruction Workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#direct-reconstruction-path">Direct reconstruction path</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="code_map.html">Code Reading Map</a><ul>
@@ -285,9 +297,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="index.html">English API Usage Guide</a></li>
-      <li class="breadcrumb-item active">CLI API</li>
+      <li class="breadcrumb-item active">Heterogeneous DST Reconstruction Workflow</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../_sources/en/cli.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../_sources/en/hetero_workflow.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -295,200 +307,84 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="cli-api">
-<h1>CLI API<a class="headerlink" href="#cli-api" title="Link to this heading"></a></h1>
-<p>The command-line entry point is <code class="docutils literal notranslate"><span class="pre">talesd-gnn</span></code>. In <code class="docutils literal notranslate"><span class="pre">pyproject.toml</span></code> it maps to
-<code class="docutils literal notranslate"><span class="pre">talesd_gnn_reconstruction.cli:main</span></code>.
-The implementation map is described in <a class="reference internal" href="code_map.html"><span class="doc">Code Reading Map</span></a>.
-This page focuses on the commands, their inputs, their outputs, and how the outputs are used later.</p>
-<section id="hdf5-graph-export">
-<h2>HDF5 graph export<a class="headerlink" href="#hdf5-graph-export" title="Link to this heading"></a></h2>
-<p>Read DST files and write GNN-ready HDF5 graph shards.
-The exported HDF5 files are the common input for training, input-distribution checks, visualization, and feature importance.
-For MC training, they contain targets and particle labels.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--input-dir<span class="w"> </span>/path/to/mc_dst<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--kind<span class="w"> </span>mc<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--const-dst<span class="w"> </span>/path/to/talesdconst_pass2.dst<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--mc-calib-dir<span class="w"> </span>/path/to/tale_mc_calib<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--energy-sample-per-bin<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--energy-bin-width<span class="w"> </span><span class="m">0</span>.1<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--workers<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--shard-size<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--skip-errors<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-o<span class="w"> </span>/path/to/graphs/flat50000/flat50000.h5
-</pre></div>
-</div>
-<p>Implementation path:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>talesd-gnn export
-  -&gt; cli._cmd_export()
-    -&gt; dst_reader.py
-    -&gt; event_graph.py
-    -&gt; graph_io.py
-</pre></div>
-</div>
+  <section id="heterogeneous-dst-reconstruction-workflow">
+<h1>Heterogeneous DST Reconstruction Workflow<a class="headerlink" href="#heterogeneous-dst-reconstruction-workflow" title="Link to this heading"></a></h1>
+<p>The heterogeneous path is the current path for training a model that can later reconstruct DST files directly.
+It uses <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph</span></code> for graph semantics and keeps the GNN repository responsible for HDF5 training cache, model input conversion, training, diagnostics, and direct inference.</p>
+<p>The first figure is the workflow diagram. It separates the HDF5 training-cache path from the direct DST reconstruction path.</p>
+<figure class="align-default" id="id1">
+<a class="reference internal image-reference" href="../_images/hetero_dst_workflow.svg"><img alt="Heterogeneous TALE-SD graph workflow from DST to training cache and direct reconstruction." src="../_images/hetero_dst_workflow.svg" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Detector waveforms are stored once on detector nodes. Pulse nodes keep <code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code> and <code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code> so the model can relate each pulse to the detector waveform without duplicating that waveform.</span><a class="headerlink" href="#id1" title="Link to this image"></a></p>
+</figcaption>
+</figure>
+<section id="graph-schema">
+<h2>Graph schema<a class="headerlink" href="#graph-schema" title="Link to this heading"></a></h2>
+<p>The second figure is the graph schema diagram. It shows the actual node and edge types used inside one <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code>.
+Detector nodes and pulse nodes are different node types.
+Detector waveforms are stored on detector nodes once, and pulse nodes refer to a waveform segment using <code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code> and <code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code>.
+Both Ising-kept and Ising-rejected pulse candidates remain present in the ML graph.</p>
+<figure class="align-default" id="id2">
+<a class="reference internal image-reference" href="../_images/hetero_graph_schema.svg"><img alt="Heterogeneous TALE-SD graph schema with detector nodes, pulse nodes, typed edges, detector waveforms, pulse bounds, and Ising kept/rejected pulse candidates." src="../_images/hetero_graph_schema.svg" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Detector-detector, pulse-pulse, and detector-pulse relations are separate edge types. Ising-rejected pulse candidates are annotated and kept as input rather than hard-dropped.</span><a class="headerlink" href="#id2" title="Link to this image"></a></p>
+</figcaption>
+</figure>
+<p><code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.iter_graphs</span></code> emits <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> objects using
+<code class="docutils literal notranslate"><span class="pre">tale_sd_hetero_ising_pulse_detector_graph_v1</span></code>.
+The default ML graph policy is <code class="docutils literal notranslate"><span class="pre">node_policy=&quot;all_candidates_with_ising&quot;</span></code>:
+Ising-rejected pulse candidates remain in the graph and carry Ising annotation features.
+Use <code class="docutils literal notranslate"><span class="pre">node_policy=&quot;ising_kept&quot;</span></code> only for reconstruction-cleaned subsets.</p>
+<p>The node and relation types are:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Type</p></th>
+<th class="head"><p>Stored fields</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Detector node</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">detector_features</span></code>, <code class="docutils literal notranslate"><span class="pre">detector_context_features</span></code>, <code class="docutils literal notranslate"><span class="pre">detector_positions_km</span></code>, <code class="docutils literal notranslate"><span class="pre">detector_lids</span></code>, <code class="docutils literal notranslate"><span class="pre">detector_waveforms</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Pulse node</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">pulse_features</span></code>, <code class="docutils literal notranslate"><span class="pre">pulse_positions_km</span></code>, <code class="docutils literal notranslate"><span class="pre">pulse_lids</span></code>, <code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code>, <code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>Relations</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">pulse__interacts__pulse</span></code>, <code class="docutils literal notranslate"><span class="pre">detector__near__detector</span></code>, <code class="docutils literal notranslate"><span class="pre">detector__observes__pulse</span></code></p></td>
+</tr>
+</tbody>
+</table>
+<p>The core-relative pulse features are valid only when the Ising reference core exists.
+Training export should therefore use <code class="docutils literal notranslate"><span class="pre">--require-reference-core</span></code> unless a separate diagnostic dataset is being made.</p>
 </section>
-<section id="heterogeneous-hdf5-graph-export">
-<h2>Heterogeneous HDF5 graph export<a class="headerlink" href="#heterogeneous-hdf5-graph-export" title="Link to this heading"></a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">export-hetero</span></code> writes the newer <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph</span></code> schema.
-The output is a training/cache format, not a mandatory step for one-pass reconstruction.
-The graph contains detector nodes, pulse nodes, detector-level waveforms, and typed relations.
-For MC training, <code class="docutils literal notranslate"><span class="pre">--require-reference-core</span></code> is the normal setting because core-relative pulse features are valid only when the Ising reference core exists.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>export-hetero<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--input-dir<span class="w"> </span>/path/to/mc_dst<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--kind<span class="w"> </span>mc<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--const-dst<span class="w"> </span>/path/to/talesdconst_pass2.dst<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--mc-calib-dir<span class="w"> </span>/path/to/tale_mc_calib<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--require-reference-core<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--skip-errors<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--skip-missing-mc-calibration<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--shard-size<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-o<span class="w"> </span>/path/to/graphs/hetero/hetero.h5
+<section id="training-cache-path">
+<h2>Training cache path<a class="headerlink" href="#training-cache-path" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">export-hetero</span></code> writes HDF5 graph shards for repeated training reads.
+This HDF5 is a cache, not the final reconstruction interface.</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>DST
+  -&gt; talesd-gnn export-hetero
+    -&gt; dstio.tale.graph.iter_graphs
+      -&gt; hetero_graph_io.py
+        -&gt; heterogeneous HDF5 shards
 </pre></div>
 </div>
-<p>Implementation path:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>talesd-gnn export-hetero
-  -&gt; cli._cmd_export_hetero()
-    -&gt; dstio.tale.graph.iter_graphs()
-    -&gt; hetero_graph_io.py
-</pre></div>
-</div>
+<p><code class="docutils literal notranslate"><span class="pre">train-hetero</span></code> then reads those shards, fits scalers on the training split, trains the heterogeneous model, and saves a checkpoint.</p>
 </section>
-<section id="training">
-<h2>Training<a class="headerlink" href="#training" title="Link to this heading"></a></h2>
-<p>Train from existing HDF5 graphs.
-<code class="docutils literal notranslate"><span class="pre">train</span></code> does not modify the graph files. It writes split-dependent scalers, checkpoints, metrics, and diagnostics under the run output.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>train<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/flat50000<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-o<span class="w"> </span>/path/to/output/checkpoints/reconstruction.pt<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--training-task<span class="w"> </span>reconstruction<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--model-architecture<span class="w"> </span>physics<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--waveform-encoder<span class="w"> </span>cnn-gru<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--loss-mode<span class="w"> </span>physics<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--quality-prediction<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--split-mode<span class="w"> </span>source-stratified<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--val-fraction<span class="w"> </span><span class="m">0</span>.05<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--test-fraction<span class="w"> </span><span class="m">0</span>.10<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--epochs<span class="w"> </span><span class="m">128</span>
+<section id="direct-reconstruction-path">
+<h2>Direct reconstruction path<a class="headerlink" href="#direct-reconstruction-path" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">reconstruct-dst</span></code> reads DST files directly and uses the same graph schema and checkpoint scalers as <code class="docutils literal notranslate"><span class="pre">train-hetero</span></code>.
+It does not write an intermediate HDF5 graph.</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>DST
+  -&gt; talesd-gnn reconstruct-dst
+    -&gt; dstio.tale.graph.iter_graphs
+      -&gt; hetero_data.sample_to_hetero_data
+        -&gt; MinimalHeteroTaleSdGNN checkpoint
+          -&gt; reconstruction CSV
 </pre></div>
 </div>
-<p>Implementation path:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>talesd-gnn train
-  -&gt; cli._cmd_train()
-    -&gt; train.train_model()
-      -&gt; dataset.H5GraphDataset
-      -&gt; model.PhysicsTaleSdGNN
-      -&gt; loss functions in train.py
-      -&gt; metrics.py / diagnostics.py
-</pre></div>
-</div>
-</section>
-<section id="heterogeneous-training">
-<h2>Heterogeneous training<a class="headerlink" href="#heterogeneous-training" title="Link to this heading"></a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">train-hetero</span></code> trains from HDF5 files written by <code class="docutils literal notranslate"><span class="pre">export-hetero</span></code>.
-The shared conversion layer is <code class="docutils literal notranslate"><span class="pre">hetero_data.sample_to_hetero_data</span></code>.
-If PyTorch Geometric is available, the same sample can also be represented as <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code>; the production training code keeps the tensor conversion explicit.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>train-hetero<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/hetero<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-o<span class="w"> </span>/path/to/output/checkpoints/hetero_reco_mass.pt<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--epochs<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--batch-size<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--waveform-encoder<span class="w"> </span>cnn-gru<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--loss-mode<span class="w"> </span>physics<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--mass-classification<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--split-mode<span class="w"> </span>source-stratified<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--val-fraction<span class="w"> </span><span class="m">0</span>.05<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--test-fraction<span class="w"> </span><span class="m">0</span>.10<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--diagnostics
-</pre></div>
-</div>
-<p>Implementation path:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>talesd-gnn train-hetero
-  -&gt; cli._cmd_train_hetero()
-    -&gt; hetero_training.train_hetero_model()
-      -&gt; hetero_graph_io.H5HeteroGraphDataset
-      -&gt; hetero_data.sample_to_hetero_data()
-      -&gt; hetero_model.MinimalHeteroTaleSdGNN
-      -&gt; metrics.py / diagnostics.py
-</pre></div>
-</div>
-</section>
-<section id="prediction">
-<h2>Prediction<a class="headerlink" href="#prediction" title="Link to this heading"></a></h2>
-<p>Create a CSV from a trained checkpoint.
-For MC graphs, truth columns can be included unless <code class="docutils literal notranslate"><span class="pre">--no-truth</span></code> is used. For data graphs, prediction-only output is the normal use.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>predict<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/data_graphs.h5<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--checkpoint<span class="w"> </span>/path/to/checkpoints/reconstruction.pt<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-o<span class="w"> </span>/path/to/predictions.csv
-</pre></div>
-</div>
-</section>
-<section id="direct-dst-reconstruction">
-<h2>Direct DST reconstruction<a class="headerlink" href="#direct-dst-reconstruction" title="Link to this heading"></a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">reconstruct-dst</span></code> uses a heterogeneous checkpoint and reads DST files directly.
-It does not require an intermediate HDF5 graph.
-It uses the same <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph</span></code> schema and the same checkpoint scalers as <code class="docutils literal notranslate"><span class="pre">train-hetero</span></code>.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>reconstruct-dst<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--input-dir<span class="w"> </span>/path/to/data_or_mc_dst<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--kind<span class="w"> </span>auto<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--checkpoint<span class="w"> </span>/path/to/checkpoints/hetero_reco_mass.pt<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--const-dst<span class="w"> </span>/path/to/talesdconst_pass2.dst<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--mc-calib-dir<span class="w"> </span>/path/to/tale_mc_calib<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--batch-size<span class="w"> </span><span class="m">256</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--skip-errors<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-o<span class="w"> </span>/path/to/reconstruction.csv
-</pre></div>
-</div>
-<p>Implementation path:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>talesd-gnn reconstruct-dst
-  -&gt; cli._cmd_reconstruct_dst()
-    -&gt; hetero_predict.reconstruct_dst()
-      -&gt; dstio.tale.graph.iter_graphs()
-      -&gt; hetero_data.sample_to_hetero_data()
-      -&gt; hetero_model.MinimalHeteroTaleSdGNN
-</pre></div>
-</div>
-</section>
-<section id="input-distributions">
-<h2>Input distributions<a class="headerlink" href="#input-distributions" title="Link to this heading"></a></h2>
-<p>Save input feature distributions as PDF and JSON.
-This is a dataset diagnostic used to inspect HDF5 content and split-dependent biases.
-It is normally tied to the HDF5 dataset, not to a particular training run.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>input-distributions<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/flat50000<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-o<span class="w"> </span>/path/to/input_distributions<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--max-graphs<span class="w"> </span><span class="m">100000</span>
-</pre></div>
-</div>
-</section>
-<section id="feature-importance">
-<h2>Feature importance<a class="headerlink" href="#feature-importance" title="Link to this heading"></a></h2>
-<p>Run feature group ablation against a trained checkpoint.
-This is post-hoc analysis, not retraining. It replaces input groups such as node, edge, or waveform features and measures metric degradation.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>feature-importance<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/flat50000<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--checkpoint<span class="w"> </span>/path/to/checkpoints/reconstruction.pt<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-o<span class="w"> </span>/path/to/feature_importance<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--split<span class="w"> </span>validation<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--max-graphs<span class="w"> </span><span class="m">50000</span>
-</pre></div>
-</div>
-<p>For heterogeneous checkpoints, the same command dispatches to
-<code class="docutils literal notranslate"><span class="pre">hetero_feature_analysis.save_hetero_feature_group_importance</span></code>.
-The default groups separate detector signal, detector geometry, detector readout context,
-pulse timing/signal, Ising pulse annotations, detector waveforms, and typed edge groups.</p>
-</section>
-<section id="visualization">
-<h2>Visualization<a class="headerlink" href="#visualization" title="Link to this heading"></a></h2>
-<p>Render an HDF5 graph as an event-display PDF.
-Use this to inspect graph schema, node/edge construction, and waveform-mask behavior visually.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>visualize<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/flat50000<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--index<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-o<span class="w"> </span>/path/to/graph_000000.pdf
-</pre></div>
-</div>
+<p>The direct path is the intended path for large one-pass data and MC reconstruction after the heterogeneous model has been trained.</p>
 </section>
 </section>
 
@@ -496,7 +392,7 @@ Use this to inspect graph schema, node/edge construction, and waveform-mask beha
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="index.html" class="btn btn-neutral float-left" title="English API Usage Guide" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="cli.html" class="btn btn-neutral float-left" title="CLI API" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="code_map.html" class="btn btn-neutral float-right" title="Code Reading Map" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

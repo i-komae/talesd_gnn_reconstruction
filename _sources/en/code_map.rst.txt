@@ -11,12 +11,19 @@ For production runs, read the code in this order:
 .. code-block:: text
 
    DST
-     -> talesd-gnn export
-       -> HDF5 graph
+     -> talesd-gnn export / export-hetero
+       -> HDF5 graph cache
          -> H5GraphDataset
            -> train_model
              -> PhysicsTaleSdGNN
                -> loss / metrics / diagnostics
+
+   DST
+     -> talesd-gnn reconstruct-dst
+       -> dstio.tale.graph.iter_graphs
+         -> hetero model input
+           -> heterogeneous checkpoint
+             -> reconstruction CSV
 
 .. list-table::
    :header-rows: 1
@@ -51,6 +58,18 @@ For production runs, read the code in this order:
    * - Feature analysis
      - ``src/talesd_gnn_reconstruction/feature_analysis.py``
      - Writes input distributions and post-hoc group-ablation importance.
+   * - Heterogeneous HDF5 writing
+     - ``src/talesd_gnn_reconstruction/hetero_graph_io.py``
+     - Writes detector/pulse node stores, typed edges, detector waveforms, and schema attributes.
+   * - Heterogeneous conversion
+     - ``src/talesd_gnn_reconstruction/hetero_data.py``
+     - Converts stored ``GraphEvent`` samples into tensors or PyG ``HeteroData``.
+   * - Heterogeneous model/training
+     - ``src/talesd_gnn_reconstruction/hetero_model.py``, ``src/talesd_gnn_reconstruction/hetero_training.py``
+     - Trains the detector/pulse heterogeneous model and writes compatible checkpoints.
+   * - Direct DST reconstruction
+     - ``src/talesd_gnn_reconstruction/hetero_predict.py``
+     - Streams DST through ``dstio.tale.graph`` and a heterogeneous checkpoint without writing HDF5.
 
 CLI as a thin wrapper
 ---------------------
@@ -69,6 +88,15 @@ The ``talesd-gnn`` commands are mostly wrappers. ``cli.py`` parses arguments and
    * - ``train``
      - ``_cmd_train``
      - Calls ``train.train_model``.
+   * - ``export-hetero``
+     - ``_cmd_export_hetero``
+     - Calls ``dstio.tale.graph.iter_graphs`` and writes the heterogeneous HDF5 cache.
+   * - ``train-hetero``
+     - ``_cmd_train_hetero``
+     - Calls ``hetero_training.train_hetero_model``.
+   * - ``reconstruct-dst``
+     - ``_cmd_reconstruct_dst``
+     - Calls ``hetero_predict.reconstruct_dst`` and streams DST directly to CSV.
    * - ``predict``
      - ``_cmd_predict``
      - Calls ``predict.predict_graphs``.

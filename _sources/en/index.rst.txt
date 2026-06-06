@@ -10,6 +10,7 @@ For code study, start with :doc:`code_map`, then read :doc:`code_walkthrough` fo
    :maxdepth: 2
 
    cli
+   hetero_workflow
    code_map
    code_walkthrough
    python_api

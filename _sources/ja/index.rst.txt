@@ -12,6 +12,7 @@
    :maxdepth: 2
 
    cli
+   hetero_workflow
    code_map
    code_walkthrough
    python_api

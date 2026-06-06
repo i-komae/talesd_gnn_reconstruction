@@ -12,12 +12,19 @@
 .. code-block:: text
 
    DST
-     -> talesd-gnn export
-       -> HDF5 graph
+     -> talesd-gnn export / export-hetero
+       -> HDF5 graph cache
          -> H5GraphDataset
            -> train_model
              -> PhysicsTaleSdGNN
                -> loss / metrics / diagnostics
+
+   DST
+     -> talesd-gnn reconstruct-dst
+       -> dstio.tale.graph.iter_graphs
+         -> hetero model input
+           -> heterogeneous checkpoint
+             -> reconstruction CSV
 
 各段階の役割は次の通りです。
 
@@ -54,6 +61,18 @@
    * - 入力分布と重要度
      - ``src/talesd_gnn_reconstruction/feature_analysis.py``
      - 入力特徴量分布と post-hoc group ablation を作る。
+   * - heterogeneous HDF5 書き込み
+     - ``src/talesd_gnn_reconstruction/hetero_graph_io.py``
+     - detector/pulse node、型付き edge、detector waveform、schema attrs を書く。
+   * - heterogeneous 変換
+     - ``src/talesd_gnn_reconstruction/hetero_data.py``
+     - 保存済み ``GraphEvent`` sample を tensor または PyG ``HeteroData`` に変換する。
+   * - heterogeneous model / training
+     - ``src/talesd_gnn_reconstruction/hetero_model.py``, ``src/talesd_gnn_reconstruction/hetero_training.py``
+     - detector/pulse heterogeneous modelを学習し、互換checkpointを書く。
+   * - DST 直接再構成
+     - ``src/talesd_gnn_reconstruction/hetero_predict.py``
+     - HDF5を書かず、``dstio.tale.graph`` と heterogeneous checkpoint でDSTをCSVへ再構成する。
 
 CLI は薄い wrapper
 ------------------
@@ -73,6 +92,15 @@ CLI は薄い wrapper
    * - ``train``
      - ``_cmd_train``
      - ``train.train_model`` を呼び、学習と評価を行う。
+   * - ``export-hetero``
+     - ``_cmd_export_hetero``
+     - ``dstio.tale.graph.iter_graphs`` を呼び、heterogeneous HDF5 cacheを書く。
+   * - ``train-hetero``
+     - ``_cmd_train_hetero``
+     - ``hetero_training.train_hetero_model`` を呼ぶ。
+   * - ``reconstruct-dst``
+     - ``_cmd_reconstruct_dst``
+     - ``hetero_predict.reconstruct_dst`` を呼び、DSTを直接CSVへ流す。
    * - ``predict``
      - ``_cmd_predict``
      - ``predict.predict_graphs`` を呼び、checkpoint から CSV を作る。

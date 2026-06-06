@@ -49,58 +49,103 @@
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">日本語 API 利用ガイド</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="cli.html">CLI API</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#heterogeneous-hdf5-graph-export">Heterogeneous HDF5 graph export</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#heterogeneous-training">Heterogeneous training</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html">コード読解マップ</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#id2">読む順番</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#cli-wrapper">CLI は薄い wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#dataset">Dataset 読み込み</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#split-scaler">Split と scaler</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#model">Model の入力と出力</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#loss">Loss と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#server-submitter">Server submitter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#diagnostics">Diagnostics と後処理</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html">コード詳細 walkthrough</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id1">全体の入口</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id1">このページの読み方</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#gnn">GNNを読むための基礎</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id2">基本用語</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#loss">非線形関数とloss関数</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#gnn-message-passing">GNNの中心: message passing</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id3">全体の入口</a></li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#hdf5-graph-export">HDF5 graph export</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#dst">DST読み込み</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#graphevent">GraphEvent作成</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#graphevent-build-graph-event">実コード抜粋: <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> と <code class="docutils literal notranslate"><span class="pre">build_graph_event</span></code></a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#node">node特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#accepted-pulsenode">実コード抜粋: accepted pulseをnodeへ展開する部分</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#edge">edge特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#edgeedge">実コード抜粋: edge候補とedge特徴量</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#hdf5">HDF5書き込み</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#energy-flat-samplingshard">energy-flat samplingとshard</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#dataset">学習用dataset読み込み</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#h5graphdataset-dataset-py-181"><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:181</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#h5graphdataset-dataset-py-202"><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:202</span></code></a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#getitem-sample"><code class="docutils literal notranslate"><span class="pre">__getitem__</span></code> が返すsample</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#hdf51-event">実コード抜粋: HDF5から1 eventを読む部分</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#scaler-fitting">Scaler fitting</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#collate">collate</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#graph-samplemini-batch">実コード抜粋: graph sampleをmini-batchへ連結する部分</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#train-val-test-split">train/val/test split</a></li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id2">学習本体</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id4">学習本体</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#train-model-split-scaler">実コード抜粋: <code class="docutils literal notranslate"><span class="pre">train_model</span></code> の入口からsplit/scalerまで</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#epoch-loop">epoch loop</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#epochtrain-loop">実コード抜粋: 1 epoch内のtrain loop</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#checkpoint">checkpoint</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id3">モデル構造</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id4">入力</a></li>
-<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#node-pulse-waveform">node / pulse / waveform</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id5">モデル構造</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id6">GNNとして何を近似しているか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id7">物理量との対応</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id8">入力</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#node-encoder">node encoder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#waveform-encoder">waveform encoder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#detector-embedding">detector embedding</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#time-edge-encoder">time-edge encoder</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#message-passing">message passing</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#readouthead">readoutとhead</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#physicstalesdgnn-forward">実コード抜粋: <code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN.forward</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id9">GNNがしていること、していないこと</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#loss">loss</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id10">数学関数の補足</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#smoothl1">SmoothL1</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#sigmoid-logit-bcewithlogits">sigmoid, logit, BCEWithLogits</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id11">loss</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#reconstruction-loss">reconstruction loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#energy-bias-loss">energy bias loss</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#quality-loss">quality loss</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#mass-loss">mass loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id12">実コード抜粋: loss関数</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#total-loss">total loss</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id5">診断と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id13">診断と評価</a></li>
 <li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#feature-importance">入力分布とfeature importance</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id6">入力分布</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id14">入力分布</a></li>
 <li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#feature-group">feature group重要度</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#feature-group-ablation">実コード抜粋: feature group ablation</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id7">変更したい時に読む場所</a></li>
-<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id8">コードを読む推奨順</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id15">変更したい時に読む場所</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id16">コードを読む推奨順</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="python_api.html">Python API</a><ul>
@@ -116,6 +161,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#submitter">標準submitter</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#quality-only">再構成quality-onlyの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#mass-focal">mass focalの例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#heterogeneous-reco-mass">heterogeneous reco+mass比較</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#id2">注意点</a></li>
 </ul>
 </li>
@@ -127,11 +173,26 @@
 <li class="toctree-l1"><a class="reference internal" href="../en/index.html">English API Usage Guide</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="../en/cli.html">CLI API</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#heterogeneous-hdf5-graph-export">Heterogeneous HDF5 graph export</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#heterogeneous-training">Heterogeneous training</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/code_map.html">Code Reading Map</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#recommended-reading-order">Recommended reading order</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#cli-as-a-thin-wrapper">CLI as a thin wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#dataset-loading">Dataset loading</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#split-and-scalers">Split and scalers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#model-inputs-and-outputs">Model inputs and outputs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#losses-and-evaluation">Losses and evaluation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#server-submitters">Server submitters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#diagnostics-and-post-processing">Diagnostics and post-processing</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../en/code_walkthrough.html">Code walkthrough</a><ul>
@@ -151,8 +212,19 @@
 <li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#checkpoint-contents">Checkpoint contents</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#model">Model</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#loss-functions">Loss functions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#model">Model</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#what-the-gnn-approximates">What the GNN approximates</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#relation-to-shower-reconstruction">Relation to shower reconstruction</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#node-waveform-and-edge-encoders">Node, waveform, and edge encoders</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#message-passing">Message passing</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#readout-and-heads">Readout and heads</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#implementation-excerpts">Implementation excerpts</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#loss-functions">Loss functions</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#mathematical-helpers">Mathematical helpers</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#diagnostics">Diagnostics</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#input-distributions-and-feature-importance">Input distributions and feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#where-to-read-when-changing-code">Where to read when changing code</a></li>
@@ -172,6 +244,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#standard-submitters">Standard submitters</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#mass-focal-example">Mass focal example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#heterogeneous-reco-mass-comparison">Heterogeneous reco+mass comparison</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#rules">Rules</a></li>
 </ul>
 </li>
@@ -249,6 +322,15 @@
 <tr class="row-even"><td><p>reco+mass</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">scripts/submit_server_reco_mass_training.sh</span></code></p></td>
 </tr>
+<tr class="row-odd"><td><p>heterogeneous reco+mass</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">scripts/submit_server_hetero_training.sh</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>heterogeneous reco+mass, quality-only補助head</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">scripts/submit_server_hetero_reco_mass_quality_training.sh</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>heterogeneous reco+mass, predicted-error-only補助head</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">scripts/submit_server_hetero_reco_mass_error_training.sh</span></code></p></td>
+</tr>
 </tbody>
 </table>
 </section>
@@ -272,6 +354,27 @@ scripts/submit_server_waveform_full_training.sh
 scripts/submit_server_mass_only_training.sh
 </pre></div>
 </div>
+</section>
+<section id="heterogeneous-reco-mass">
+<h2>heterogeneous reco+mass比較<a class="headerlink" href="#heterogeneous-reco-mass" title="Link to this heading"></a></h2>
+<p>これらの submitter は task を reco+mass のままにし、<code class="docutils literal notranslate"><span class="pre">LOSS_MODE=physics</span></code> を保ちます。
+1本目は quality head だけを有効にします。
+2本目は predicted-error head だけを有効にします。
+同じ heterogeneous graph input に対する別 run として比較します。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">GRAPH_INPUT</span><span class="o">=</span>/dicos_ui_home/ikomae/work/gnn/graphs/&lt;hetero_graph_dir&gt;<span class="w"> </span><span class="se">\</span>
+<span class="nv">PARTITION</span><span class="o">=</span>v100-al9_long<span class="w"> </span><span class="se">\</span>
+<span class="nv">RUN_NAME</span><span class="o">=</span>hetero_reco_mass_quality_v100_128epoch_<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d_%H%M%S<span class="k">)</span><span class="w"> </span><span class="se">\</span>
+scripts/submit_server_hetero_reco_mass_quality_training.sh
+</pre></div>
+</div>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">GRAPH_INPUT</span><span class="o">=</span>/dicos_ui_home/ikomae/work/gnn/graphs/&lt;hetero_graph_dir&gt;<span class="w"> </span><span class="se">\</span>
+<span class="nv">PARTITION</span><span class="o">=</span>v100-al9_long<span class="w"> </span><span class="se">\</span>
+<span class="nv">RUN_NAME</span><span class="o">=</span>hetero_reco_mass_error_v100_128epoch_<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d_%H%M%S<span class="k">)</span><span class="w"> </span><span class="se">\</span>
+scripts/submit_server_hetero_reco_mass_error_training.sh
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">scripts/submit_server_hetero_training.sh</span></code> は既定では <code class="docutils literal notranslate"><span class="pre">FEATURE_IMPORTANCE=0</span></code> です。
+同じSlurm job内で学習後のgroup ablationも走らせる場合だけ <code class="docutils literal notranslate"><span class="pre">FEATURE_IMPORTANCE=1</span></code> を指定します。</p>
 </section>
 <section id="id2">
 <h2>注意点<a class="headerlink" href="#id2" title="Link to this heading"></a></h2>
