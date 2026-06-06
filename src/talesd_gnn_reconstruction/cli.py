@@ -1062,6 +1062,46 @@ def _write_graph_iterable(
     return written_total, written_paths
 
 
+def _write_hetero_graph_iterable(
+    graphs: Iterable[Any],
+    args: argparse.Namespace,
+    config: dict[str, Any],
+) -> tuple[int, list[Path]]:
+    from .hetero_graph_io import create_hetero_graph_file, write_hetero_graph
+
+    written_total = 0
+    written_in_file = 0
+    shard_index = 0
+    shard_size = max(int(args.shard_size), 0)
+    written_paths: list[Path] = []
+    handle = None
+    if shard_size == 0:
+        output_path = Path(args.output).expanduser()
+        handle = create_hetero_graph_file(output_path, config=config)
+        written_paths.append(output_path)
+
+    try:
+        total = len(graphs) if hasattr(graphs, "__len__") else None
+        for graph in _progress(graphs, desc="write hetero graphs", total=total):
+            if handle is None or (shard_size > 0 and written_in_file >= shard_size):
+                if handle is not None:
+                    handle.close()
+                    shard_index += 1
+                output_path = _shard_path(args.output, shard_index) if shard_size > 0 else Path(args.output).expanduser()
+                shard_config = dict(config)
+                shard_config["shard_index"] = shard_index if shard_size > 0 else None
+                handle = create_hetero_graph_file(output_path, config=shard_config)
+                written_paths.append(output_path)
+                written_in_file = 0
+            write_hetero_graph(handle, written_in_file, graph)
+            written_total += 1
+            written_in_file += 1
+    finally:
+        if handle is not None:
+            handle.close()
+    return written_total, written_paths
+
+
 def _energy_bin_index(log10_energy: float, bin_width: float) -> int:
     return int(math.floor(float(log10_energy) / float(bin_width)))
 
@@ -1447,6 +1487,52 @@ def _cmd_export(args: argparse.Namespace) -> None:
         print(f"energy-flat bins: {len(config.get('energy_graph_seen_by_bin', config.get('energy_seen_by_bin', {})))}")
 
 
+def _cmd_export_hetero(args: argparse.Namespace) -> None:
+    import dstio.tale.graph as tale_graph
+
+    inputs = _resolve_input_args(args.input, args.input_list, args.input_dir)
+    const_dst = Path(args.const_dst).expanduser() if args.const_dst else None
+    mc_calib_dir = Path(args.mc_calib_dir).expanduser() if args.mc_calib_dir else None
+    min_event_date = None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date)
+    config = {
+        **_paths_for_config(inputs),
+        "input_list": [str(Path(path).expanduser()) for path in args.input_list],
+        "input_dir": [str(Path(path).expanduser()) for path in args.input_dir],
+        "kind": args.kind,
+        "const_dst": str(const_dst) if const_dst is not None else None,
+        "mc_calib_dir": str(mc_calib_dir) if mc_calib_dir is not None else None,
+        "max_events": args.max_events,
+        "graph_definition": "tale_sd_hetero_ising_pulse_detector_graph_v1",
+        "cleaning": args.cleaning,
+        "node_policy": args.node_policy,
+        "require_reference_core": bool(args.require_reference_core),
+        "shard_size": args.shard_size,
+        "open_retries": args.open_retries,
+        "open_retry_delay": args.open_retry_delay,
+        "min_event_date": min_event_date,
+        "skip_missing_mc_calibration": bool(args.skip_missing_mc_calibration),
+    }
+    graphs = tale_graph.iter_graphs(
+        inputs,
+        kind=args.kind,
+        cleaning=args.cleaning,
+        node_policy=args.node_policy,
+        const_dst=const_dst,
+        mc_calib_dir=mc_calib_dir,
+        max_events=args.max_events,
+        require_trigger_mode0=not args.keep_non_mode0,
+        require_reference_core=bool(args.require_reference_core),
+        skip_errors=bool(args.skip_errors),
+        skip_missing_mc_calibration=bool(args.skip_missing_mc_calibration),
+        min_event_date=min_event_date,
+        open_retries=args.open_retries,
+        open_retry_delay=args.open_retry_delay,
+    )
+    written_total, written_paths = _write_hetero_graph_iterable(graphs, args, config)
+    targets = ", ".join(str(path) for path in written_paths) if written_paths else str(args.output)
+    print(f"wrote {written_total} hetero graphs to {targets}")
+
+
 def _cmd_train(args: argparse.Namespace) -> None:
     from .train import train_model
 
@@ -1552,6 +1638,65 @@ def _cmd_train(args: argparse.Namespace) -> None:
                 print(f"{split_name} diagnostics: {split_info['directory']}")
             elif split_info.get("pdfs"):
                 print(f"{split_name} diagnostics: {', '.join(split_info['pdfs'])}")
+
+
+def _cmd_train_hetero(args: argparse.Namespace) -> None:
+    from .hetero_training import train_hetero_model
+
+    graphs = _resolve_graph_args(args.graphs, args.graphs_list)
+    result = train_hetero_model(
+        graphs_path=graphs,
+        output_path=args.output,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.lr,
+        weight_decay=args.weight_decay,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.layers,
+        dropout=args.dropout,
+        waveform_encoder=args.waveform_encoder,
+        waveform_embedding_dim=args.waveform_embedding_dim,
+        waveform_length=args.waveform_length,
+        mass_classification=args.mass_classification,
+        mass_loss_weight=args.mass_loss_weight,
+        val_fraction=args.val_fraction,
+        test_fraction=args.test_fraction,
+        source_val_fraction=args.source_val_fraction,
+        source_test_fraction=args.source_test_fraction,
+        split_mode=args.split_mode,
+        seed=args.seed,
+        device=args.device,
+        show_progress=not args.no_progress,
+    )
+    print(f"checkpoint: {result['checkpoint']}")
+    if result.get("history"):
+        last = result["history"][-1]
+        print(f"last epoch: {last['epoch']} train_loss={last['train_loss']:.6g} val_loss={last['val_loss']:.6g}")
+
+
+def _cmd_reconstruct_dst(args: argparse.Namespace) -> None:
+    from .hetero_predict import reconstruct_dst
+
+    inputs = _resolve_input_args(args.input, args.input_list, args.input_dir)
+    result = reconstruct_dst(
+        inputs,
+        checkpoint_path=args.checkpoint,
+        output_csv=args.output,
+        kind=args.kind,
+        const_dst=args.const_dst,
+        mc_calib_dir=args.mc_calib_dir,
+        batch_size=args.batch_size,
+        max_events=args.max_events,
+        device=args.device,
+        cleaning=args.cleaning,
+        node_policy=args.node_policy,
+        require_reference_core=not args.allow_missing_reference_core,
+        skip_errors=args.skip_errors,
+        skip_missing_mc_calibration=args.skip_missing_mc_calibration,
+        open_retries=args.open_retries,
+        open_retry_delay=args.open_retry_delay,
+    )
+    print(f"wrote {result['events_written']} DST reconstructions to {result['output']}")
 
 
 def _cmd_predict(args: argparse.Namespace) -> None:
@@ -1662,6 +1807,36 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--skip-errors", action="store_true", help="読めないDSTを警告してスキップする")
     export.set_defaults(func=_cmd_export)
 
+    export_hetero = sub.add_parser("export-hetero", help="dstio.tale.graph schema のheterogeneous HDF5グラフへ変換")
+    export_hetero.add_argument("input", nargs="*", help="入力DSTファイル。複数指定可")
+    export_hetero.add_argument("--input-list", action="append", default=[], help="入力DSTパスを1行1ファイルで書いたリスト。複数指定可")
+    export_hetero.add_argument("--input-dir", action="append", default=[], help="入力DSTディレクトリ。*.dst.gzを再帰的に読む。複数指定可")
+    export_hetero.add_argument("-o", "--output", required=True, help="出力heterogeneous HDF5グラフファイル")
+    export_hetero.add_argument("--kind", choices=["auto", "data", "mc"], default="auto", help="入力DSTの種類")
+    export_hetero.add_argument("--const-dst", default=None, help="TALE-SD detector geometry DST。省略時はdstio TALE config/envを使う")
+    export_hetero.add_argument(
+        "--mc-calib-dir",
+        default=None,
+        help="MC rusdrawをtalesdcalibev相当へ変換するための校正ディレクトリ。省略時はdstio TALE config/envを使う",
+    )
+    export_hetero.add_argument("--max-events", type=int, default=None, help="読み込む最大イベント数")
+    export_hetero.add_argument("--min-event-date", type=int, default=None, help="YYMMDD形式。この日付より前のeventをDST読み込み時に除外する")
+    export_hetero.add_argument("--cleaning", choices=["ising", "none"], default="ising", help="dstio.tale.graph cleaning mode")
+    export_hetero.add_argument(
+        "--node-policy",
+        choices=["all_candidates_with_ising", "all_candidates", "ising_kept"],
+        default="all_candidates_with_ising",
+        help="pulse node policy。ML graphではall_candidates_with_isingを基本にする",
+    )
+    export_hetero.add_argument("--require-reference-core", action="store_true", help="Ising reference core があるgraphだけを書き出す")
+    export_hetero.add_argument("--shard-size", type=int, default=0, help="NグラフごとにHDF5を分割する。0なら分割しない")
+    export_hetero.add_argument("--open-retries", type=int, default=3, help="DST open失敗時の再試行回数")
+    export_hetero.add_argument("--open-retry-delay", type=float, default=1.0, help="DST open再試行の待ち時間。試行ごとに線形に増やす")
+    export_hetero.add_argument("--keep-non-mode0", action="store_true", help="trgMode != 0 も残す")
+    export_hetero.add_argument("--skip-errors", action="store_true", help="読めないDSTを警告してスキップする")
+    export_hetero.add_argument("--skip-missing-mc-calibration", action="store_true", help="MC calibration が見つからないeventをスキップする")
+    export_hetero.set_defaults(func=_cmd_export_hetero)
+
     train = sub.add_parser("train", help="MC truth付きグラフでGNNを学習")
     train.add_argument("--graphs", nargs="*", default=[], help="exportで作成したMC HDF5グラフ。shard、shard base、またはHDF5ディレクトリを指定可")
     train.add_argument("-o", "--output", required=True, help="出力checkpoint .pt")
@@ -1769,6 +1944,76 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--diagnostic-energy-bin-width", type=float, default=0.1, help="診断図で使うtrue log10(E/eV) bin幅")
     train.add_argument("--diagnostic-min-bin-count", type=int, default=20, help="energy bin別診断に使う最小event数")
     train.set_defaults(func=_cmd_train)
+
+    train_hetero = sub.add_parser(
+        "train-hetero",
+        help="new dstio.tale.graph heterogeneous HDF5で最小hetero GNNを学習する",
+    )
+    train_hetero.add_argument("--graphs", nargs="*", default=[], help="export-heteroで作成したhetero HDF5 graph")
+    train_hetero.add_argument("--graphs-list", action="append", default=[], help="hetero HDF5 shard path list")
+    train_hetero.add_argument("-o", "--output", required=True, help="出力checkpoint .pt")
+    train_hetero.add_argument("--epochs", type=int, default=1)
+    train_hetero.add_argument("--batch-size", type=int, default=8)
+    train_hetero.add_argument("--lr", type=float, default=1.0e-3)
+    train_hetero.add_argument("--weight-decay", type=float, default=0.0)
+    train_hetero.add_argument("--hidden-dim", type=int, default=128)
+    train_hetero.add_argument("--layers", type=int, default=2)
+    train_hetero.add_argument("--dropout", type=float, default=0.05)
+    train_hetero.add_argument("--waveform-encoder", choices=["none", "cnn", "cnn-gru", "transformer"], default="cnn")
+    train_hetero.add_argument("--waveform-embedding-dim", type=int, default=64)
+    train_hetero.add_argument(
+        "--waveform-length",
+        type=int,
+        default=None,
+        help="detector waveform の固定入力長。未指定ならtrain split内の最大長を使う",
+    )
+    train_hetero.add_argument("--mass-classification", action="store_true")
+    train_hetero.add_argument("--mass-loss-weight", type=float, default=0.1)
+    train_hetero.add_argument("--val-fraction", type=float, default=0.1)
+    train_hetero.add_argument("--test-fraction", type=float, default=0.1)
+    train_hetero.add_argument("--source-val-fraction", type=float, default=0.10)
+    train_hetero.add_argument("--source-test-fraction", type=float, default=0.20)
+    train_hetero.add_argument(
+        "--split-mode",
+        choices=["event", "source-path", "source-stratified"],
+        default="event",
+    )
+    train_hetero.add_argument("--seed", type=int, default=12345)
+    train_hetero.add_argument("--device", default="auto")
+    train_hetero.add_argument("--no-progress", action="store_true")
+    train_hetero.set_defaults(func=_cmd_train_hetero)
+
+    reconstruct_dst = sub.add_parser(
+        "reconstruct-dst",
+        help="hetero checkpointを使いDSTをH5なしで直接再構成する",
+    )
+    reconstruct_dst.add_argument("input", nargs="*", help="入力DSTファイル")
+    reconstruct_dst.add_argument("--input-list", action="append", default=[], help="DST path list")
+    reconstruct_dst.add_argument("--input-dir", action="append", default=[], help="DSTを再帰検索するdirectory")
+    reconstruct_dst.add_argument("--checkpoint", required=True, help="train-heteroで作成したhetero checkpoint")
+    reconstruct_dst.add_argument("-o", "--output", required=True, help="出力CSV")
+    reconstruct_dst.add_argument("--kind", choices=["auto", "data", "mc"], default="auto")
+    reconstruct_dst.add_argument("--const-dst", default=None)
+    reconstruct_dst.add_argument("--mc-calib-dir", default=None)
+    reconstruct_dst.add_argument("--batch-size", type=int, default=128)
+    reconstruct_dst.add_argument("--max-events", type=int, default=None)
+    reconstruct_dst.add_argument("--device", default="auto")
+    reconstruct_dst.add_argument("--cleaning", choices=["ising"], default="ising")
+    reconstruct_dst.add_argument(
+        "--node-policy",
+        choices=["all_candidates_with_ising", "ising_kept"],
+        default="all_candidates_with_ising",
+    )
+    reconstruct_dst.add_argument(
+        "--allow-missing-reference-core",
+        action="store_true",
+        help="reference coreが無いgraphも推論する。通常は使わない",
+    )
+    reconstruct_dst.add_argument("--skip-errors", action="store_true")
+    reconstruct_dst.add_argument("--skip-missing-mc-calibration", action="store_true")
+    reconstruct_dst.add_argument("--open-retries", type=int, default=1)
+    reconstruct_dst.add_argument("--open-retry-delay", type=float, default=0.0)
+    reconstruct_dst.set_defaults(func=_cmd_reconstruct_dst)
 
     predict = sub.add_parser("predict", help="学習済みGNNで再構成結果CSVを作成")
     predict.add_argument("--graphs", nargs="*", default=[], help="exportで作成したHDF5グラフ。shardを複数指定可")

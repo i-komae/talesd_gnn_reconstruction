@@ -1,0 +1,220 @@
+from __future__ import annotations
+
+import csv
+from collections.abc import Iterable, Mapping, Sequence
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from .hetero_data import sample_to_hetero_data
+from .hetero_graph_io import graph_event_to_sample
+from .hetero_model import MinimalHeteroTaleSdGNN
+from .metrics import direction_columns_for_dim, direction_to_angles, normalize_directions
+from .train import resolve_device
+
+
+def _load_checkpoint(path: str | Path, device: str) -> dict[str, Any]:
+    import torch
+
+    return torch.load(Path(path).expanduser(), map_location=device, weights_only=False)
+
+
+def _build_hetero_model(config: Mapping[str, Any]) -> MinimalHeteroTaleSdGNN:
+    model_config = dict(config)
+    architecture = str(model_config.pop("architecture", ""))
+    if architecture != "minimal_hetero":
+        raise ValueError(f"checkpoint architecture {architecture!r} is not supported for hetero DST reconstruction")
+    return MinimalHeteroTaleSdGNN(**model_config)
+
+
+def _inverse_target(pred_scaled: np.ndarray, scalers: Mapping[str, Any]) -> np.ndarray:
+    scaler = scalers.get("target")
+    if scaler is None:
+        return pred_scaled
+    mean = np.asarray(scaler["mean"] if isinstance(scaler, Mapping) else scaler.mean, dtype=np.float32)
+    std = np.asarray(scaler["std"] if isinstance(scaler, Mapping) else scaler.std, dtype=np.float32)
+    if pred_scaled.shape[1] != mean.shape[0]:
+        raise ValueError(f"target scaler dimension mismatch: pred_dim={pred_scaled.shape[1]} scaler_dim={mean.shape[0]}")
+    return pred_scaled * std[None, :] + mean[None, :]
+
+
+def _batched(items: Iterable[Any], batch_size: int) -> Iterable[list[Any]]:
+    batch = []
+    for item in items:
+        batch.append(item)
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def _prediction_rows(
+    samples: Sequence[Mapping[str, Any]],
+    pred_all: np.ndarray,
+    *,
+    target_dim: int,
+    classification_dim: int,
+) -> list[dict[str, Any]]:
+    pred = None
+    zenith = None
+    azimuth = None
+    if target_dim >= 6:
+        pred = pred_all[:, :target_dim].copy()
+        direction = normalize_directions(pred)
+        zenith, azimuth = direction_to_angles(direction)
+        pred[:, direction_columns_for_dim(target_dim)] = direction
+    p_iron = None
+    if classification_dim > 0:
+        logits = pred_all[:, target_dim]
+        p_iron = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
+
+    rows = []
+    for index, sample in enumerate(samples):
+        metadata = dict(sample.get("metadata", {}))
+        row: dict[str, Any] = {
+            "event_id": sample.get("event_id", metadata.get("event_id", "")),
+            "source_path": metadata.get("source_path", ""),
+            "source_index": metadata.get("source_index", -1),
+            "date": metadata.get("date", ""),
+            "time": metadata.get("time", ""),
+            "usec": metadata.get("usec", ""),
+            "n_detector_nodes": int(sample["detector_features"].shape[0]),
+            "n_pulse_nodes": int(sample["pulse_features"].shape[0]),
+            "node_policy": metadata.get("node_policy", ""),
+            "cleaning_mode": metadata.get("cleaning_mode", ""),
+            "has_reference_core": metadata.get("has_reference_core", ""),
+            "core_relative_features_valid": metadata.get("core_relative_features_valid", ""),
+        }
+        if pred is not None and zenith is not None and azimuth is not None:
+            row.update(
+                {
+                    "log10_energy_eV": float(pred[index, 0]),
+                    "energy_eV": float(10.0 ** pred[index, 0]),
+                    "core_x_km": float(pred[index, 1]),
+                    "core_y_km": float(pred[index, 2]),
+                    "zenith_deg": float(zenith[index]),
+                    "azimuth_deg": float(azimuth[index]),
+                }
+            )
+        if p_iron is not None:
+            row.update(
+                {
+                    "p_iron": float(p_iron[index]),
+                    "p_proton": float(1.0 - p_iron[index]),
+                    "pred_parttype": 5626 if p_iron[index] >= 0.5 else 14,
+                }
+            )
+        rows.append(row)
+    return rows
+
+
+def reconstruct_dst(
+    inputs: str | Path | Sequence[str | Path],
+    checkpoint_path: str | Path,
+    output_csv: str | Path,
+    *,
+    kind: str = "auto",
+    const_dst: str | Path | None = None,
+    mc_calib_dir: str | Path | None = None,
+    batch_size: int = 128,
+    max_events: int | None = None,
+    device: str = "auto",
+    cleaning: str = "ising",
+    node_policy: str = "all_candidates_with_ising",
+    require_reference_core: bool = True,
+    skip_errors: bool = False,
+    skip_missing_mc_calibration: bool = False,
+    open_retries: int = 1,
+    open_retry_delay: float = 0.0,
+) -> dict[str, Any]:
+    import torch
+    from torch_geometric.loader import DataLoader
+
+    import dstio.tale.graph as tale_graph
+
+    device = resolve_device(device)
+    checkpoint = _load_checkpoint(checkpoint_path, device)
+    scalers = dict(checkpoint.get("hetero_scalers", {}))
+    model_config = dict(checkpoint["model_config"])
+    model = _build_hetero_model(model_config).to(device)
+    model.load_state_dict(checkpoint["model_state"])
+    model.eval()
+    target_dim = int(model_config.get("target_dim", 6))
+    classification_dim = int(model_config.get("classification_dim", 0))
+    waveform_length = int(model_config["waveform_length"])
+
+    input_list = [Path(inputs).expanduser()] if isinstance(inputs, (str, Path)) else [Path(item).expanduser() for item in inputs]
+    graphs = tale_graph.iter_graphs(
+        input_list,
+        kind=kind,
+        cleaning=cleaning,
+        node_policy=node_policy,
+        const_dst=Path(const_dst).expanduser() if const_dst is not None else None,
+        mc_calib_dir=Path(mc_calib_dir).expanduser() if mc_calib_dir is not None else None,
+        max_events=max_events,
+        require_reference_core=bool(require_reference_core),
+        skip_errors=bool(skip_errors),
+        skip_missing_mc_calibration=bool(skip_missing_mc_calibration),
+        open_retries=open_retries,
+        open_retry_delay=open_retry_delay,
+    )
+
+    fieldnames = [
+        "event_id",
+        "source_path",
+        "source_index",
+        "date",
+        "time",
+        "usec",
+        "n_detector_nodes",
+        "n_pulse_nodes",
+        "node_policy",
+        "cleaning_mode",
+        "has_reference_core",
+        "core_relative_features_valid",
+    ]
+    if target_dim >= 6:
+        fieldnames.extend(["log10_energy_eV", "energy_eV", "core_x_km", "core_y_km", "zenith_deg", "azimuth_deg"])
+    if classification_dim > 0:
+        fieldnames.extend(["p_iron", "p_proton", "pred_parttype"])
+
+    output = Path(output_csv).expanduser()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    with output.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        with torch.no_grad():
+            for graph_batch in _batched(graphs, max(int(batch_size), 1)):
+                samples = [graph_event_to_sample(graph) for graph in graph_batch]
+                data_list = [
+                    sample_to_hetero_data(
+                        sample,
+                        scalers=scalers,
+                        waveform_length=waveform_length,
+                    )
+                    for sample in samples
+                ]
+                loader = DataLoader(data_list, batch_size=len(data_list))
+                batch = next(iter(loader)).to(device)
+                pred_all = model(batch).detach().cpu().numpy()
+                if target_dim >= 6:
+                    pred_all[:, :target_dim] = _inverse_target(pred_all[:, :target_dim], scalers)
+                for row in _prediction_rows(
+                    samples,
+                    pred_all,
+                    target_dim=target_dim,
+                    classification_dim=classification_dim,
+                ):
+                    writer.writerow(row)
+                    written += 1
+    return {
+        "output": str(output),
+        "events_written": written,
+        "inputs": [str(path) for path in input_list],
+        "require_reference_core": bool(require_reference_core),
+        "node_policy": node_policy,
+        "cleaning": cleaning,
+    }
