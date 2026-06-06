@@ -1780,10 +1780,21 @@ def _cmd_input_distributions(args: argparse.Namespace) -> None:
 
 
 def _cmd_feature_importance(args: argparse.Namespace) -> None:
-    from .feature_analysis import save_feature_group_importance
+    import torch
 
     graphs = _resolve_graph_args(args.graphs, args.graphs_list)
-    summary = save_feature_group_importance(
+    checkpoint = torch.load(Path(args.checkpoint).expanduser(), map_location="cpu", weights_only=False)
+    model_config = dict(checkpoint.get("model_config", {}))
+    runtime = dict(checkpoint.get("runtime", {}))
+    if runtime.get("graph_format") == "hetero" or model_config.get("architecture") == "minimal_hetero":
+        from .hetero_feature_analysis import save_hetero_feature_group_importance
+
+        save = save_hetero_feature_group_importance
+    else:
+        from .feature_analysis import save_feature_group_importance
+
+        save = save_feature_group_importance
+    summary = save(
         graphs,
         args.checkpoint,
         args.output,

@@ -67,16 +67,15 @@ DEVICE="${DEVICE:-cpu}"
 DIAGNOSTICS="${DIAGNOSTICS:-1}"
 DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT:-1000}"
 FEATURE_IMPORTANCE="${FEATURE_IMPORTANCE:-0}"
+FEATURE_IMPORTANCE_SPLIT="${FEATURE_IMPORTANCE_SPLIT:-validation}"
+FEATURE_IMPORTANCE_MAX_GRAPHS="${FEATURE_IMPORTANCE_MAX_GRAPHS:-50000}"
+FEATURE_IMPORTANCE_BATCH_SIZE="${FEATURE_IMPORTANCE_BATCH_SIZE:-256}"
+FEATURE_IMPORTANCE_DEVICE="${FEATURE_IMPORTANCE_DEVICE:-${DEVICE}}"
 SEED="${SEED:-12345}"
 PYTHON_BIN="${PYTHON_BIN:-.venv/bin/python}"
 
 if [[ "${LOSS_MODE}" == "physics-nll" || "${LOSS_MODE}" == "nll" ]]; then
   ERROR_PREDICTION=1
-fi
-
-if [[ "${FEATURE_IMPORTANCE}" == "1" ]]; then
-  echo "hetero feature importance is not implemented yet; set FEATURE_IMPORTANCE=0" >&2
-  exit 2
 fi
 
 if [[ -z "${CONFIG_NAME:-}" ]]; then
@@ -156,6 +155,10 @@ DEVICE=${DEVICE}
 DIAGNOSTICS=${DIAGNOSTICS}
 DIAGNOSTIC_MIN_BIN_COUNT=${DIAGNOSTIC_MIN_BIN_COUNT}
 FEATURE_IMPORTANCE=${FEATURE_IMPORTANCE}
+FEATURE_IMPORTANCE_SPLIT=${FEATURE_IMPORTANCE_SPLIT}
+FEATURE_IMPORTANCE_MAX_GRAPHS=${FEATURE_IMPORTANCE_MAX_GRAPHS}
+FEATURE_IMPORTANCE_BATCH_SIZE=${FEATURE_IMPORTANCE_BATCH_SIZE}
+FEATURE_IMPORTANCE_DEVICE=${FEATURE_IMPORTANCE_DEVICE}
 SEED=${SEED}
 EOF
 
@@ -276,6 +279,34 @@ fi
 } 2>&1 | tee "${LOG_PATH}"
 
 "${PYTHON_BIN}" scripts/summarize_metrics.py "${METRICS_PATH}" -o "${SUMMARY_DIR}/metrics_summary.csv"
+FEATURE_IMPORTANCE_DIR="${CHECKPOINT}.diagnostics/feature_importance/${FEATURE_IMPORTANCE_SPLIT}"
+FEATURE_IMPORTANCE_SUMMARY="${FEATURE_IMPORTANCE_DIR}/feature_group_importance.json"
+if [[ "${FEATURE_IMPORTANCE}" == "1" ]]; then
+  {
+    echo "stage=start feature_importance date=$(date)"
+    feature_cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli feature-importance
+      --graphs "${GRAPH_INPUT}"
+      --checkpoint "${CHECKPOINT}"
+      -o "${FEATURE_IMPORTANCE_DIR}"
+      --split "${FEATURE_IMPORTANCE_SPLIT}"
+      --max-graphs "${FEATURE_IMPORTANCE_MAX_GRAPHS}"
+      --batch-size "${FEATURE_IMPORTANCE_BATCH_SIZE}"
+      --device "${FEATURE_IMPORTANCE_DEVICE}"
+      --seed "${SEED}")
+    printf 'command:'
+    printf ' %q' "${feature_cmd[@]}"
+    printf '\n'
+    "${feature_cmd[@]}"
+    if [[ ! -s "${FEATURE_IMPORTANCE_SUMMARY}" ]]; then
+      echo "ERROR: feature importance finished but summary was not written: ${FEATURE_IMPORTANCE_SUMMARY}" >&2
+      exit 1
+    fi
+    echo "stage=done feature_importance date=$(date)"
+    echo "feature_importance=${FEATURE_IMPORTANCE_SUMMARY}"
+  } 2>&1 | tee -a "${LOG_PATH}"
+else
+  FEATURE_IMPORTANCE_SUMMARY=""
+fi
 
 cat > "${RUN_DIR}/README.txt" <<EOF
 Run: ${RUN_NAME}
@@ -288,13 +319,13 @@ Important files:
   checkpoints/${CONFIG_NAME}.pt
   checkpoints/${CONFIG_NAME}.pt.metrics.json
   checkpoints/${CONFIG_NAME}.pt.diagnostics/
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/feature_importance/${FEATURE_IMPORTANCE_SPLIT}/feature_group_importance.json
   summaries/metrics_summary.csv
 
 Graph input:
   ${GRAPH_INPUT}
 
 Not yet integrated:
-  hetero feature importance
   full HGT/HeteroConv production architecture
   large-scale server training confirmation
 EOF
@@ -303,6 +334,7 @@ echo "run_dir=${RUN_DIR}"
 echo "checkpoint=${CHECKPOINT}"
 echo "metrics=${METRICS_PATH}"
 echo "diagnostics_dir=${CHECKPOINT}.diagnostics"
+echo "feature_importance=${FEATURE_IMPORTANCE_SUMMARY}"
 echo "summary_csv=${SUMMARY_DIR}/metrics_summary.csv"
 echo "log_path=${LOG_PATH}"
 date

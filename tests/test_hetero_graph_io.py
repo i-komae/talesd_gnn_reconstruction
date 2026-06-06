@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ from talesd_gnn_reconstruction.hetero_data import (
     hetero_sample_to_tensors,
     sample_to_hetero_data,
 )
+from talesd_gnn_reconstruction.hetero_feature_analysis import save_hetero_feature_group_importance
 from talesd_gnn_reconstruction.hetero_graph_io import (
     EDGE_RELATIONS,
     FORMAT_NAME,
@@ -318,6 +320,49 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertEqual(checkpoint["runtime"]["error_loss_weight"], 0.2)
             self.assertIn("train_error_loss", checkpoint["history"][0])
             self.assertNotIn("train_quality_loss", checkpoint["history"][0])
+
+    def test_hetero_feature_importance_smoke_writes_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            checkpoint_path = Path(tmpdir) / "checkpoint.pt"
+            output_dir = Path(tmpdir) / "importance"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(6):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            train_hetero_model(
+                graph_path,
+                checkpoint_path,
+                epochs=1,
+                batch_size=2,
+                hidden_dim=16,
+                num_layers=1,
+                dropout=0.0,
+                waveform_embedding_dim=8,
+                mass_classification=True,
+                split_mode="event",
+                device="cpu",
+                show_progress=False,
+            )
+
+            result = save_hetero_feature_group_importance(
+                graph_path,
+                checkpoint_path,
+                output_dir,
+                split="validation",
+                max_graphs=2,
+                batch_size=2,
+                device="cpu",
+                show_progress=False,
+            )
+
+            summary_path = Path(result["summary_json"])
+            self.assertTrue(summary_path.exists())
+            self.assertTrue((output_dir / "feature_group_importance.pdf").exists())
+            payload = json.loads(summary_path.read_text())
+            self.assertEqual(payload["n_graphs"], 1)
+            self.assertTrue(payload["groups"])
+            self.assertIn("baseline", payload)
 
     @unittest.skipUnless(
         MC_SAMPLE.exists() and CONST_DST.exists() and MC_CALIB_DIR.exists(),

@@ -249,10 +249,6 @@ if [[ "${TRAINING_BACKEND}" == "hetero" ]]; then
     echo "hetero training backend currently supports reconstruction training only; TRAINING_TASK=${TRAINING_TASK}" >&2
     exit 2
   fi
-  if [[ "${FEATURE_IMPORTANCE}" == "1" ]]; then
-    echo "hetero feature importance is not implemented yet; set FEATURE_IMPORTANCE=0" >&2
-    exit 2
-  fi
   if [[ "${SUMMARIZE_GRAPHS}" == "1" ]]; then
     echo "hetero graph summary is not implemented in submit_server_waveform_full_training.sh; set SUMMARIZE_GRAPHS=0" >&2
     exit 2
