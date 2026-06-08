@@ -56,6 +56,7 @@
 <li class="toctree-l3"><a class="reference internal" href="cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#attention-maps">Attention maps</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
@@ -204,6 +205,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#attention-maps">Attention maps</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
@@ -431,7 +433,10 @@ scripts/submit_server_hetero_reco_mass_error_training.sh
 </pre></div>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">scripts/submit_server_hetero_training.sh</span></code> は既定では <code class="docutils literal notranslate"><span class="pre">FEATURE_IMPORTANCE=0</span></code> です。
-同じSlurm job内で学習後のgroup ablationも走らせる場合だけ <code class="docutils literal notranslate"><span class="pre">FEATURE_IMPORTANCE=1</span></code> を指定します。</p>
+同じSlurm job内で学習後のgroup ablationも走らせる場合だけ <code class="docutils literal notranslate"><span class="pre">FEATURE_IMPORTANCE=1</span></code> を指定します。
+一方で <code class="docutils literal notranslate"><span class="pre">ATTENTION_MAPS=1</span></code> は既定です。checkpoint 作成後に、validation の少数eventについて
+<code class="docutils literal notranslate"><span class="pre">&lt;checkpoint&gt;.diagnostics/attention_maps/validation/</span></code> へ attention map を保存します。
+既定の保存数は <code class="docutils literal notranslate"><span class="pre">ATTENTION_MAPS_MAX_GRAPHS=16</span></code> なので、これは全dataset dumpではなく軽量診断です。</p>
 </section>
 <section id="balanced-heterogeneous-hdf5">
 <h2>balanced heterogeneous HDF5 サイズ比較<a class="headerlink" href="#balanced-heterogeneous-hdf5" title="Link to this heading"></a></h2>
