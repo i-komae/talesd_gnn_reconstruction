@@ -23,9 +23,9 @@ def _load_checkpoint(path: str | Path, device: str) -> dict[str, Any]:
 def _build_hetero_model(config: Mapping[str, Any]) -> MinimalHeteroTaleSdGNN:
     model_config = dict(config)
     architecture = str(model_config.pop("architecture", ""))
-    if architecture != "minimal_hetero":
+    if architecture not in {"minimal_hetero", "hetero_attention"}:
         raise ValueError(f"checkpoint architecture {architecture!r} is not supported for hetero DST reconstruction")
-    return MinimalHeteroTaleSdGNN(**model_config)
+    return MinimalHeteroTaleSdGNN(architecture=architecture, **model_config)
 
 
 def _inverse_target(pred_scaled: np.ndarray, scalers: Mapping[str, Any]) -> np.ndarray:

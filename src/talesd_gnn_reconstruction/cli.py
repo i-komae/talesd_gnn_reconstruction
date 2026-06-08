@@ -3435,6 +3435,9 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         hidden_dim=args.hidden_dim,
         num_layers=args.layers,
         dropout=args.dropout,
+        model_architecture=args.model_architecture,
+        attention_heads=args.attention_heads,
+        readout_heads=args.readout_heads,
         waveform_encoder=args.waveform_encoder,
         waveform_embedding_dim=args.waveform_embedding_dim,
         waveform_length=args.waveform_length,
@@ -3584,7 +3587,10 @@ def _cmd_feature_importance(args: argparse.Namespace) -> None:
     checkpoint = torch.load(Path(args.checkpoint).expanduser(), map_location="cpu", weights_only=False)
     model_config = dict(checkpoint.get("model_config", {}))
     runtime = dict(checkpoint.get("runtime", {}))
-    if runtime.get("graph_format") == "hetero" or model_config.get("architecture") == "minimal_hetero":
+    if runtime.get("graph_format") == "hetero" or model_config.get("architecture") in {
+        "minimal_hetero",
+        "hetero_attention",
+    }:
         from .hetero_feature_analysis import save_hetero_feature_group_importance
 
         save = save_hetero_feature_group_importance
@@ -3872,6 +3878,14 @@ def build_parser() -> argparse.ArgumentParser:
     train_hetero.add_argument("--hidden-dim", type=int, default=128)
     train_hetero.add_argument("--layers", type=int, default=2)
     train_hetero.add_argument("--dropout", type=float, default=0.05)
+    train_hetero.add_argument(
+        "--model-architecture",
+        choices=["minimal_hetero", "hetero_attention"],
+        default="hetero_attention",
+        help="hetero model architecture。通常は relation attention を持つ hetero_attention を使う",
+    )
+    train_hetero.add_argument("--attention-heads", type=int, default=4, help="hetero relation attention head数")
+    train_hetero.add_argument("--readout-heads", type=int, default=4, help="detector/pulse type別 attention readout head数")
     train_hetero.add_argument("--waveform-encoder", choices=["none", "cnn", "cnn-gru", "transformer"], default="cnn")
     train_hetero.add_argument("--waveform-embedding-dim", type=int, default=64)
     train_hetero.add_argument(

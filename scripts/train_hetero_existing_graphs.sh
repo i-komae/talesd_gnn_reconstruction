@@ -21,6 +21,9 @@ CONFIG_DIR="${RUN_DIR}/config"
 HIDDEN_DIM="${HIDDEN_DIM:-192}"
 LAYERS="${LAYERS:-5}"
 DROPOUT="${DROPOUT:-0.08}"
+MODEL_ARCHITECTURE="${MODEL_ARCHITECTURE:-hetero_attention}"
+ATTENTION_HEADS="${ATTENTION_HEADS:-4}"
+READOUT_HEADS="${READOUT_HEADS:-4}"
 WAVEFORM_ENCODER="${WAVEFORM_ENCODER:-cnn-gru}"
 WAVEFORM_EMBEDDING_DIM="${WAVEFORM_EMBEDDING_DIM:-64}"
 WAVEFORM_LENGTH="${WAVEFORM_LENGTH:-}"
@@ -94,9 +97,9 @@ if [[ -z "${CONFIG_NAME:-}" ]]; then
     AUX_HEAD_TAG="_error"
   fi
   if [[ "${MASS_CLASSIFICATION}" == "1" ]]; then
-    CONFIG_NAME="hetero_reconstruction_mass${AUX_HEAD_TAG}_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${LOSS_MODE}_${MASS_LOSS_MODE}_${TRAIN_EPOCHS}epoch"
+    CONFIG_NAME="hetero_reconstruction_mass${AUX_HEAD_TAG}_${MODEL_ARCHITECTURE}_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${LOSS_MODE}_${MASS_LOSS_MODE}_${TRAIN_EPOCHS}epoch"
   else
-    CONFIG_NAME="hetero_reconstruction${AUX_HEAD_TAG}_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${LOSS_MODE}_${TRAIN_EPOCHS}epoch"
+    CONFIG_NAME="hetero_reconstruction${AUX_HEAD_TAG}_${MODEL_ARCHITECTURE}_wf${WAVEFORM_ENCODER}_h${HIDDEN_DIM}_l${LAYERS}_${LOSS_MODE}_${TRAIN_EPOCHS}epoch"
   fi
 fi
 
@@ -115,6 +118,9 @@ CONFIG_NAME=${CONFIG_NAME}
 HIDDEN_DIM=${HIDDEN_DIM}
 LAYERS=${LAYERS}
 DROPOUT=${DROPOUT}
+MODEL_ARCHITECTURE=${MODEL_ARCHITECTURE}
+ATTENTION_HEADS=${ATTENTION_HEADS}
+READOUT_HEADS=${READOUT_HEADS}
 WAVEFORM_ENCODER=${WAVEFORM_ENCODER}
 WAVEFORM_EMBEDDING_DIM=${WAVEFORM_EMBEDDING_DIM}
 WAVEFORM_LENGTH=${WAVEFORM_LENGTH}
@@ -184,6 +190,9 @@ cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli train-hetero
   --hidden-dim "${HIDDEN_DIM}"
   --layers "${LAYERS}"
   --dropout "${DROPOUT}"
+  --model-architecture "${MODEL_ARCHITECTURE}"
+  --attention-heads "${ATTENTION_HEADS}"
+  --readout-heads "${READOUT_HEADS}"
   --waveform-encoder "${WAVEFORM_ENCODER}"
   --waveform-embedding-dim "${WAVEFORM_EMBEDDING_DIM}"
   --loss-mode "${LOSS_MODE}"
@@ -349,9 +358,13 @@ Important files:
 Graph input:
   ${GRAPH_INPUT}
 
-Not yet integrated:
-  full HGT/HeteroConv production architecture
-  large-scale server training confirmation
+Architecture:
+  ${MODEL_ARCHITECTURE}
+  hetero_attention uses relation-specific multi-head attention and type-wise attention readout.
+  It does not use PyG HGTConv/HGSampling; each TALE event graph is trained as a full event graph.
+
+Not yet confirmed:
+  large-scale server training completion
 EOF
 
 echo "run_dir=${RUN_DIR}"

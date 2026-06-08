@@ -495,6 +495,9 @@ def train_hetero_model(
     hidden_dim: int = 128,
     num_layers: int = 2,
     dropout: float = 0.05,
+    model_architecture: str = "hetero_attention",
+    attention_heads: int = 4,
+    readout_heads: int = 4,
     waveform_encoder: str = "cnn",
     waveform_embedding_dim: int = 64,
     waveform_length: int | None = None,
@@ -556,6 +559,9 @@ def train_hetero_model(
     persistent_workers = bool(persistent_workers)
     pin_memory = device.startswith("cuda") if pin_memory is None else bool(pin_memory)
     loss_mode = str(loss_mode).lower()
+    model_architecture = str(model_architecture)
+    if model_architecture not in {"minimal_hetero", "hetero_attention"}:
+        raise ValueError("model_architecture must be 'minimal_hetero' or 'hetero_attention'")
     valid_loss_modes = {"scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics", "physics-nll", "nll"}
     if loss_mode not in valid_loss_modes:
         raise ValueError(
@@ -637,6 +643,9 @@ def train_hetero_model(
         waveform_encoder=waveform_encoder,
         waveform_embedding_dim=waveform_embedding_dim,
         waveform_length=resolved_waveform_length,
+        architecture=model_architecture,
+        attention_heads=attention_heads,
+        readout_heads=readout_heads,
     ).to(device)
     base_dataset.close()
 
@@ -866,6 +875,7 @@ def train_hetero_model(
             "graph_format": "hetero",
             "training_path": "hetero_smoke",
             "training_task": "reconstruction",
+            "model_architecture": str(model_architecture),
             "loss_mode": str(loss_mode),
             "energy_loss_weight": float(energy_loss_weight),
             "core_loss_weight": float(core_loss_weight),
@@ -883,6 +893,8 @@ def train_hetero_model(
             "hidden_dim": int(hidden_dim),
             "layers": int(num_layers),
             "dropout": float(dropout),
+            "attention_heads": int(attention_heads),
+            "readout_heads": int(readout_heads),
             "device": str(device),
             "mass_classification": bool(mass_classification),
             "mass_loss_mode": str(mass_loss_mode),

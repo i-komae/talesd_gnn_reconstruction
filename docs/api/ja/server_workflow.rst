@@ -60,6 +60,8 @@ heterogeneous reco+mass比較
 1本目は quality head だけを有効にします。
 2本目は predicted-error head だけを有効にします。
 同じ heterogeneous graph input に対する別 run として比較します。
+明示的に上書きしない限り、heterogeneous model architecture は ``hetero_attention`` です。
+event graph は丸ごと使い、HGSampling は使いません。
 
 .. code-block:: bash
 

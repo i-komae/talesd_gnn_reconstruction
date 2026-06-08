@@ -342,7 +342,8 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertEqual(result["checkpoint"], str(checkpoint_path))
             self.assertEqual(result["metrics_json"], str(checkpoint_path) + ".metrics.json")
             checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-            self.assertEqual(checkpoint["model_config"]["architecture"], "minimal_hetero")
+            self.assertEqual(checkpoint["model_config"]["architecture"], "hetero_attention")
+            self.assertEqual(checkpoint["runtime"]["model_architecture"], "hetero_attention")
             self.assertEqual(checkpoint["model_config"]["quality_dim"], 1)
             self.assertEqual(checkpoint["model_config"]["error_dim"], 0)
             self.assertIn("hetero_scalers", checkpoint)
@@ -355,6 +356,35 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertTrue(checkpoint["runtime"]["quality_prediction"])
             self.assertFalse(checkpoint["runtime"]["error_prediction"])
             self.assertTrue((Path(str(checkpoint_path) + ".metrics.json")).exists())
+
+    def test_train_hetero_minimal_architecture_smoke_saves_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            checkpoint_path = Path(tmpdir) / "checkpoint.pt"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(6):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            train_hetero_model(
+                graph_path,
+                checkpoint_path,
+                epochs=1,
+                batch_size=2,
+                hidden_dim=16,
+                num_layers=1,
+                dropout=0.0,
+                model_architecture="minimal_hetero",
+                waveform_embedding_dim=8,
+                mass_classification=True,
+                split_mode="event",
+                device="cpu",
+                num_workers=0,
+                show_progress=False,
+            )
+
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            self.assertEqual(checkpoint["model_config"]["architecture"], "minimal_hetero")
+            self.assertEqual(checkpoint["runtime"]["model_architecture"], "minimal_hetero")
 
     def test_train_hetero_error_head_smoke_saves_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

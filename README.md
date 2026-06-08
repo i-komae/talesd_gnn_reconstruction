@@ -19,7 +19,7 @@ heterogeneous checkpoint で DST を直接読む経路を使います。
 
 1. `dstio.tale.graph.iter_graphs` で DST から `GraphEvent` を作る
 2. detector node と pulse node、3種類の edge relation を持つ HDF5 graph を学習用cacheとして保存する
-3. `talesd-gnn train-hetero` で detector branch、pulse branch、detector-level waveform encoderを持つheterogeneous modelを学習する
+3. `talesd-gnn train-hetero` で detector branch、pulse branch、detector-level waveform encoder、relation-specific attention を持つ heterogeneous model を学習する
 4. 学習済みheterogeneous checkpointを使い、`talesd-gnn reconstruct-dst` で DST から直接再構成CSVを作る
 
 ## コード構成と実行フロー
@@ -127,9 +127,13 @@ scripts/submit_server_hetero_*.sh
         -> hetero_training.train_hetero_model()
           -> hetero_graph_io.H5HeteroGraphDataset
           -> hetero_data.sample_to_hetero_data()
-          -> hetero_model.MinimalHeteroTaleSdGNN
+          -> hetero_model.MinimalHeteroTaleSdGNN (`hetero_attention` architecture)
           -> loss / metrics / diagnostics
 ```
+
+heterogeneous training の既定 architecture は `hetero_attention` です。
+これは detector/pulse relation ごとの multi-head attention と detector/pulse type 別 attention readout を使います。
+HGSampling は使いません。TALE では 1 event を 1 graph として丸ごと扱い、detector/pulse/waveform/Ising rejected pulse を sampling で落とさない方針です。
 
 ### テスト・評価・推論
 

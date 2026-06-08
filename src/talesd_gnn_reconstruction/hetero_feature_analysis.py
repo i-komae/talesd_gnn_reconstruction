@@ -460,9 +460,9 @@ def save_hetero_feature_group_importance(
     scalers = _scalers_from_checkpoint(checkpoint)
     model_config = dict(checkpoint["model_config"])
     architecture = str(model_config.pop("architecture", ""))
-    if architecture != "minimal_hetero":
+    if architecture not in {"minimal_hetero", "hetero_attention"}:
         raise ValueError(f"checkpoint architecture {architecture!r} is not supported for hetero feature importance")
-    model = MinimalHeteroTaleSdGNN(**model_config).to(device)
+    model = MinimalHeteroTaleSdGNN(architecture=architecture, **model_config).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
     runtime = dict(checkpoint.get("runtime", {}))

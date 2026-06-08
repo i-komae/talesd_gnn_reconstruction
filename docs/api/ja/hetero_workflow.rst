@@ -64,6 +64,8 @@ Training cache path
            -> heterogeneous HDF5 shards
 
 ``train-hetero`` はこの shard を読み、train split で scaler を fit し、heterogeneous model を学習して checkpoint を保存します。
+既定 architecture は ``hetero_attention`` です。detector / pulse relation ごとの multi-head attention と、detector / pulse type 別 attention readout を使います。
+HGSampling は使いません。TALE では 1 event を 1 graph として丸ごと扱い、detector、pulse、waveform、Ising rejected pulse の情報を sampling で落としません。
 
 Direct reconstruction path
 --------------------------
@@ -77,7 +79,7 @@ Direct reconstruction path
      -> talesd-gnn reconstruct-dst
        -> dstio.tale.graph.iter_graphs
          -> hetero_data.sample_to_hetero_data
-           -> MinimalHeteroTaleSdGNN checkpoint
+           -> hetero_attention checkpoint
              -> reconstruction CSV
 
 heterogeneous model を学習した後の大量 data / MC 一回通し再構成では、この direct path を使います。

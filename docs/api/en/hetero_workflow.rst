@@ -64,6 +64,8 @@ This HDF5 is a cache, not the final reconstruction interface.
            -> heterogeneous HDF5 shards
 
 ``train-hetero`` then reads those shards, fits scalers on the training split, trains the heterogeneous model, and saves a checkpoint.
+The default model architecture is ``hetero_attention``: relation-specific multi-head attention over detector/pulse relations plus detector/pulse type-wise attention readout.
+It does not use HGSampling; each TALE event remains a full event graph so detector, pulse, waveform, and Ising-rejected pulse information is not sampled away.
 
 Direct reconstruction path
 --------------------------
@@ -77,7 +79,7 @@ It does not write an intermediate HDF5 graph.
      -> talesd-gnn reconstruct-dst
        -> dstio.tale.graph.iter_graphs
          -> hetero_data.sample_to_hetero_data
-           -> MinimalHeteroTaleSdGNN checkpoint
+           -> hetero_attention checkpoint
              -> reconstruction CSV
 
 The direct path is the intended path for large one-pass data and MC reconstruction after the heterogeneous model has been trained.

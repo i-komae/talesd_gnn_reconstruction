@@ -12,7 +12,7 @@ from .hetero_data import (
     hetero_sample_to_tensors,
     normalize_detector_waveforms,
 )
-from .model import WaveformEncoder, _make_mlp, _scatter_max, _scatter_mean
+from .model import WaveformEncoder, _make_mlp, _scatter_max, _scatter_mean, _scatter_softmax
 
 
 NODE_TYPE_BY_RELATION = {
@@ -88,10 +88,120 @@ class HeteroMessageLayer(nn.Module):
         }
 
 
+class HeteroAttentionMessageLayer(nn.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        edge_dims: Mapping[str, int],
+        dropout: float = 0.05,
+        attention_heads: int = 4,
+    ):
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+        requested_heads = max(int(attention_heads), 1)
+        self.heads = requested_heads if self.hidden_dim % requested_heads == 0 else 1
+        self.head_dim = self.hidden_dim // self.heads
+        self.query = nn.ModuleDict({relation: nn.Linear(self.hidden_dim, self.hidden_dim) for relation in edge_dims})
+        self.key = nn.ModuleDict(
+            {
+                relation: nn.Linear(self.hidden_dim + int(edge_dim), self.hidden_dim)
+                for relation, edge_dim in edge_dims.items()
+            }
+        )
+        self.value = nn.ModuleDict(
+            {
+                relation: nn.Linear(self.hidden_dim + int(edge_dim), self.hidden_dim)
+                for relation, edge_dim in edge_dims.items()
+            }
+        )
+        self.relation_output = nn.ModuleDict(
+            {relation: nn.Linear(self.hidden_dim, self.hidden_dim) for relation in edge_dims}
+        )
+        self.detector_update = _make_mlp(self.hidden_dim * 2, self.hidden_dim, self.hidden_dim, dropout)
+        self.pulse_update = _make_mlp(self.hidden_dim * 2, self.hidden_dim, self.hidden_dim, dropout)
+        self.detector_norm = nn.LayerNorm(self.hidden_dim)
+        self.pulse_norm = nn.LayerNorm(self.hidden_dim)
+        self.detector_ffn = _make_mlp(self.hidden_dim, self.hidden_dim * 2, self.hidden_dim, dropout)
+        self.pulse_ffn = _make_mlp(self.hidden_dim, self.hidden_dim * 2, self.hidden_dim, dropout)
+        self.detector_ffn_norm = nn.LayerNorm(self.hidden_dim)
+        self.pulse_ffn_norm = nn.LayerNorm(self.hidden_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+        self,
+        node_states: dict[str, torch.Tensor],
+        edge_index_by_type: Mapping[str, torch.Tensor],
+        edge_features_by_type: Mapping[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        aggregates = {node_type: torch.zeros_like(state) for node_type, state in node_states.items()}
+        counts = {
+            node_type: torch.zeros(state.shape[0], 1, dtype=state.dtype, device=state.device)
+            for node_type, state in node_states.items()
+        }
+        scale = float(self.head_dim) ** -0.5
+        for relation in self.query.keys():
+            edge_index = edge_index_by_type.get(relation)
+            if edge_index is None or edge_index.numel() == 0:
+                continue
+            src_type, dst_type = NODE_TYPE_BY_RELATION[relation]
+            src_state = node_states[src_type]
+            dst_state = node_states[dst_type]
+            src_index = edge_index[0].to(device=src_state.device)
+            dst_index = edge_index[1].to(device=dst_state.device)
+            edge_attr = edge_features_by_type[relation].to(dtype=src_state.dtype, device=src_state.device)
+            src_input = torch.cat([src_state[src_index], edge_attr], dim=-1)
+            query = self.query[relation](dst_state[dst_index]).view(-1, self.heads, self.head_dim)
+            key = self.key[relation](src_input).view(-1, self.heads, self.head_dim)
+            value = self.value[relation](src_input).view(-1, self.heads, self.head_dim)
+            scores = (query * key).sum(dim=-1) * scale
+            weights = _scatter_softmax(scores, dst_index, dst_state.shape[0])
+            messages = (value * weights[:, :, None]).reshape(-1, self.hidden_dim)
+            messages = self.dropout(self.relation_output[relation](messages))
+            aggregates[dst_type].index_add_(0, dst_index, messages)
+
+            present = torch.zeros(dst_state.shape[0], 1, dtype=dst_state.dtype, device=dst_state.device)
+            present[torch.unique(dst_index)] = 1.0
+            counts[dst_type] += present
+
+        detector_aggregate = aggregates["detector"] / counts["detector"].clamp_min(1.0)
+        pulse_aggregate = aggregates["pulse"] / counts["pulse"].clamp_min(1.0)
+        detector = self.detector_norm(
+            node_states["detector"]
+            + self.detector_update(torch.cat([node_states["detector"], detector_aggregate], dim=-1))
+        )
+        pulse = self.pulse_norm(
+            node_states["pulse"] + self.pulse_update(torch.cat([node_states["pulse"], pulse_aggregate], dim=-1))
+        )
+        return {
+            "detector": self.detector_ffn_norm(detector + self.detector_ffn(detector)),
+            "pulse": self.pulse_ffn_norm(pulse + self.pulse_ffn(pulse)),
+        }
+
+
+class HeteroAttentiveReadout(nn.Module):
+    def __init__(self, hidden_dim: int, heads: int = 4):
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+        self.heads = max(int(heads), 1)
+        self.score = nn.Linear(self.hidden_dim, self.heads)
+        self.output_dim = self.hidden_dim * (2 + self.heads)
+
+    def forward(self, state: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
+        weights = _scatter_softmax(self.score(state), batch, num_graphs)
+        pooled = [_scatter_mean(state, batch, num_graphs), _scatter_max(state, batch, num_graphs)]
+        for head in range(self.heads):
+            weighted = state * weights[:, head : head + 1]
+            out = torch.zeros(num_graphs, state.shape[1], dtype=state.dtype, device=state.device)
+            out.index_add_(0, batch, weighted)
+            pooled.append(out)
+        return torch.cat(pooled, dim=-1)
+
+
 class MinimalHeteroTaleSdGNN(nn.Module):
     def __init__(
         self,
         *,
+        architecture: str = "hetero_attention",
         detector_dim: int,
         detector_context_dim: int,
         pulse_dim: int,
@@ -107,10 +217,15 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         dropout: float = 0.05,
         waveform_encoder: str = "cnn",
         waveform_embedding_dim: int = 64,
+        attention_heads: int = 4,
+        readout_heads: int = 4,
     ):
         super().__init__()
+        architecture = str(architecture)
+        if architecture not in {"minimal_hetero", "hetero_attention"}:
+            raise ValueError("architecture must be 'minimal_hetero' or 'hetero_attention'")
         self.config = {
-            "architecture": "minimal_hetero",
+            "architecture": architecture,
             "detector_dim": int(detector_dim),
             "detector_context_dim": int(detector_context_dim),
             "pulse_dim": int(pulse_dim),
@@ -126,7 +241,10 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             "dropout": float(dropout),
             "waveform_encoder": str(waveform_encoder),
             "waveform_embedding_dim": int(waveform_embedding_dim),
+            "attention_heads": int(attention_heads),
+            "readout_heads": int(readout_heads),
         }
+        self.architecture = architecture
         self.hidden_dim = int(hidden_dim)
         self.target_dim = max(int(target_dim), 0)
         self.classification_dim = max(int(classification_dim), 0)
@@ -153,10 +271,28 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             nn.LayerNorm(hidden_dim),
         )
         edge_dims_complete = {relation: int(edge_dims.get(relation, 0)) for relation in EDGE_TYPE_BY_RELATION}
-        self.layers = nn.ModuleList(
-            [HeteroMessageLayer(hidden_dim, edge_dims_complete, dropout=dropout) for _ in range(num_layers)]
-        )
-        readout_dim = hidden_dim * 4
+        if architecture == "hetero_attention":
+            self.layers = nn.ModuleList(
+                [
+                    HeteroAttentionMessageLayer(
+                        hidden_dim,
+                        edge_dims_complete,
+                        dropout=dropout,
+                        attention_heads=attention_heads,
+                    )
+                    for _ in range(num_layers)
+                ]
+            )
+            self.detector_readout = HeteroAttentiveReadout(hidden_dim, heads=readout_heads)
+            self.pulse_readout = HeteroAttentiveReadout(hidden_dim, heads=readout_heads)
+            readout_dim = self.detector_readout.output_dim + self.pulse_readout.output_dim
+        else:
+            self.layers = nn.ModuleList(
+                [HeteroMessageLayer(hidden_dim, edge_dims_complete, dropout=dropout) for _ in range(num_layers)]
+            )
+            self.detector_readout = None
+            self.pulse_readout = None
+            readout_dim = hidden_dim * 4
         self.reconstruction_head = (
             nn.Sequential(
                 nn.Linear(readout_dim, hidden_dim),
@@ -213,6 +349,9 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         waveform_encoder: str = "cnn",
         waveform_embedding_dim: int = 64,
         waveform_length: int | None = None,
+        architecture: str = "hetero_attention",
+        attention_heads: int = 4,
+        readout_heads: int = 4,
     ) -> "MinimalHeteroTaleSdGNN":
         waveform_shape = sample["detector_waveforms"].shape
         edge_dims = {
@@ -235,6 +374,9 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             dropout=dropout,
             waveform_encoder=waveform_encoder,
             waveform_embedding_dim=waveform_embedding_dim,
+            architecture=architecture,
+            attention_heads=attention_heads,
+            readout_heads=readout_heads,
         )
 
     @staticmethod
@@ -273,13 +415,22 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             node_states = layer(node_states, edge_index_by_type, edge_features_by_type)
 
         num_graphs = int(batch.get("num_graphs", 1))
-        readout = torch.cat(
-            [
-                self._pool(node_states["detector"], detector["batch"], num_graphs),
-                self._pool(node_states["pulse"], pulse["batch"], num_graphs),
-            ],
-            dim=-1,
-        )
+        if self.architecture == "hetero_attention":
+            readout = torch.cat(
+                [
+                    self.detector_readout(node_states["detector"], detector["batch"], num_graphs),
+                    self.pulse_readout(node_states["pulse"], pulse["batch"], num_graphs),
+                ],
+                dim=-1,
+            )
+        else:
+            readout = torch.cat(
+                [
+                    self._pool(node_states["detector"], detector["batch"], num_graphs),
+                    self._pool(node_states["pulse"], pulse["batch"], num_graphs),
+                ],
+                dim=-1,
+            )
         outputs = []
         if self.reconstruction_head is not None:
             outputs.append(self.reconstruction_head(readout))

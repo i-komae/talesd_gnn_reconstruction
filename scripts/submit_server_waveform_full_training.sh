@@ -72,10 +72,15 @@ MASS_COLLAPSE_SCORE_STD="${MASS_COLLAPSE_SCORE_STD:-1e-3}"
 MASS_COLLAPSE_BALANCED_ACCURACY="${MASS_COLLAPSE_BALANCED_ACCURACY:-0.505}"
 DEVICE="${DEVICE:-cuda}"
 
-MODEL_ARCHITECTURE="${MODEL_ARCHITECTURE:-physics}"
+if [[ "${TRAINING_BACKEND}" == "hetero" ]]; then
+  MODEL_ARCHITECTURE="${MODEL_ARCHITECTURE:-hetero_attention}"
+else
+  MODEL_ARCHITECTURE="${MODEL_ARCHITECTURE:-physics}"
+fi
 HIDDEN_DIM="${HIDDEN_DIM:-192}"
 LAYERS="${LAYERS:-5}"
 DROPOUT="${DROPOUT:-0.05}"
+ATTENTION_HEADS="${ATTENTION_HEADS:-4}"
 READOUT_HEADS="${READOUT_HEADS:-4}"
 CLASSIFICATION_ARCH="${CLASSIFICATION_ARCH:-enhanced}"
 DETECTOR_EMBEDDING_DIM="${DETECTOR_EMBEDDING_DIM:-0}"
@@ -950,6 +955,9 @@ echo "mass_loss_weight=${MASS_LOSS_WEIGHT}"
 echo "mass_loss_mode=${MASS_LOSS_MODE}"
 echo "mass_ranking_weight=${MASS_RANKING_WEIGHT}"
 echo "mass_ranking_margin=${MASS_RANKING_MARGIN}"
+echo "model_architecture=${MODEL_ARCHITECTURE}"
+echo "attention_heads=${ATTENTION_HEADS}"
+echo "readout_heads=${READOUT_HEADS}"
 echo "classification_arch=${CLASSIFICATION_ARCH}"
 echo "waveform_length=${WAVEFORM_LENGTH}"
 echo "loss_mode=${LOSS_MODE}"
@@ -1002,6 +1010,7 @@ env \\
   HIDDEN_DIM="${HIDDEN_DIM}" \\
   LAYERS="${LAYERS}" \\
   DROPOUT="${DROPOUT}" \\
+  ATTENTION_HEADS="${ATTENTION_HEADS}" \\
   READOUT_HEADS="${READOUT_HEADS}" \\
   CLASSIFICATION_ARCH="${CLASSIFICATION_ARCH}" \\
   DETECTOR_EMBEDDING_DIM="${DETECTOR_EMBEDDING_DIM}" \\
@@ -1146,6 +1155,9 @@ mass_loss_weight=${MASS_LOSS_WEIGHT}
 mass_loss_mode=${MASS_LOSS_MODE}
 mass_ranking_weight=${MASS_RANKING_WEIGHT}
 mass_ranking_margin=${MASS_RANKING_MARGIN}
+model_architecture=${MODEL_ARCHITECTURE}
+attention_heads=${ATTENTION_HEADS}
+readout_heads=${READOUT_HEADS}
 early_stopping_patience=${EARLY_STOPPING_PATIENCE}
 early_stopping_min_epochs=${EARLY_STOPPING_MIN_EPOCHS}
 loss_mode=${LOSS_MODE}

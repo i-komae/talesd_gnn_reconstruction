@@ -60,6 +60,8 @@ These submitters keep the task as reco+mass and keep ``LOSS_MODE=physics``.
 The first run enables the quality head only.
 The second run enables the predicted-error head only.
 They should be compared as separate runs on the same heterogeneous graph input.
+Unless explicitly overridden, the heterogeneous model architecture is ``hetero_attention``.
+It uses full event graphs and does not use HGSampling.
 
 .. code-block:: bash
 
