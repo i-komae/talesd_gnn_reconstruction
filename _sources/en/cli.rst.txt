@@ -215,6 +215,15 @@ This is post-hoc analysis, not retraining. It replaces input groups such as node
 The output JSON contains the baseline metrics, per-group ablated metrics, and
 deltas. ``feature_group_importance_plot_data.json`` contains the values needed
 to redraw the bar plots without rerunning inference.
+Here, a metric is not a single generic score. Reconstruction metrics evaluate
+the physical outputs after inverse scaling: energy error
+(``rmse_log10_energy`` and relative-energy metrics), core displacement in the
+ground-plane xy coordinates (``core_68_km`` and related metrics), and arrival
+direction opening angle (``angular_68_deg`` and related metrics). Mass metrics
+are stored separately as accuracy, balanced accuracy, AUC, and confusion counts.
+``baseline`` is the normal-input evaluation, each group row stores the
+``ablated`` evaluation, and ``*_delta`` is ``ablated - baseline`` for every
+finite numeric metric.
 
 .. code-block:: bash
 
@@ -229,6 +238,31 @@ For heterogeneous checkpoints, the same command dispatches to
 ``hetero_feature_analysis.save_hetero_feature_group_importance``.
 The default groups separate detector signal, detector geometry, detector readout context,
 pulse timing/signal, Ising pulse annotations, detector waveforms, and typed edge groups.
+
+Attention maps
+--------------
+
+For ``hetero_attention`` checkpoints, save post-hoc attention weights for a
+small set of events:
+
+.. code-block:: bash
+
+   .venv/bin/talesd-gnn attention-maps \
+     --graphs /path/to/graphs/hetero_balanced_flat10000 \
+     --checkpoint /path/to/checkpoints/hetero_reco_mass.pt \
+     -o /path/to/attention_maps \
+     --split validation \
+     --max-graphs 16
+
+The command writes ``attention_maps.json`` and ``attention_maps.npz``. The JSON
+keeps event identity, source path, prediction/target values, and the names of
+the saved arrays. The NPZ keeps detector and pulse lids, positions,
+``pulse_detector_index``, ``pulse_bounds``, relation attention for each
+layer/relation/head, and detector/pulse readout attention weights.
+
+These values are useful for event-display overlays and sanity checks. They are
+not feature importance by themselves; use ablation or perturbation diagnostics
+to test whether a feature group is necessary.
 
 Visualization
 -------------
