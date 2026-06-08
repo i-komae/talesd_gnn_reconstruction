@@ -201,6 +201,8 @@ class H5HeteroGraphDataset:
         self._handles: dict[int, h5py.File] = {}
         self._path_lengths: list[int] = []
         self._cumulative_lengths: list[int] = []
+        self._path_local_indices: list[list[int] | None] = []
+        self._path_key_lists: list[list[str] | None] = []
         self.columns_json = "{}"
 
         total = 0
@@ -218,6 +220,8 @@ class H5HeteroGraphDataset:
             total += n_events
             self._path_lengths.append(n_events)
             self._cumulative_lengths.append(total)
+            self._path_local_indices.append(None)
+            self._path_key_lists.append(None)
 
     def __len__(self) -> int:
         return self._cumulative_lengths[-1] if self._cumulative_lengths else 0

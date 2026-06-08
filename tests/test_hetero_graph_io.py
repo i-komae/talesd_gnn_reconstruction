@@ -445,12 +445,12 @@ class HeteroGraphIoTest(unittest.TestCase):
                     val_fraction=0.20,
                     test_fraction=0.20,
                     source_val_fraction=0.20,
-                    source_test_fraction=0.20,
-                    seed=123,
-                    energy_bin_width=0.1,
-                    split_workers=1,
-                    show_progress=False,
-                )
+                source_test_fraction=0.20,
+                seed=123,
+                energy_bin_width=0.1,
+                split_workers=2,
+                show_progress=False,
+            )
             finally:
                 dataset.close()
 
