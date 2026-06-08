@@ -59,6 +59,26 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="../ja/hetero_workflow.html">Heterogeneous DST 再構成 workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../ja/hetero_model.html">Heterogeneous model の詳しい説明</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#forward-pass">Forward pass の全体図</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#event-heterogeneous-data-object">1 event を heterogeneous data object として見る</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#field">入力 field</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#scaling">変換と scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#dst">DST 直接再構成</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="../ja/code_map.html">コード読解マップ</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#id2">読む順番</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#cli-wrapper">CLI は薄い wrapper</a></li>
@@ -162,6 +182,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#quality-only">再構成quality-onlyの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#mass-focal">mass focalの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#heterogeneous-reco-mass">heterogeneous reco+mass比較</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#balanced-heterogeneous-hdf5">balanced heterogeneous HDF5 サイズ比較</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#id2">注意点</a></li>
 </ul>
 </li>
@@ -181,6 +202,26 @@
 <li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_workflow.html">Heterogeneous DST Reconstruction Workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html">Heterogeneous model explained</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#forward-pass-overview">Forward-pass overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#one-event-as-a-heterogeneous-data-object">One event as a heterogeneous data object</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#input-fields">Input fields</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#conversion-and-scaling">Conversion and scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#server-command-for-the-first-transformer-sweep">Server command for the first transformer sweep</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="code_map.html">Code Reading Map</a><ul>
@@ -245,6 +286,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#mass-focal-example">Mass focal example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#heterogeneous-reco-mass-comparison">Heterogeneous reco+mass comparison</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#balanced-heterogeneous-hdf5-size-sweep">Balanced heterogeneous HDF5 size sweep</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#rules">Rules</a></li>
 </ul>
 </li>
@@ -331,6 +373,9 @@
 <tr class="row-odd"><td><p>Heterogeneous reco+mass, predicted-error-only auxiliary head</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">scripts/submit_server_hetero_reco_mass_error_training.sh</span></code></p></td>
 </tr>
+<tr class="row-even"><td><p>Balanced heterogeneous HDF5 export and size sweep</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">scripts/submit_server_hetero_dataset_size_sweep.sh</span></code></p></td>
+</tr>
 </tbody>
 </table>
 </section>
@@ -360,21 +405,57 @@ scripts/submit_server_mass_only_training.sh
 <p>These submitters keep the task as reco+mass and keep <code class="docutils literal notranslate"><span class="pre">LOSS_MODE=physics</span></code>.
 The first run enables the quality head only.
 The second run enables the predicted-error head only.
-They should be compared as separate runs on the same heterogeneous graph input.</p>
+They should be compared as separate runs on the same heterogeneous graph input.
+Unless explicitly overridden, the heterogeneous model architecture is <code class="docutils literal notranslate"><span class="pre">hetero_attention</span></code>.
+It uses full event graphs and does not use HGSampling.
+The first waveform-encoder sweep should use <code class="docutils literal notranslate"><span class="pre">WAVEFORM_ENCODER=transformer</span></code>.
+Do not launch the matching <code class="docutils literal notranslate"><span class="pre">cnn-gru</span></code> sweep until the transformer results determine the dataset size and auxiliary-head condition.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">GRAPH_INPUT</span><span class="o">=</span>/dicos_ui_home/ikomae/work/gnn/graphs/&lt;hetero_graph_dir&gt;<span class="w"> </span><span class="se">\</span>
 <span class="nv">PARTITION</span><span class="o">=</span>v100-al9_long<span class="w"> </span><span class="se">\</span>
+<span class="nv">WAVEFORM_ENCODER</span><span class="o">=</span>transformer<span class="w"> </span><span class="se">\</span>
 <span class="nv">RUN_NAME</span><span class="o">=</span>hetero_reco_mass_quality_v100_128epoch_<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d_%H%M%S<span class="k">)</span><span class="w"> </span><span class="se">\</span>
 scripts/submit_server_hetero_reco_mass_quality_training.sh
 </pre></div>
 </div>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">GRAPH_INPUT</span><span class="o">=</span>/dicos_ui_home/ikomae/work/gnn/graphs/&lt;hetero_graph_dir&gt;<span class="w"> </span><span class="se">\</span>
 <span class="nv">PARTITION</span><span class="o">=</span>v100-al9_long<span class="w"> </span><span class="se">\</span>
+<span class="nv">WAVEFORM_ENCODER</span><span class="o">=</span>transformer<span class="w"> </span><span class="se">\</span>
 <span class="nv">RUN_NAME</span><span class="o">=</span>hetero_reco_mass_error_v100_128epoch_<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d_%H%M%S<span class="k">)</span><span class="w"> </span><span class="se">\</span>
 scripts/submit_server_hetero_reco_mass_error_training.sh
 </pre></div>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">scripts/submit_server_hetero_training.sh</span></code> sets <code class="docutils literal notranslate"><span class="pre">FEATURE_IMPORTANCE=0</span></code> by default.
 Set <code class="docutils literal notranslate"><span class="pre">FEATURE_IMPORTANCE=1</span></code> only when post-training group ablation should run in the same Slurm job.</p>
+</section>
+<section id="balanced-heterogeneous-hdf5-size-sweep">
+<h2>Balanced heterogeneous HDF5 size sweep<a class="headerlink" href="#balanced-heterogeneous-hdf5-size-sweep" title="Link to this heading"></a></h2>
+<p>Use <code class="docutils literal notranslate"><span class="pre">scripts/submit_server_hetero_dataset_size_sweep.sh</span></code> to make the next balanced datasets.
+The default sizes are <code class="docutils literal notranslate"><span class="pre">50000</span></code>, <code class="docutils literal notranslate"><span class="pre">20000</span></code>, and <code class="docutils literal notranslate"><span class="pre">10000</span></code> selected events per true-energy/particle bin.
+The balanced export preselects candidates by <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source group, zenith bin, azimuth bin, core-position bin, and event-time bin, then writes a selection summary and a train/validation/test split distribution summary.</p>
+<p>The default split for this sweep is source-group based <code class="docutils literal notranslate"><span class="pre">45/10/45</span></code> for train/validation/test.
+The same <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source group is not shared across splits.
+Validation is kept as an independent source-group holdout for early stopping and model selection; the test split is left for final comparison.</p>
+<p>First submit the three export jobs:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">RUN_ID</span><span class="o">=</span>hetero_balance_<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d_%H%M%S<span class="k">)</span><span class="w"> </span><span class="se">\</span>
+scripts/submit_server_hetero_dataset_size_sweep.sh
+</pre></div>
+</div>
+<p>After the three HDF5 exports and their summaries are complete, inspect:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>/dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/hetero_selection_summary.json
+/dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distribution_summary.json
+/dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distributions/
+</pre></div>
+</div>
+<p>Then submit the six reco+mass comparison runs on those HDF5 files:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">RUN_ID</span><span class="o">=</span>&lt;same<span class="w"> </span>RUN_ID<span class="w"> </span>used<span class="w"> </span><span class="k">for</span><span class="w"> </span>export&gt;<span class="w"> </span><span class="se">\</span>
+<span class="nv">SUBMIT_EXPORTS</span><span class="o">=</span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+<span class="nv">SUBMIT_TRAINING</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="nv">WAVEFORM_ENCODER</span><span class="o">=</span>transformer<span class="w"> </span><span class="se">\</span>
+scripts/submit_server_hetero_dataset_size_sweep.sh
+</pre></div>
+</div>
+<p>The six training jobs are <code class="docutils literal notranslate"><span class="pre">quality-only</span></code> and <code class="docutils literal notranslate"><span class="pre">predicted-error-only</span></code> for each of <code class="docutils literal notranslate"><span class="pre">50000</span></code>, <code class="docutils literal notranslate"><span class="pre">20000</span></code>, and <code class="docutils literal notranslate"><span class="pre">10000</span></code> events per bin.
+This is the first transformer waveform sweep. The <code class="docutils literal notranslate"><span class="pre">cnn-gru</span></code> comparison should be run later only for the selected condition.</p>
 </section>
 <section id="rules">
 <h2>Rules<a class="headerlink" href="#rules" title="Link to this heading"></a></h2>

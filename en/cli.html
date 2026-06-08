@@ -21,7 +21,7 @@
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="検索" href="../search.html" />
-    <link rel="next" title="Code Reading Map" href="code_map.html" />
+    <link rel="next" title="Heterogeneous DST Reconstruction Workflow" href="hetero_workflow.html" />
     <link rel="prev" title="English API Usage Guide" href="index.html" /> 
 </head>
 
@@ -57,6 +57,26 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../ja/hetero_workflow.html">Heterogeneous DST 再構成 workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../ja/hetero_model.html">Heterogeneous model の詳しい説明</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#forward-pass">Forward pass の全体図</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#event-heterogeneous-data-object">1 event を heterogeneous data object として見る</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#field">入力 field</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#scaling">変換と scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#dst">DST 直接再構成</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../ja/code_map.html">コード読解マップ</a><ul>
@@ -162,6 +182,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#quality-only">再構成quality-onlyの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#mass-focal">mass focalの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#heterogeneous-reco-mass">heterogeneous reco+mass比較</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#balanced-heterogeneous-hdf5">balanced heterogeneous HDF5 サイズ比較</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#id2">注意点</a></li>
 </ul>
 </li>
@@ -181,6 +202,26 @@
 <li class="toctree-l3"><a class="reference internal" href="#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_workflow.html">Heterogeneous DST Reconstruction Workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html">Heterogeneous model explained</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#forward-pass-overview">Forward-pass overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#one-event-as-a-heterogeneous-data-object">One event as a heterogeneous data object</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#input-fields">Input fields</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#conversion-and-scaling">Conversion and scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#server-command-for-the-first-transformer-sweep">Server command for the first transformer sweep</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="code_map.html">Code Reading Map</a><ul>
@@ -245,6 +286,7 @@
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#mass-focal-example">Mass focal example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#heterogeneous-reco-mass-comparison">Heterogeneous reco+mass comparison</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#balanced-heterogeneous-hdf5-size-sweep">Balanced heterogeneous HDF5 size sweep</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#rules">Rules</a></li>
 </ul>
 </li>
@@ -333,7 +375,9 @@ For MC training, they contain targets and particle labels.</p>
 <p><code class="docutils literal notranslate"><span class="pre">export-hetero</span></code> writes the newer <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph</span></code> schema.
 The output is a training/cache format, not a mandatory step for one-pass reconstruction.
 The graph contains detector nodes, pulse nodes, detector-level waveforms, and typed relations.
-For MC training, <code class="docutils literal notranslate"><span class="pre">--require-reference-core</span></code> is the normal setting because core-relative pulse features are valid only when the Ising reference core exists.</p>
+For MC training, <code class="docutils literal notranslate"><span class="pre">--require-reference-core</span></code> is the normal setting because core-relative pulse features are valid only when the Ising reference core exists.
+For balanced large MC datasets, add <code class="docutils literal notranslate"><span class="pre">--energy-sample-per-bin</span></code> with <code class="docutils literal notranslate"><span class="pre">--energy-sample-stratify-particle</span></code>.
+The balanced selector keeps candidates spread across <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source groups, zenith, azimuth, core-position, and event-time bins, and can write <code class="docutils literal notranslate"><span class="pre">--selection-summary</span></code> before or during HDF5 export.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>export-hetero<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--input-dir<span class="w"> </span>/path/to/mc_dst<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--kind<span class="w"> </span>mc<span class="w"> </span><span class="se">\</span>
@@ -342,6 +386,9 @@ For MC training, <code class="docutils literal notranslate"><span class="pre">--
 <span class="w">  </span>--require-reference-core<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--skip-errors<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--skip-missing-mc-calibration<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--energy-sample-per-bin<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--energy-sample-stratify-particle<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--selection-summary<span class="w"> </span>/path/to/graphs/hetero/summaries/hetero_selection_summary.json<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--shard-size<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-o<span class="w"> </span>/path/to/graphs/hetero/hetero.h5
 </pre></div>
@@ -393,7 +440,8 @@ If PyTorch Geometric is available, the same sample can also be represented as <c
 <span class="w">  </span>-o<span class="w"> </span>/path/to/output/checkpoints/hetero_reco_mass.pt<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--epochs<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--batch-size<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--waveform-encoder<span class="w"> </span>cnn-gru<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--model-architecture<span class="w"> </span>hetero_attention<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--waveform-encoder<span class="w"> </span>transformer<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--loss-mode<span class="w"> </span>physics<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--mass-classification<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--split-mode<span class="w"> </span>source-stratified<span class="w"> </span><span class="se">\</span>
@@ -412,6 +460,8 @@ If PyTorch Geometric is available, the same sample can also be represented as <c
       -&gt; metrics.py / diagnostics.py
 </pre></div>
 </div>
+<p>For the current planned heterogeneous comparison, use <code class="docutils literal notranslate"><span class="pre">WAVEFORM_ENCODER=transformer</span></code> first.
+The <code class="docutils literal notranslate"><span class="pre">cnn-gru</span></code> waveform encoder is a later ablation under the selected condition, not a simultaneous six-job sweep.</p>
 </section>
 <section id="prediction">
 <h2>Prediction<a class="headerlink" href="#prediction" title="Link to this heading"></a></h2>
@@ -497,7 +547,7 @@ Use this to inspect graph schema, node/edge construction, and waveform-mask beha
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="index.html" class="btn btn-neutral float-left" title="English API Usage Guide" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="code_map.html" class="btn btn-neutral float-right" title="Code Reading Map" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="hetero_workflow.html" class="btn btn-neutral float-right" title="Heterogeneous DST Reconstruction Workflow" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

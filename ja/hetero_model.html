@@ -1,0 +1,636 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="ja" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Heterogeneous model の詳しい説明 &mdash; TALE-SD GNN Reconstruction 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=751d28fa" />
+
+
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=98e9f989"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../_static/translations.js?v=4755f45a"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="検索" href="../search.html" />
+    <link rel="next" title="コード読解マップ" href="code_map.html" />
+    <link rel="prev" title="Heterogeneous DST 再構成 workflow" href="hetero_workflow.html" />
+</head>
+
+<body class="wy-body-for-nav">
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+          <a href="../index.html" class="icon icon-home">
+            TALE-SD GNN Reconstruction
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">日本語</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">日本語 API 利用ガイド</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="cli.html">CLI API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#heterogeneous-hdf5-graph-export">Heterogeneous HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#heterogeneous-training">Heterogeneous training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_workflow.html">Heterogeneous DST 再構成 workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
+</ul>
+</li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Heterogeneous model の詳しい説明</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#forward-pass">Forward pass の全体図</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#event-heterogeneous-data-object">1 event を heterogeneous data object として見る</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#field">入力 field</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#scaling">変換と scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#readout">Readout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id1">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#dst">DST 直接再構成</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="code_map.html">コード読解マップ</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#id2">読む順番</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#cli-wrapper">CLI は薄い wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#dataset">Dataset 読み込み</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#split-scaler">Split と scaler</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#model">Model の入力と出力</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#loss">Loss と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#server-submitter">Server submitter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_map.html#diagnostics">Diagnostics と後処理</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="code_walkthrough.html">コード詳細 walkthrough</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id1">このページの読み方</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#gnn">GNNを読むための基礎</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id2">基本用語</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#loss">非線形関数とloss関数</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#gnn-message-passing">GNNの中心: message passing</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id3">全体の入口</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#hdf5-graph-export">HDF5 graph export</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#dst">DST読み込み</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#graphevent">GraphEvent作成</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#graphevent-build-graph-event">実コード抜粋: <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> と <code class="docutils literal notranslate"><span class="pre">build_graph_event</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#node">node特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#accepted-pulsenode">実コード抜粋: accepted pulseをnodeへ展開する部分</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#edge">edge特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#edgeedge">実コード抜粋: edge候補とedge特徴量</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#hdf5">HDF5書き込み</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#energy-flat-samplingshard">energy-flat samplingとshard</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#dataset">学習用dataset読み込み</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#h5graphdataset-dataset-py-202"><code class="docutils literal notranslate"><span class="pre">H5GraphDataset</span></code> : <code class="docutils literal notranslate"><span class="pre">dataset.py:202</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#getitem-sample"><code class="docutils literal notranslate"><span class="pre">__getitem__</span></code> が返すsample</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#hdf51-event">実コード抜粋: HDF5から1 eventを読む部分</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#scaler-fitting">Scaler fitting</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#collate">collate</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#graph-samplemini-batch">実コード抜粋: graph sampleをmini-batchへ連結する部分</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#train-val-test-split">train/val/test split</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id4">学習本体</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#train-model-split-scaler">実コード抜粋: <code class="docutils literal notranslate"><span class="pre">train_model</span></code> の入口からsplit/scalerまで</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#epoch-loop">epoch loop</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#epochtrain-loop">実コード抜粋: 1 epoch内のtrain loop</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#checkpoint">checkpoint</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id5">モデル構造</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id6">GNNとして何を近似しているか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id7">物理量との対応</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id8">入力</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#node-encoder">node encoder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#waveform-encoder">waveform encoder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#detector-embedding">detector embedding</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#time-edge-encoder">time-edge encoder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#message-passing">message passing</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#readouthead">readoutとhead</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#physicstalesdgnn-forward">実コード抜粋: <code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN.forward</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id9">GNNがしていること、していないこと</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id10">数学関数の補足</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#smoothl1">SmoothL1</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#sigmoid-logit-bcewithlogits">sigmoid, logit, BCEWithLogits</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id11">loss</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#reconstruction-loss">reconstruction loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#energy-bias-loss">energy bias loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#quality-loss">quality loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#mass-loss">mass loss</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id12">実コード抜粋: loss関数</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#total-loss">total loss</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id13">診断と評価</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#feature-importance">入力分布とfeature importance</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#id14">入力分布</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#feature-group">feature group重要度</a></li>
+<li class="toctree-l4"><a class="reference internal" href="code_walkthrough.html#feature-group-ablation">実コード抜粋: feature group ablation</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id15">変更したい時に読む場所</a></li>
+<li class="toctree-l3"><a class="reference internal" href="code_walkthrough.html#id16">コードを読む推奨順</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="python_api.html">Python API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="python_api.html#id1">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="python_api.html#hdf5-dataset">HDF5 datasetの読み込み</a></li>
+<li class="toctree-l3"><a class="reference internal" href="python_api.html#id2">推論</a></li>
+<li class="toctree-l3"><a class="reference internal" href="python_api.html#id3">入力分布</a></li>
+<li class="toctree-l3"><a class="reference internal" href="python_api.html#group">特徴量group重要度</a></li>
+<li class="toctree-l3"><a class="reference internal" href="python_api.html#hdf5-graph">HDF5 graphの手動作成</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="server_workflow.html">サーバー実行フロー</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#submitter">標準submitter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#quality-only">再構成quality-onlyの例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#mass-focal">mass focalの例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#heterogeneous-reco-mass">heterogeneous reco+mass比較</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#balanced-heterogeneous-hdf5">balanced heterogeneous HDF5 サイズ比較</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#id2">注意点</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">English</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../en/index.html">English API Usage Guide</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../en/cli.html">CLI API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#heterogeneous-hdf5-graph-export">Heterogeneous HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#heterogeneous-training">Heterogeneous training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#input-distributions">Input distributions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/hetero_workflow.html">Heterogeneous DST Reconstruction Workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/hetero_model.html">Heterogeneous model explained</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#forward-pass-overview">Forward-pass overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#one-event-as-a-heterogeneous-data-object">One event as a heterogeneous data object</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#input-fields">Input fields</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#conversion-and-scaling">Conversion and scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#readout">Readout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#server-command-for-the-first-transformer-sweep">Server command for the first transformer sweep</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/code_map.html">Code Reading Map</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#recommended-reading-order">Recommended reading order</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#cli-as-a-thin-wrapper">CLI as a thin wrapper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#hdf5-graph-export">HDF5 graph export</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#dataset-loading">Dataset loading</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#split-and-scalers">Split and scalers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#model-inputs-and-outputs">Model inputs and outputs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#losses-and-evaluation">Losses and evaluation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#server-submitters">Server submitters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_map.html#diagnostics-and-post-processing">Diagnostics and post-processing</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/code_walkthrough.html">Code walkthrough</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#top-level-entry-point">Top-level entry point</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#hdf5-graph-export">HDF5 graph export</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#dst-reading">DST reading</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#graphevent-creation">GraphEvent creation</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#node-and-edge-features">Node and edge features</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#hdf5-schema">HDF5 schema</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#energy-flat-sampling-and-shards">Energy-flat sampling and shards</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#dataset-and-batching">Dataset and batching</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#train-validation-test-split">Train/validation/test split</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#training">Training</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#epoch-loop">Epoch loop</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#checkpoint-contents">Checkpoint contents</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#model">Model</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#what-the-gnn-approximates">What the GNN approximates</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#relation-to-shower-reconstruction">Relation to shower reconstruction</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#node-waveform-and-edge-encoders">Node, waveform, and edge encoders</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#message-passing">Message passing</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#readout-and-heads">Readout and heads</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#implementation-excerpts">Implementation excerpts</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#loss-functions">Loss functions</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../en/code_walkthrough.html#mathematical-helpers">Mathematical helpers</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#diagnostics">Diagnostics</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#input-distributions-and-feature-importance">Input distributions and feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#where-to-read-when-changing-code">Where to read when changing code</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/code_walkthrough.html#recommended-reading-order">Recommended reading order</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/python_api.html">Python API</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#hdf5-dataset-loading">HDF5 dataset loading</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#prediction">Prediction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#input-distributions">Input distributions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#feature-group-importance">Feature group importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/python_api.html#manual-hdf5-graph-writing">Manual HDF5 graph writing</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/server_workflow.html">Server Workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#standard-submitters">Standard submitters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#mass-focal-example">Mass focal example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#heterogeneous-reco-mass-comparison">Heterogeneous reco+mass comparison</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#balanced-heterogeneous-hdf5-size-sweep">Balanced heterogeneous HDF5 size sweep</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#rules">Rules</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../reference.html">Python Reference</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.train">Training</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.dataset">Dataset</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.predict">Prediction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.feature_analysis">Feature analysis</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.event_graph">Graph construction and I/O</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference.html#module-talesd_gnn_reconstruction.model">Model</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../reference.html#talesd_gnn_reconstruction.model.PhysicsTaleSdGNN"><code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../reference.html#talesd_gnn_reconstruction.model.PhysicsTaleSdGNN.forward"><code class="docutils literal notranslate"><span class="pre">PhysicsTaleSdGNN.forward()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TALE-SD GNN Reconstruction</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">日本語 API 利用ガイド</a></li>
+      <li class="breadcrumb-item active">Heterogeneous model の詳しい説明</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/ja/hetero_model.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+
+  <section id="heterogeneous-model">
+<h1>Heterogeneous model の詳しい説明<a class="headerlink" href="#heterogeneous-model" title="Link to this heading"></a></h1>
+<p>このページでは、現在の TALE-SD heterogeneous model を、入力配列から最終出力までの値の流れとして説明します。
+書き方は、PyTorch 公式の
+<a class="reference external" href="https://docs.pytorch.org/tutorials/beginner/basics/data_tutorial.html">Dataset / DataLoader tutorial</a>、
+<a class="reference external" href="https://docs.pytorch.org/tutorials/beginner/introyt/trainingyt.html">training tutorial</a>、
+PyTorch Geometric 公式の
+<a class="reference external" href="https://pytorch-geometric.readthedocs.io/en/stable/notes/heterogeneous.html">heterogeneous graph guide</a>
+に合わせています。
+つまり、まず data object を定義し、次に model、最後に training と inference を説明します。</p>
+<p>ここで説明する経路は、実際にこの repository で使っている実装です。</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>段階</p></th>
+<th class="head"><p>実装</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>HDF5 sample の読み書き</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">talesd_gnn_reconstruction.hetero_graph_io</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>tensor / PyG 変換</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">talesd_gnn_reconstruction.hetero_data</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>model</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">talesd_gnn_reconstruction.hetero_model.MinimalHeteroTaleSdGNN</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>学習</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">talesd_gnn_reconstruction.hetero_training.train_hetero_model</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>DST 直接推論</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">talesd_gnn_reconstruction.hetero_predict.reconstruct_dst</span></code></p></td>
+</tr>
+</tbody>
+</table>
+<section id="forward-pass">
+<h2>Forward pass の全体図<a class="headerlink" href="#forward-pass" title="Link to this heading"></a></h2>
+<figure class="align-default" id="id2">
+<a class="reference internal image-reference" href="../_images/hetero_model_forward.svg"><img alt="GraphEvent から出力headまでの TALE-SD heterogeneous model forward pass。" src="../_images/hetero_model_forward.svg" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">1 event を 1 つの graph として丸ごと使います。detector waveform は detector node に 1 回だけ持たせます。pulse node は <code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code> と <code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code> で対応する detector waveform の区間を参照します。</span><a class="headerlink" href="#id2" title="Link to this image"></a></p>
+</figcaption>
+</figure>
+</section>
+<section id="event-heterogeneous-data-object">
+<h2>1 event を heterogeneous data object として見る<a class="headerlink" href="#event-heterogeneous-data-object" title="Link to this heading"></a></h2>
+<p>PyG では heterogeneous graph を node type ごとの store と edge type ごとの store に分けて表します。
+TALE-SD graph でも同じ考え方を使います。1 event には 2 種類の node と 3 種類の relation があります。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>node types:
+  detector
+  pulse
+
+edge types:
+  (&quot;pulse&quot;, &quot;interacts&quot;, &quot;pulse&quot;)
+  (&quot;detector&quot;, &quot;near&quot;, &quot;detector&quot;)
+  (&quot;detector&quot;, &quot;observes&quot;, &quot;pulse&quot;)
+</pre></div>
+</div>
+<p>本番学習では明示的な tensor dict を使い、必要な時には PyG <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> にも変換できます。
+次は実際の <code class="docutils literal notranslate"><span class="pre">hetero_data.sample_to_hetero_data</span></code> が作る構造です。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">x</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">][</span><span class="s2">&quot;x&quot;</span><span class="p">]</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">context</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">][</span><span class="s2">&quot;context&quot;</span><span class="p">]</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">pos</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">][</span><span class="s2">&quot;pos&quot;</span><span class="p">]</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">lid</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">][</span><span class="s2">&quot;lid&quot;</span><span class="p">]</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">waveform</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">][</span><span class="s2">&quot;waveform&quot;</span><span class="p">]</span>
+
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">x</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">][</span><span class="s2">&quot;x&quot;</span><span class="p">]</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">pos</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">][</span><span class="s2">&quot;pos&quot;</span><span class="p">]</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">lid</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">][</span><span class="s2">&quot;lid&quot;</span><span class="p">]</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">detector_index</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">][</span><span class="s2">&quot;detector_index&quot;</span><span class="p">]</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">pulse_bounds</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">][</span><span class="s2">&quot;pulse_bounds&quot;</span><span class="p">]</span>
+
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">,</span> <span class="s2">&quot;interacts&quot;</span><span class="p">,</span> <span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">edge_index</span> <span class="o">=</span> <span class="o">...</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">,</span> <span class="s2">&quot;interacts&quot;</span><span class="p">,</span> <span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">edge_attr</span> <span class="o">=</span> <span class="o">...</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">,</span> <span class="s2">&quot;near&quot;</span><span class="p">,</span> <span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">edge_index</span> <span class="o">=</span> <span class="o">...</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">,</span> <span class="s2">&quot;near&quot;</span><span class="p">,</span> <span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">edge_attr</span> <span class="o">=</span> <span class="o">...</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">,</span> <span class="s2">&quot;observes&quot;</span><span class="p">,</span> <span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">edge_index</span> <span class="o">=</span> <span class="o">...</span>
+<span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">,</span> <span class="s2">&quot;observes&quot;</span><span class="p">,</span> <span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">edge_attr</span> <span class="o">=</span> <span class="o">...</span>
+</pre></div>
+</div>
+<p>これは、全 node を 1 つの同じ feature matrix に押し込む homogeneous graph ではありません。
+detector と pulse は物理的に違う対象なので、別の node type として扱います。</p>
+</section>
+<section id="field">
+<h2>入力 field<a class="headerlink" href="#field" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">detector_features</span></code> は detector ごとの signal、timing、局所 geometry です。
+<code class="docutils literal notranslate"><span class="pre">detector_context_features</span></code> は readout / calibration context です。
+これを分けておくことで、shower feature と readout context を無自覚に混ぜず、後で ablation できます。</p>
+<p><code class="docutils literal notranslate"><span class="pre">detector_waveforms</span></code> は detector ごとの full calibrated VEM waveform です。
+pulse node ごとに同じ waveform を複製しません。pulse は <code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code> で detector を指し、
+<code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code> で waveform のどの時間区間に対応するかを持ちます。</p>
+<p><code class="docutils literal notranslate"><span class="pre">pulse_features</span></code> は pulse timing、charge、Ising reference core がある時の core-relative coordinate、
+Ising annotation を含みます。Ising rejected pulse candidate も入力に残します。
+delayed pulse、waveform tail、multi-pulse structure は mass / energy に物理的に有効な情報なので、
+noise として hard drop しません。</p>
+<p><code class="docutils literal notranslate"><span class="pre">edge_features_by_type</span></code> は edge の連続物理量です。
+例えば pulse-pulse edge には timing difference、距離、<code class="docutils literal notranslate"><span class="pre">dt_per_km</span></code>、<code class="docutils literal notranslate"><span class="pre">ising_weight</span></code> などが入ります。
+これは単なる relation label ではなく、attention が使う数値入力です。</p>
+</section>
+<section id="scaling">
+<h2>変換と scaling<a class="headerlink" href="#scaling" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">hetero_sample_to_tensors</span></code> は HDF5 または DST 直接 graph から来た NumPy 配列を tensor に変換します。
+scaler が与えられている場合、detector、context、pulse、edge、target を train split の統計量で標準化します。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">detector_features</span> <span class="o">=</span> <span class="n">_scale_tensor</span><span class="p">(</span>
+    <span class="n">detector_features</span><span class="p">,</span>
+    <span class="n">_scaler_for</span><span class="p">(</span><span class="n">scalers</span><span class="p">,</span> <span class="s2">&quot;detector&quot;</span><span class="p">,</span> <span class="s2">&quot;detector_features&quot;</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="n">detector_context</span> <span class="o">=</span> <span class="n">_scale_tensor</span><span class="p">(</span>
+    <span class="n">detector_context</span><span class="p">,</span>
+    <span class="n">_scaler_for</span><span class="p">(</span><span class="n">scalers</span><span class="p">,</span> <span class="s2">&quot;detector_context&quot;</span><span class="p">,</span> <span class="s2">&quot;detector_context_features&quot;</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="n">pulse_features</span> <span class="o">=</span> <span class="n">_scale_tensor</span><span class="p">(</span>
+    <span class="n">pulse_features</span><span class="p">,</span>
+    <span class="n">_scaler_for</span><span class="p">(</span><span class="n">scalers</span><span class="p">,</span> <span class="s2">&quot;pulse&quot;</span><span class="p">,</span> <span class="s2">&quot;pulse_features&quot;</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="n">edge_features_by_type</span><span class="p">[</span><span class="n">relation</span><span class="p">]</span> <span class="o">=</span> <span class="n">_scale_tensor</span><span class="p">(</span>
+    <span class="n">edge_features</span><span class="p">,</span>
+    <span class="n">_scaler_for</span><span class="p">(</span><span class="n">scalers</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;edge:</span><span class="si">{</span><span class="n">relation</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="n">target_tensor</span> <span class="o">=</span> <span class="n">_scale_tensor</span><span class="p">(</span><span class="n">target_tensor</span><span class="p">,</span> <span class="n">_scaler_for</span><span class="p">(</span><span class="n">scalers</span><span class="p">,</span> <span class="s2">&quot;target&quot;</span><span class="p">))</span>
+</pre></div>
+</div>
+<p>これは PyTorch の Dataset / DataLoader の分離と同じ考え方です。
+dataset は 1 sample を読み、変換層が tensor にし、training loop は batch tensor だけを見ます。</p>
+</section>
+<section id="detector-encoder-pulse-encoder">
+<h2>detector encoder と pulse encoder<a class="headerlink" href="#detector-encoder-pulse-encoder" title="Link to this heading"></a></h2>
+<p>model はまず detector と pulse を同じ hidden dimension の vector に変換します。</p>
+<p>detector node は 3 系統で処理します。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>detector_features         -&gt; detector feature MLP
+detector_context_features -&gt; detector context MLP
+detector_waveforms        -&gt; waveform encoder
+                       concat -&gt; detector_node_encoder
+</pre></div>
+</div>
+<p>pulse node は pulse feature を MLP に通します。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>pulse_features -&gt; pulse_node_encoder
+</pre></div>
+</div>
+<p>waveform encoder は detector ごとに 1 回だけ適用します。
+最初の transformer waveform sweep では submitter で <code class="docutils literal notranslate"><span class="pre">WAVEFORM_ENCODER=transformer</span></code> を指定します。
+graph 側の architecture は <code class="docutils literal notranslate"><span class="pre">hetero_attention</span></code> のままです。</p>
+</section>
+<section id="relation-attention">
+<h2>Relation attention<a class="headerlink" href="#relation-attention" title="Link to this heading"></a></h2>
+<p>message passing の中心は <code class="docutils literal notranslate"><span class="pre">HeteroAttentionMessageLayer</span></code> です。
+relation type ごとに query、key、value を別々に作ります。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">src_input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">src_state</span><span class="p">[</span><span class="n">src_index</span><span class="p">],</span> <span class="n">edge_attr</span><span class="p">],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">query</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">query</span><span class="p">[</span><span class="n">relation</span><span class="p">](</span><span class="n">dst_state</span><span class="p">[</span><span class="n">dst_index</span><span class="p">])</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">heads</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">head_dim</span><span class="p">)</span>
+<span class="n">key</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">key</span><span class="p">[</span><span class="n">relation</span><span class="p">](</span><span class="n">src_input</span><span class="p">)</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">heads</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">head_dim</span><span class="p">)</span>
+<span class="n">value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="p">[</span><span class="n">relation</span><span class="p">](</span><span class="n">src_input</span><span class="p">)</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">heads</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">head_dim</span><span class="p">)</span>
+<span class="n">scores</span> <span class="o">=</span> <span class="p">(</span><span class="n">query</span> <span class="o">*</span> <span class="n">key</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">scale</span>
+<span class="n">weights</span> <span class="o">=</span> <span class="n">_scatter_softmax</span><span class="p">(</span><span class="n">scores</span><span class="p">,</span> <span class="n">dst_index</span><span class="p">,</span> <span class="n">dst_state</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<span class="n">messages</span> <span class="o">=</span> <span class="p">(</span><span class="n">value</span> <span class="o">*</span> <span class="n">weights</span><span class="p">[:,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">hidden_dim</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>TALE-SD で重要なのは、<code class="docutils literal notranslate"><span class="pre">key</span></code> と <code class="docutils literal notranslate"><span class="pre">value</span></code> に <code class="docutils literal notranslate"><span class="pre">edge_attr</span></code> も入れる点です。
+これにより、model は <code class="docutils literal notranslate"><span class="pre">dt_usec</span></code>、<code class="docutils literal notranslate"><span class="pre">distance_km</span></code>、<code class="docutils literal notranslate"><span class="pre">dt_per_km</span></code>、<code class="docutils literal notranslate"><span class="pre">ising_weight</span></code> などを見ながら、
+どの pulse / detector relation を重視するかを決められます。</p>
+<p>message を集めた後、detector state と pulse state は residual connection、LayerNorm、feed-forward block で更新されます。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>new_state = LayerNorm(old_state + update(old_state, aggregated_message))
+new_state = LayerNorm(new_state + FFN(new_state))
+</pre></div>
+</div>
+<p>これは HGT を参考にした実装ですが、HGT そのものではありません。
+PyG <code class="docutils literal notranslate"><span class="pre">HGTConv</span></code> は使っていません。HGSampling も使いません。
+TALE では 1 event = 1 graph なので、event graph を丸ごと読みます。</p>
+</section>
+<section id="readout">
+<h2>Readout<a class="headerlink" href="#readout" title="Link to this heading"></a></h2>
+<p>再構成では node ごとの出力ではなく、event ごとに 1 つの出力が必要です。
+そこで <code class="docutils literal notranslate"><span class="pre">HeteroAttentiveReadout</span></code> は detector node と pulse node を別々に集約します。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>detector states -&gt; mean, max, attention-weighted sums
+pulse states    -&gt; mean, max, attention-weighted sums
+concat          -&gt; event vector
+</pre></div>
+</div>
+<p>detector と pulse を最初から同じ pool に混ぜず、それぞれの情報を event-level summary にしてから結合します。</p>
+</section>
+<section id="output-heads">
+<h2>Output heads<a class="headerlink" href="#output-heads" title="Link to this heading"></a></h2>
+<p>event vector は task ごとの head に入ります。</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>head</p></th>
+<th class="head"><p>出力</p></th>
+<th class="head"><p>意味</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>reconstruction</p></td>
+<td><p>6 values</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">log10_energy_eV</span></code>, <code class="docutils literal notranslate"><span class="pre">core_x_km</span></code>, <code class="docutils literal notranslate"><span class="pre">core_y_km</span></code>, <code class="docutils literal notranslate"><span class="pre">dir_x</span></code>, <code class="docutils literal notranslate"><span class="pre">dir_y</span></code>, <code class="docutils literal notranslate"><span class="pre">dir_z</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>mass</p></td>
+<td><p>1 logit</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">sigmoid(logit)</span></code> が iron probability</p></td>
+</tr>
+<tr class="row-even"><td><p>quality</p></td>
+<td><p>1 logit</p></td>
+<td><p>auxiliary quality score</p></td>
+</tr>
+<tr class="row-odd"><td><p>predicted error</p></td>
+<td><p>3 values</p></td>
+<td><p>energy、angular、core error の予想値</p></td>
+</tr>
+</tbody>
+</table>
+<p>今の比較方針では、auxiliary head を全部同時に入れません。
+最初の transformer waveform sweep では、3つの dataset size に対して
+quality-only と predicted-error-only の reco+mass を投げます。</p>
+</section>
+<section id="id1">
+<h2>学習<a class="headerlink" href="#id1" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">train_hetero_model</span></code> は標準的な PyTorch training loop と同じ流れです。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>H5HeteroGraphDataset
+  -&gt; train / validation / test split
+  -&gt; train split で scaler を fit
+  -&gt; first sample から model shape を決める
+  -&gt; DataLoader が HeteroData sample を batch 化
+  -&gt; forward
+  -&gt; MC target と比較して loss を計算
+  -&gt; backward
+  -&gt; optimizer step
+  -&gt; checkpoint と scaler を保存
+</pre></div>
+</div>
+<p>checkpoint には model weight と scaler の両方を保存します。
+そのため、DST 直接再構成でも学習時と同じ feature normalization を使えます。</p>
+</section>
+<section id="dst">
+<h2>DST 直接再構成<a class="headerlink" href="#dst" title="Link to this heading"></a></h2>
+<p>直接推論では HDF5 を必須にしません。学習時と同じ graph schema と変換層を使います。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>DST
+  -&gt; dstio.tale.graph.iter_graphs
+  -&gt; graph_event_to_sample
+  -&gt; hetero_sample_to_tensors / HeteroData
+  -&gt; hetero_attention checkpoint
+  -&gt; reconstruction CSV
+</pre></div>
+</div>
+<p>これが最終的な DST 再構成経路です。
+HDF5 は学習用 cache であり、本番の一回通し再構成で必須の中間ファイルではありません。</p>
+</section>
+<section id="transformer-sweep">
+<h2>最初の transformer sweep の投入コマンド<a class="headerlink" href="#transformer-sweep" title="Link to this heading"></a></h2>
+<p>balanced HDF5 が揃った後、最初の transformer 6本は次の入口で投げます。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/dicos_ui_home/ikomae/work/src/talesd_gnn_reconstruction
+
+<span class="nv">RUN_ID</span><span class="o">=</span>hetero_balance_20260606_143020<span class="w"> </span><span class="se">\</span>
+<span class="nv">SUBMIT_EXPORTS</span><span class="o">=</span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+<span class="nv">SUBMIT_TRAINING</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="nv">MODEL_ARCHITECTURE</span><span class="o">=</span>hetero_attention<span class="w"> </span><span class="se">\</span>
+<span class="nv">WAVEFORM_ENCODER</span><span class="o">=</span>transformer<span class="w"> </span><span class="se">\</span>
+<span class="nv">PARTITION</span><span class="o">=</span>v100-al9_long<span class="w"> </span><span class="se">\</span>
+scripts/submit_server_hetero_dataset_size_sweep.sh
+</pre></div>
+</div>
+<p>これは 50000、20000、10000 events/bin の HDF5 に対して、
+quality-only と predicted-error-only の reco+mass 学習を投げます。
+<code class="docutils literal notranslate"><span class="pre">cnn-gru</span></code> はここでは同時に投げず、transformer の結果を見て採用条件を決めた後に比較します。</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="hetero_workflow.html" class="btn btn-neutral float-left" title="Heterogeneous DST 再構成 workflow" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="code_map.html" class="btn btn-neutral float-right" title="コード読解マップ" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright .</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+</body>
+</html>

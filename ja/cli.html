@@ -21,7 +21,7 @@
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="検索" href="../search.html" />
-    <link rel="next" title="コード読解マップ" href="code_map.html" />
+    <link rel="next" title="Heterogeneous DST 再構成 workflow" href="hetero_workflow.html" />
     <link rel="prev" title="日本語 API 利用ガイド" href="index.html" /> 
 </head>
 
@@ -57,6 +57,26 @@
 <li class="toctree-l3"><a class="reference internal" href="#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_workflow.html">Heterogeneous DST 再構成 workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html">Heterogeneous model の詳しい説明</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#forward-pass">Forward pass の全体図</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#event-heterogeneous-data-object">1 event を heterogeneous data object として見る</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#field">入力 field</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#scaling">変換と scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#id1">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#dst">DST 直接再構成</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="code_map.html">コード読解マップ</a><ul>
@@ -162,6 +182,7 @@
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#quality-only">再構成quality-onlyの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#mass-focal">mass focalの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#heterogeneous-reco-mass">heterogeneous reco+mass比較</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#balanced-heterogeneous-hdf5">balanced heterogeneous HDF5 サイズ比較</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#id2">注意点</a></li>
 </ul>
 </li>
@@ -181,6 +202,26 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#feature-importance">Feature importance</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/hetero_workflow.html">Heterogeneous DST Reconstruction Workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../en/hetero_model.html">Heterogeneous model explained</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#forward-pass-overview">Forward-pass overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#one-event-as-a-heterogeneous-data-object">One event as a heterogeneous data object</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#input-fields">Input fields</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#conversion-and-scaling">Conversion and scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#readout">Readout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#server-command-for-the-first-transformer-sweep">Server command for the first transformer sweep</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../en/code_map.html">Code Reading Map</a><ul>
@@ -245,6 +286,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#mass-focal-example">Mass focal example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#heterogeneous-reco-mass-comparison">Heterogeneous reco+mass comparison</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#balanced-heterogeneous-hdf5-size-sweep">Balanced heterogeneous HDF5 size sweep</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/server_workflow.html#rules">Rules</a></li>
 </ul>
 </li>
@@ -334,7 +376,9 @@ MC 学習用の場合、<code class="docutils literal notranslate"><span class="
 このHDF5は学習用cacheであり、一回通しの再構成で必ず作るものではありません。
 graph は detector node、pulse node、detector-level waveform、型付き relation を持ちます。
 MC 学習用では、Ising reference core がある graph だけを使うため
-<code class="docutils literal notranslate"><span class="pre">--require-reference-core</span></code> を付けるのが標準です。</p>
+<code class="docutils literal notranslate"><span class="pre">--require-reference-core</span></code> を付けるのが標準です。
+大規模MCを偏りにくく作る場合は <code class="docutils literal notranslate"><span class="pre">--energy-sample-per-bin</span></code> と <code class="docutils literal notranslate"><span class="pre">--energy-sample-stratify-particle</span></code> を付けます。
+balanced selector は <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source group、zenith、azimuth、core位置、event時刻binに候補を分散させ、<code class="docutils literal notranslate"><span class="pre">--selection-summary</span></code> で選択分布を書き出せます。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>export-hetero<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--input-dir<span class="w"> </span>/path/to/mc_dst<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--kind<span class="w"> </span>mc<span class="w"> </span><span class="se">\</span>
@@ -343,6 +387,9 @@ MC 学習用では、Ising reference core がある graph だけを使うため
 <span class="w">  </span>--require-reference-core<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--skip-errors<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--skip-missing-mc-calibration<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--energy-sample-per-bin<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--energy-sample-stratify-particle<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--selection-summary<span class="w"> </span>/path/to/graphs/hetero/summaries/hetero_selection_summary.json<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--shard-size<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-o<span class="w"> </span>/path/to/graphs/hetero/hetero.h5
 </pre></div>
@@ -395,7 +442,8 @@ PyTorch Geometric が使える環境では同じ sample を <code class="docutil
 <span class="w">  </span>-o<span class="w"> </span>/path/to/output/checkpoints/hetero_reco_mass.pt<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--epochs<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--batch-size<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--waveform-encoder<span class="w"> </span>cnn-gru<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--model-architecture<span class="w"> </span>hetero_attention<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--waveform-encoder<span class="w"> </span>transformer<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--loss-mode<span class="w"> </span>physics<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--mass-classification<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--split-mode<span class="w"> </span>source-stratified<span class="w"> </span><span class="se">\</span>
@@ -414,6 +462,8 @@ PyTorch Geometric が使える環境では同じ sample を <code class="docutil
       -&gt; metrics.py / diagnostics.py
 </pre></div>
 </div>
+<p>現在予定している heterogeneous 比較では、まず <code class="docutils literal notranslate"><span class="pre">WAVEFORM_ENCODER=transformer</span></code> を使います。
+<code class="docutils literal notranslate"><span class="pre">cnn-gru</span></code> は同時に6本投げるのではなく、transformer の結果を見て採用条件を決めた後の ablation として比較します。</p>
 </section>
 <section id="prediction">
 <h2>Prediction<a class="headerlink" href="#prediction" title="Link to this heading"></a></h2>
@@ -502,7 +552,7 @@ graph schema、node/edge の作り方、waveform mask の妥当性を目で確�
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="index.html" class="btn btn-neutral float-left" title="日本語 API 利用ガイド" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="code_map.html" class="btn btn-neutral float-right" title="コード読解マップ" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="hetero_workflow.html" class="btn btn-neutral float-right" title="Heterogeneous DST 再構成 workflow" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

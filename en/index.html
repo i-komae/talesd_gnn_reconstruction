@@ -65,6 +65,20 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="../ja/hetero_model.html">Heterogeneous model の詳しい説明</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#forward-pass">Forward pass の全体図</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#event-heterogeneous-data-object">1 event を heterogeneous data object として見る</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#field">入力 field</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#scaling">変換と scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#dst">DST 直接再構成</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="../ja/code_map.html">コード読解マップ</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#id2">読む順番</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/code_map.html#cli-wrapper">CLI は薄い wrapper</a></li>
@@ -168,6 +182,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#quality-only">再構成quality-onlyの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#mass-focal">mass focalの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#heterogeneous-reco-mass">heterogeneous reco+mass比較</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#balanced-heterogeneous-hdf5">balanced heterogeneous HDF5 サイズ比較</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#id2">注意点</a></li>
 </ul>
 </li>
@@ -193,6 +208,20 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#graph-schema">Graph schema</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#training-cache-path">Training cache path</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html">Heterogeneous model explained</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#forward-pass-overview">Forward-pass overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#one-event-as-a-heterogeneous-data-object">One event as a heterogeneous data object</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#input-fields">Input fields</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#conversion-and-scaling">Conversion and scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#server-command-for-the-first-transformer-sweep">Server command for the first transformer sweep</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="code_map.html">Code Reading Map</a><ul>
@@ -257,6 +286,7 @@
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#mass-focal-example">Mass focal example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#heterogeneous-reco-mass-comparison">Heterogeneous reco+mass comparison</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#balanced-heterogeneous-hdf5-size-sweep">Balanced heterogeneous HDF5 size sweep</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#rules">Rules</a></li>
 </ul>
 </li>
@@ -331,6 +361,20 @@ It also maps each workflow to the source files that implement it, so the generat
 <li class="toctree-l2"><a class="reference internal" href="hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference internal" href="hetero_model.html">Heterogeneous model explained</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html#forward-pass-overview">Forward-pass overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html#one-event-as-a-heterogeneous-data-object">One event as a heterogeneous data object</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html#input-fields">Input fields</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html#conversion-and-scaling">Conversion and scaling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html#training">Training</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html#server-command-for-the-first-transformer-sweep">Server command for the first transformer sweep</a></li>
+</ul>
+</li>
 <li class="toctree-l1"><a class="reference internal" href="code_map.html">Code Reading Map</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="code_map.html#recommended-reading-order">Recommended reading order</a></li>
 <li class="toctree-l2"><a class="reference internal" href="code_map.html#cli-as-a-thin-wrapper">CLI as a thin wrapper</a></li>
@@ -371,6 +415,7 @@ It also maps each workflow to the source files that implement it, so the generat
 <li class="toctree-l2"><a class="reference internal" href="server_workflow.html#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
 <li class="toctree-l2"><a class="reference internal" href="server_workflow.html#mass-focal-example">Mass focal example</a></li>
 <li class="toctree-l2"><a class="reference internal" href="server_workflow.html#heterogeneous-reco-mass-comparison">Heterogeneous reco+mass comparison</a></li>
+<li class="toctree-l2"><a class="reference internal" href="server_workflow.html#balanced-heterogeneous-hdf5-size-sweep">Balanced heterogeneous HDF5 size sweep</a></li>
 <li class="toctree-l2"><a class="reference internal" href="server_workflow.html#rules">Rules</a></li>
 </ul>
 </li>

@@ -13,6 +13,7 @@
 
    cli
    hetero_workflow
+   hetero_model
    code_map
    code_walkthrough
    python_api
