@@ -70,8 +70,11 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#event-heterogeneous-data-object">1 event を heterogeneous data object として見る</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#field">入力 field</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#scaling">変換と scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#tensor-shape">tensor shape と行列計算</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#id1">学習</a></li>
@@ -215,8 +218,11 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#one-event-as-a-heterogeneous-data-object">One event as a heterogeneous data object</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#input-fields">Input fields</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#conversion-and-scaling">Conversion and scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#tensor-shapes-and-matrix-operations">Tensor shapes and matrix operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#where-attention-appears">Where attention appears</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#output-heads">Output heads</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#training">Training</a></li>
@@ -509,7 +515,10 @@ model は batch 化された <code class="docutils literal notranslate"><span cl
 <h2>Input distributions<a class="headerlink" href="#input-distributions" title="Link to this heading"></a></h2>
 <p>入力特徴量の分布をPDFとJSONに保存します。
 HDF5 の内容と split の偏りを確認するための診断です。
-学習ごとに変わるものではなく、基本的には HDF5 作成後に同じ graph に対して確認します。</p>
+学習ごとに変わるものではなく、基本的には HDF5 作成後に同じ graph に対して確認します。
+PDF の横には再描画用 artifact も保存します。
+<code class="docutils literal notranslate"><span class="pre">input_feature_sample_values.npz</span></code> は実際に描画に使った sampled values、
+<code class="docutils literal notranslate"><span class="pre">input_feature_sample_values_manifest.json</span></code> は各 NPZ 配列がどの group / column に対応するかの対応表です。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>input-distributions<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/flat50000<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-o<span class="w"> </span>/path/to/input_distributions<span class="w"> </span><span class="se">\</span>
@@ -521,7 +530,9 @@ HDF5 の内容と split の偏りを確認するための診断です。
 <h2>Feature importance<a class="headerlink" href="#feature-importance" title="Link to this heading"></a></h2>
 <p>checkpointに対してfeature group ablationを行います。
 これは再学習ではありません。学習済み model に対して、node/edge/waveform などの入力 group を置換し、
-metrics がどれだけ悪化するかを見ます。</p>
+metrics がどれだけ悪化するかを見ます。
+出力 JSON には baseline metrics、group ごとの ablated metrics、delta が入ります。
+<code class="docutils literal notranslate"><span class="pre">feature_group_importance_plot_data.json</span></code> には bar plot を推論なしで再描画するための値を保存します。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>feature-importance<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/flat50000<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--checkpoint<span class="w"> </span>/path/to/checkpoints/reconstruction.pt<span class="w"> </span><span class="se">\</span>

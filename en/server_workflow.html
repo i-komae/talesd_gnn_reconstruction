@@ -70,8 +70,11 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#event-heterogeneous-data-object">1 event を heterogeneous data object として見る</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#field">入力 field</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#scaling">変換と scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#tensor-shape">tensor shape と行列計算</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">学習</a></li>
@@ -215,8 +218,11 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#one-event-as-a-heterogeneous-data-object">One event as a heterogeneous data object</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#input-fields">Input fields</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#conversion-and-scaling">Conversion and scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#tensor-shapes-and-matrix-operations">Tensor shapes and matrix operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#where-attention-appears">Where attention appears</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#training">Training</a></li>
@@ -443,9 +449,13 @@ scripts/submit_server_hetero_dataset_size_sweep.sh
 <p>After the three HDF5 exports and their summaries are complete, inspect:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>/dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/hetero_selection_summary.json
 /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distribution_summary.json
+/dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distributions/split_distribution_plot_data.json
 /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distributions/
 </pre></div>
 </div>
+<p>The split plot-data JSON stores the histogram bins, histogram counts/densities,
+and energy-bin count curves used by the PDFs, so cosmetic changes can be made
+later without rescanning the HDF5 dataset.</p>
 <p>Then submit the six reco+mass comparison runs on those HDF5 files:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">RUN_ID</span><span class="o">=</span>&lt;same<span class="w"> </span>RUN_ID<span class="w"> </span>used<span class="w"> </span><span class="k">for</span><span class="w"> </span>export&gt;<span class="w"> </span><span class="se">\</span>
 <span class="nv">SUBMIT_EXPORTS</span><span class="o">=</span><span class="m">0</span><span class="w"> </span><span class="se">\</span>

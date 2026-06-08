@@ -71,6 +71,7 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#event-heterogeneous-data-object">1 event を heterogeneous data object として見る</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#field">入力 field</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#scaling">変換と scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#tensor-shape">tensor shape と行列計算</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
@@ -218,6 +219,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#one-event-as-a-heterogeneous-data-object">One event as a heterogeneous data object</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#input-fields">Input fields</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#conversion-and-scaling">Conversion and scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#tensor-shapes-and-matrix-operations">Tensor shapes and matrix operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#where-attention-appears">Where attention appears</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#relation-attention">Relation attention</a></li>
@@ -2998,10 +3000,12 @@ featureを削る前に、まずここで分布、外れ値、energy/particleと�
 <span class="linenos">112</span>    <span class="p">}</span>
 <span class="linenos">113</span>    <span class="n">json_path</span> <span class="o">=</span> <span class="n">output</span> <span class="o">/</span> <span class="s2">&quot;feature_group_importance.json&quot;</span>
 <span class="linenos">114</span>    <span class="n">json_path</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">indent</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
-<span class="linenos">115</span>    <span class="n">_plot_feature_group_importance</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">output</span> <span class="o">/</span> <span class="s2">&quot;feature_group_importance.pdf&quot;</span><span class="p">)</span>
-<span class="linenos">116</span>    <span class="n">dataset</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
-<span class="linenos">117</span>    <span class="n">result</span><span class="p">[</span><span class="s2">&quot;summary_json&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">json_path</span><span class="p">)</span>
-<span class="linenos">118</span>    <span class="k">return</span> <span class="n">result</span>
+<span class="linenos">115</span>    <span class="n">result</span><span class="p">[</span><span class="s2">&quot;redraw_artifacts&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">_write_feature_group_importance_plot_data</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span>
+<span class="linenos">116</span>    <span class="n">json_path</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">indent</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+<span class="linenos">117</span>    <span class="n">_plot_feature_group_importance</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">output</span> <span class="o">/</span> <span class="s2">&quot;feature_group_importance.pdf&quot;</span><span class="p">)</span>
+<span class="linenos">118</span>    <span class="n">dataset</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+<span class="linenos">119</span>    <span class="n">result</span><span class="p">[</span><span class="s2">&quot;summary_json&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">json_path</span><span class="p">)</span>
+<span class="linenos">120</span>    <span class="k">return</span> <span class="n">result</span>
 </pre></div>
 </div>
 </section>

@@ -108,7 +108,12 @@ validation は early stopping と model selection 用の独立 source-group hold
 
    /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/hetero_selection_summary.json
    /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distribution_summary.json
+   /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distributions/split_distribution_plot_data.json
    /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distributions/
+
+``split_distribution_plot_data.json`` には PDF に使った histogram bins、
+counts/densities、energy-bin count curve が入ります。
+見た目だけを後から調整する場合は、HDF5 を再 scan せずにこの JSON から再描画できます。
 
 その後、同じHDF5に対して6本の reco+mass 比較学習を投げます。
 

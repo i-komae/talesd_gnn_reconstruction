@@ -197,6 +197,9 @@ Input distributions
 入力特徴量の分布をPDFとJSONに保存します。
 HDF5 の内容と split の偏りを確認するための診断です。
 学習ごとに変わるものではなく、基本的には HDF5 作成後に同じ graph に対して確認します。
+PDF の横には再描画用 artifact も保存します。
+``input_feature_sample_values.npz`` は実際に描画に使った sampled values、
+``input_feature_sample_values_manifest.json`` は各 NPZ 配列がどの group / column に対応するかの対応表です。
 
 .. code-block:: bash
 
@@ -211,6 +214,8 @@ Feature importance
 checkpointに対してfeature group ablationを行います。
 これは再学習ではありません。学習済み model に対して、node/edge/waveform などの入力 group を置換し、
 metrics がどれだけ悪化するかを見ます。
+出力 JSON には baseline metrics、group ごとの ablated metrics、delta が入ります。
+``feature_group_importance_plot_data.json`` には bar plot を推論なしで再描画するための値を保存します。
 
 .. code-block:: bash
 

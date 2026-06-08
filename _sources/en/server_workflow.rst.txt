@@ -108,7 +108,12 @@ After the three HDF5 exports and their summaries are complete, inspect:
 
    /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/hetero_selection_summary.json
    /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distribution_summary.json
+   /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distributions/split_distribution_plot_data.json
    /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distributions/
+
+The split plot-data JSON stores the histogram bins, histogram counts/densities,
+and energy-bin count curves used by the PDFs, so cosmetic changes can be made
+later without rescanning the HDF5 dataset.
 
 Then submit the six reco+mass comparison runs on those HDF5 files:
 

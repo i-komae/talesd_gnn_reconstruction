@@ -70,8 +70,11 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#event-heterogeneous-data-object">1 event を heterogeneous data object として見る</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#field">入力 field</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#scaling">変換と scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#tensor-shape">tensor shape と行列計算</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">学習</a></li>
@@ -215,8 +218,11 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#one-event-as-a-heterogeneous-data-object">One event as a heterogeneous data object</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#input-fields">Input fields</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#conversion-and-scaling">Conversion and scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#tensor-shapes-and-matrix-operations">Tensor shapes and matrix operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#where-attention-appears">Where attention appears</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#training">Training</a></li>
@@ -507,7 +513,11 @@ It uses the same <code class="docutils literal notranslate"><span class="pre">ds
 <h2>Input distributions<a class="headerlink" href="#input-distributions" title="Link to this heading"></a></h2>
 <p>Save input feature distributions as PDF and JSON.
 This is a dataset diagnostic used to inspect HDF5 content and split-dependent biases.
-It is normally tied to the HDF5 dataset, not to a particular training run.</p>
+It is normally tied to the HDF5 dataset, not to a particular training run.
+The command also writes redraw artifacts next to the PDFs:
+<code class="docutils literal notranslate"><span class="pre">input_feature_sample_values.npz</span></code> stores the sampled values used for plotting,
+and <code class="docutils literal notranslate"><span class="pre">input_feature_sample_values_manifest.json</span></code> maps each NPZ array to its
+feature group and column name.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>input-distributions<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/flat50000<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-o<span class="w"> </span>/path/to/input_distributions<span class="w"> </span><span class="se">\</span>
@@ -518,7 +528,10 @@ It is normally tied to the HDF5 dataset, not to a particular training run.</p>
 <section id="feature-importance">
 <h2>Feature importance<a class="headerlink" href="#feature-importance" title="Link to this heading"></a></h2>
 <p>Run feature group ablation against a trained checkpoint.
-This is post-hoc analysis, not retraining. It replaces input groups such as node, edge, or waveform features and measures metric degradation.</p>
+This is post-hoc analysis, not retraining. It replaces input groups such as node, edge, or waveform features and measures metric degradation.
+The output JSON contains the baseline metrics, per-group ablated metrics, and
+deltas. <code class="docutils literal notranslate"><span class="pre">feature_group_importance_plot_data.json</span></code> contains the values needed
+to redraw the bar plots without rerunning inference.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>feature-importance<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/flat50000<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--checkpoint<span class="w"> </span>/path/to/checkpoints/reconstruction.pt<span class="w"> </span><span class="se">\</span>
