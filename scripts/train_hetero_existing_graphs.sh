@@ -80,6 +80,10 @@ FEATURE_IMPORTANCE_SPLIT="${FEATURE_IMPORTANCE_SPLIT:-validation}"
 FEATURE_IMPORTANCE_MAX_GRAPHS="${FEATURE_IMPORTANCE_MAX_GRAPHS:-50000}"
 FEATURE_IMPORTANCE_BATCH_SIZE="${FEATURE_IMPORTANCE_BATCH_SIZE:-256}"
 FEATURE_IMPORTANCE_DEVICE="${FEATURE_IMPORTANCE_DEVICE:-${DEVICE}}"
+ATTENTION_MAPS="${ATTENTION_MAPS:-1}"
+ATTENTION_MAPS_SPLIT="${ATTENTION_MAPS_SPLIT:-validation}"
+ATTENTION_MAPS_MAX_GRAPHS="${ATTENTION_MAPS_MAX_GRAPHS:-16}"
+ATTENTION_MAPS_DEVICE="${ATTENTION_MAPS_DEVICE:-${DEVICE}}"
 SEED="${SEED:-12345}"
 PYTHON_BIN="${PYTHON_BIN:-.venv/bin/python}"
 
@@ -177,6 +181,10 @@ FEATURE_IMPORTANCE_SPLIT=${FEATURE_IMPORTANCE_SPLIT}
 FEATURE_IMPORTANCE_MAX_GRAPHS=${FEATURE_IMPORTANCE_MAX_GRAPHS}
 FEATURE_IMPORTANCE_BATCH_SIZE=${FEATURE_IMPORTANCE_BATCH_SIZE}
 FEATURE_IMPORTANCE_DEVICE=${FEATURE_IMPORTANCE_DEVICE}
+ATTENTION_MAPS=${ATTENTION_MAPS}
+ATTENTION_MAPS_SPLIT=${ATTENTION_MAPS_SPLIT}
+ATTENTION_MAPS_MAX_GRAPHS=${ATTENTION_MAPS_MAX_GRAPHS}
+ATTENTION_MAPS_DEVICE=${ATTENTION_MAPS_DEVICE}
 SEED=${SEED}
 EOF
 
@@ -341,6 +349,42 @@ else
   FEATURE_IMPORTANCE_SUMMARY=""
 fi
 
+ATTENTION_MAPS_DIR="${CHECKPOINT}.diagnostics/attention_maps/${ATTENTION_MAPS_SPLIT}"
+ATTENTION_MAPS_SUMMARY="${ATTENTION_MAPS_DIR}/attention_maps.json"
+if [[ "${ATTENTION_MAPS}" == "1" ]]; then
+  if [[ "${MODEL_ARCHITECTURE}" != "hetero_attention" ]]; then
+    {
+      echo "stage=skip attention_maps date=$(date)"
+      echo "reason=model_architecture_${MODEL_ARCHITECTURE}_has_no_relation_attention"
+    } 2>&1 | tee -a "${LOG_PATH}"
+    ATTENTION_MAPS_SUMMARY=""
+  else
+    {
+      echo "stage=start attention_maps date=$(date)"
+      attention_cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli attention-maps
+        --graphs "${GRAPH_INPUT}"
+        --checkpoint "${CHECKPOINT}"
+        -o "${ATTENTION_MAPS_DIR}"
+        --split "${ATTENTION_MAPS_SPLIT}"
+        --max-graphs "${ATTENTION_MAPS_MAX_GRAPHS}"
+        --device "${ATTENTION_MAPS_DEVICE}"
+        --seed "${SEED}")
+      printf 'command:'
+      printf ' %q' "${attention_cmd[@]}"
+      printf '\n'
+      "${attention_cmd[@]}"
+      if [[ ! -s "${ATTENTION_MAPS_SUMMARY}" ]]; then
+        echo "ERROR: attention maps finished but summary was not written: ${ATTENTION_MAPS_SUMMARY}" >&2
+        exit 1
+      fi
+      echo "stage=done attention_maps date=$(date)"
+      echo "attention_maps=${ATTENTION_MAPS_SUMMARY}"
+    } 2>&1 | tee -a "${LOG_PATH}"
+  fi
+else
+  ATTENTION_MAPS_SUMMARY=""
+fi
+
 cat > "${RUN_DIR}/README.txt" <<EOF
 Run: ${RUN_NAME}
 Created: $(date)
@@ -353,6 +397,8 @@ Important files:
   checkpoints/${CONFIG_NAME}.pt.metrics.json
   checkpoints/${CONFIG_NAME}.pt.diagnostics/
   checkpoints/${CONFIG_NAME}.pt.diagnostics/feature_importance/${FEATURE_IMPORTANCE_SPLIT}/feature_group_importance.json
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/attention_maps/${ATTENTION_MAPS_SPLIT}/attention_maps.json
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/attention_maps/${ATTENTION_MAPS_SPLIT}/attention_maps.npz
   summaries/metrics_summary.csv
 
 Graph input:
@@ -372,6 +418,7 @@ echo "checkpoint=${CHECKPOINT}"
 echo "metrics=${METRICS_PATH}"
 echo "diagnostics_dir=${CHECKPOINT}.diagnostics"
 echo "feature_importance=${FEATURE_IMPORTANCE_SUMMARY}"
+echo "attention_maps=${ATTENTION_MAPS_SUMMARY}"
 echo "summary_csv=${SUMMARY_DIR}/metrics_summary.csv"
 echo "log_path=${LOG_PATH}"
 date

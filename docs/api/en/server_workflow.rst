@@ -83,6 +83,11 @@ Do not launch the matching ``cnn-gru`` sweep until the transformer results deter
 
 ``scripts/submit_server_hetero_training.sh`` sets ``FEATURE_IMPORTANCE=0`` by default.
 Set ``FEATURE_IMPORTANCE=1`` only when post-training group ablation should run in the same Slurm job.
+It sets ``ATTENTION_MAPS=1`` by default. After the checkpoint is written, the
+runner saves validation attention maps for a small event sample under
+``<checkpoint>.diagnostics/attention_maps/validation/``. The default sample size
+is ``ATTENTION_MAPS_MAX_GRAPHS=16`` so this is a lightweight diagnostic, not a
+full-dataset attention dump.
 
 Balanced heterogeneous HDF5 size sweep
 --------------------------------------
