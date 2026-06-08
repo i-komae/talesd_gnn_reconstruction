@@ -465,6 +465,10 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertEqual(payload["n_graphs"], 1)
             self.assertTrue(payload["groups"])
             self.assertIn("baseline", payload)
+            redraw = payload["redraw_artifacts"]
+            self.assertTrue(Path(redraw["plot_data_json"]).exists())
+            plot_data = json.loads(Path(redraw["plot_data_json"]).read_text())
+            self.assertIn("plot_specs", plot_data)
 
     def test_hetero_split_distribution_summary_reads_counts_and_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -475,19 +479,26 @@ class HeteroGraphIoTest(unittest.TestCase):
 
             dataset = H5HeteroGraphDataset(graph_path, require_target=True, require_particle_label=True)
             try:
+                plot_dir = Path(tmpdir) / "split_plots"
                 payload = summarize(
                     dataset,
                     val_fraction=0.20,
                     test_fraction=0.20,
                     source_val_fraction=0.20,
-                source_test_fraction=0.20,
-                seed=123,
-                energy_bin_width=0.1,
-                split_workers=2,
-                show_progress=False,
-            )
+                    source_test_fraction=0.20,
+                    seed=123,
+                    energy_bin_width=0.1,
+                    split_workers=2,
+                    show_progress=False,
+                    plot_dir=plot_dir,
+                )
             finally:
                 dataset.close()
+            redraw = payload["config"]["redraw_artifacts"]
+            self.assertTrue(Path(redraw["split_distribution_plot_data_json"]).exists())
+            plot_data = json.loads(Path(redraw["split_distribution_plot_data_json"]).read_text())
+            self.assertIn("features", plot_data)
+            self.assertIn("energy_bin_counts", plot_data)
 
         self.assertEqual(payload["config"]["graph_format"], "hetero")
         total_events = sum(split["events"] for split in payload["totals"].values())
@@ -627,6 +638,11 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertIn("detector", payload["features"])
             self.assertIn("pulse", payload["features"])
             self.assertIn("edge_features_by_type", payload["features"])
+            artifacts = payload["redraw_artifacts"]
+            self.assertTrue(Path(artifacts["sample_values_npz"]).exists())
+            self.assertTrue(Path(artifacts["sample_values_manifest"]).exists())
+            manifest = json.loads(Path(artifacts["sample_values_manifest"]).read_text())
+            self.assertIn(["detector", "detector_trigger_usec_rel"], [item["path"] for item in manifest["arrays"]])
             self.assertTrue((output_dir / "detector_features.pdf").exists())
             self.assertTrue((output_dir / "pulse_features.pdf").exists())
             self.assertTrue((output_dir / "waveform_features.pdf").exists())

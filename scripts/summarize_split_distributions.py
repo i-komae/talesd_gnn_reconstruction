@@ -179,7 +179,7 @@ def _plot_split_distributions(
     totals: dict[str, dict[str, Any]],
     by_energy: dict[str, dict[str, dict[str, Any]]],
     output_dir: Path,
-) -> list[str]:
+) -> dict[str, Any]:
     from talesd_gnn_reconstruction.diagnostics import (  # noqa: PLC0415
         FIGSIZE_GRID,
         FIGSIZE_PAIR,
@@ -197,6 +197,12 @@ def _plot_split_distributions(
     split_order = [name for name in ("train", "validation", "test") if name in totals]
     split_colors = dict(zip(split_order, plt.rcParams["axes.prop_cycle"].by_key().get("color", []), strict=False))
     pdf_files: list[str] = []
+    plot_data: dict[str, Any] = {
+        "format": "split_distribution_plot_data_v1",
+        "split_order": split_order,
+        "features": {},
+        "energy_bin_counts": {},
+    }
 
     features = [
         ("log10_energy", r"$\log_{10}(E/\mathrm{eV})$"),
@@ -219,9 +225,22 @@ def _plot_split_distributions(
             ax.set_xticks([0.0, 1.0], ["p", "Fe"])
         else:
             bins = _hist_bins(arrays)
+        feature_payload: dict[str, Any] = {
+            "xlabel": xlabel,
+            "bins": bins.astype(float).tolist(),
+            "splits": {},
+        }
         for name, arr in zip(split_order, arrays, strict=True):
             if arr.size == 0:
+                feature_payload["splits"][name] = {"n": 0, "density": [], "counts": []}
                 continue
+            density, _ = np.histogram(arr, bins=bins, density=True)
+            counts, _ = np.histogram(arr, bins=bins, density=False)
+            feature_payload["splits"][name] = {
+                "n": int(arr.size),
+                "density": density.astype(float).tolist(),
+                "counts": counts.astype(int).tolist(),
+            }
             ax.hist(
                 arr,
                 bins=bins,
@@ -234,6 +253,7 @@ def _plot_split_distributions(
         ax.set_xlabel(xlabel)
         ax.set_ylabel("density")
         _style_axes(ax)
+        plot_data["features"][key] = feature_payload
     for ax in axes.reshape(-1)[len(features) :]:
         ax.axis("off")
     axes.reshape(-1)[0].legend(frameon=False)
@@ -249,6 +269,11 @@ def _plot_split_distributions(
             low, high = bin_key.split("-", maxsplit=1)
             x.append((float(low) + float(high)) * 0.5)
             labels.append(bin_key)
+        plot_data["energy_bin_counts"] = {
+            "bin_keys": labels,
+            "bin_centers": [float(value) for value in x],
+            "splits": {name: {} for name in split_order},
+        }
         fig, axes = plt.subplots(1, 2, figsize=FIGSIZE_PAIR)
         for ax, value_key, ylabel in (
             (axes[0], "events", "events"),
@@ -256,6 +281,7 @@ def _plot_split_distributions(
         ):
             for name in split_order:
                 y = [float(_finish_bucket(by_energy[bin_key][name])[value_key]) for bin_key in energy_bins]
+                plot_data["energy_bin_counts"]["splits"][name][value_key] = [float(value) for value in y]
                 ax.plot(
                     x,
                     y,
@@ -273,7 +299,9 @@ def _plot_split_distributions(
         fig.suptitle("Split counts by true-energy bin")
         fig.tight_layout()
         pdf_files.append(_save_pdf(fig, output_dir / "split_energy_bin_counts.pdf"))
-    return pdf_files
+    plot_data_path = output_dir / "split_distribution_plot_data.json"
+    plot_data_path.write_text(json.dumps(plot_data, indent=2, sort_keys=True))
+    return {"plot_files": pdf_files, "plot_data_json": str(plot_data_path)}
 
 
 def _shape_counts(dataset: GraphDataset, index: int) -> tuple[int | None, int | None, int | None, int | None]:
@@ -390,7 +418,8 @@ def summarize(
                 )
     total_events = max(sum(len(indices) for indices in split.values()), 1)
     total_sources = sum(len(totals[name]["sources"]) for name in split)
-    plot_files = _plot_split_distributions(totals, by_energy, plot_dir) if plot_dir is not None else []
+    plot_result = _plot_split_distributions(totals, by_energy, plot_dir) if plot_dir is not None else {}
+    plot_files = list(plot_result.get("plot_files", []))
     return {
         "config": {
             "val_fraction": float(val_fraction),
@@ -404,6 +433,11 @@ def summarize(
             "split_mode": "source-stratified",
             "graph_format": "hetero" if isinstance(dataset, H5HeteroGraphDataset) else "homogeneous",
             "plot_files": plot_files,
+            "redraw_artifacts": (
+                {"split_distribution_plot_data_json": plot_result["plot_data_json"]}
+                if "plot_data_json" in plot_result
+                else {}
+            ),
         },
         "totals": {
             name: {

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import random
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +73,65 @@ def _reservoir_merge(current: np.ndarray | None, values: np.ndarray, *, cap: int
     if merged.size > cap:
         merged = merged[rng.choice(merged.size, size=cap, replace=False)]
     return merged.astype(np.float64, copy=False)
+
+
+def _iter_sample_arrays(prefix: tuple[str, ...], value: Any):
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            yield from _iter_sample_arrays((*prefix, str(key)), child)
+        return
+    if value is None:
+        return
+    array = np.asarray(value, dtype=np.float64).reshape(-1)
+    array = array[np.isfinite(array)]
+    yield prefix, array
+
+
+def _write_sample_values_artifacts(
+    samples: Mapping[str, Any],
+    output_dir: Path,
+    *,
+    stem: str,
+    extra_arrays: Mapping[tuple[str, ...], Any] | None = None,
+) -> dict[str, Any]:
+    arrays: dict[str, np.ndarray] = {}
+    manifest_arrays: list[dict[str, Any]] = []
+    for index, (path, values) in enumerate(_iter_sample_arrays((), samples)):
+        key = f"arr_{index:04d}"
+        arrays[key] = values.astype(np.float64, copy=False)
+        manifest_arrays.append(
+            {
+                "key": key,
+                "path": list(path),
+                "n": int(values.size),
+                "dtype": "float64",
+            }
+        )
+    if extra_arrays:
+        for path, values in extra_arrays.items():
+            array = np.asarray(values, dtype=np.float64).reshape(-1)
+            array = array[np.isfinite(array)]
+            key = f"arr_{len(arrays):04d}"
+            arrays[key] = array.astype(np.float64, copy=False)
+            manifest_arrays.append(
+                {
+                    "key": key,
+                    "path": [str(part) for part in path],
+                    "n": int(array.size),
+                    "dtype": "float64",
+                }
+            )
+
+    npz_path = output_dir / f"{stem}_sample_values.npz"
+    manifest_path = output_dir / f"{stem}_sample_values_manifest.json"
+    np.savez_compressed(npz_path, **arrays)
+    manifest = {
+        "format": "sample_values_npz_v1",
+        "npz": str(npz_path),
+        "arrays": manifest_arrays,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    return {"sample_values_npz": str(npz_path), "sample_values_manifest": str(manifest_path)}
 
 
 def _summarize_values(values: np.ndarray) -> dict[str, float | int | None]:
@@ -232,6 +291,14 @@ def save_input_distributions(
     }
     summary_path = output / "input_feature_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    artifacts = _write_sample_values_artifacts(
+        samples,
+        output,
+        stem="input_feature",
+        extra_arrays={("particle_labels", "label"): np.asarray(particle_labels, dtype=np.float64)},
+    )
+    summary["redraw_artifacts"] = artifacts
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
     if show_progress:
         _progress_write(f"stage=done input_distributions summary_json={summary_path}")
     for group, group_samples in samples.items():
@@ -366,6 +433,46 @@ def _metric_delta(baseline: dict[str, Any] | None, changed: dict[str, Any] | Non
     }
 
 
+def _feature_group_importance_plot_data(result: dict[str, Any]) -> dict[str, Any]:
+    rows = list(result.get("groups", []))
+    plot_specs: list[dict[str, str]] = []
+    for metric in ("rmse_log10_energy", "angular_68_deg", "core_68_km"):
+        if any(metric in row.get("reconstruction_delta", {}) for row in rows):
+            plot_specs.append({"section": "reconstruction_delta", "metric": metric, "label": f"Delta {metric}"})
+    for metric in ("accuracy", "balanced_accuracy"):
+        if any(metric in row.get("mass_delta", {}) for row in rows):
+            plot_specs.append({"section": "mass_delta", "metric": metric, "label": f"Delta {metric}"})
+    return {
+        "format": "feature_group_importance_plot_data_v1",
+        "split": result.get("split"),
+        "n_graphs": result.get("n_graphs"),
+        "groups": [str(row.get("group", "")) for row in rows],
+        "plot_specs": [
+            {
+                **spec,
+                "values": [
+                    (
+                        float(row.get(spec["section"], {}).get(spec["metric"]))
+                        if row.get(spec["section"], {}).get(spec["metric"]) is not None
+                        else None
+                    )
+                    for row in rows
+                ],
+            }
+            for spec in plot_specs
+        ],
+        "baseline": result.get("baseline", {}),
+        "rows": rows,
+    }
+
+
+def _write_feature_group_importance_plot_data(result: dict[str, Any], output_dir: Path) -> dict[str, Any]:
+    data = _feature_group_importance_plot_data(result)
+    path = output_dir / "feature_group_importance_plot_data.json"
+    path.write_text(json.dumps(data, indent=2, sort_keys=True))
+    return {"plot_data_json": str(path)}
+
+
 def save_feature_group_importance(
     graphs_path: str | Path | Sequence[str | Path],
     checkpoint_path: str | Path,
@@ -479,6 +586,8 @@ def save_feature_group_importance(
         "groups": rows,
     }
     json_path = output / "feature_group_importance.json"
+    json_path.write_text(json.dumps(result, indent=2, sort_keys=True))
+    result["redraw_artifacts"] = _write_feature_group_importance_plot_data(result, output)
     json_path.write_text(json.dumps(result, indent=2, sort_keys=True))
     _plot_feature_group_importance(result, output / "feature_group_importance.pdf")
     dataset.close()

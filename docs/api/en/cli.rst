@@ -195,6 +195,10 @@ Input distributions
 Save input feature distributions as PDF and JSON.
 This is a dataset diagnostic used to inspect HDF5 content and split-dependent biases.
 It is normally tied to the HDF5 dataset, not to a particular training run.
+The command also writes redraw artifacts next to the PDFs:
+``input_feature_sample_values.npz`` stores the sampled values used for plotting,
+and ``input_feature_sample_values_manifest.json`` maps each NPZ array to its
+feature group and column name.
 
 .. code-block:: bash
 
@@ -208,6 +212,9 @@ Feature importance
 
 Run feature group ablation against a trained checkpoint.
 This is post-hoc analysis, not retraining. It replaces input groups such as node, edge, or waveform features and measures metric degradation.
+The output JSON contains the baseline metrics, per-group ablated metrics, and
+deltas. ``feature_group_importance_plot_data.json`` contains the values needed
+to redraw the bar plots without rerunning inference.
 
 .. code-block:: bash
 

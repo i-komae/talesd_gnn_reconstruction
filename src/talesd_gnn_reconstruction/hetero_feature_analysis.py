@@ -17,6 +17,8 @@ from .feature_analysis import (
     _reservoir_merge,
     _sample_indices,
     _summarize_values,
+    _write_feature_group_importance_plot_data,
+    _write_sample_values_artifacts,
 )
 from .hetero_data import sample_to_hetero_data
 from .hetero_graph_io import EDGE_RELATIONS, H5HeteroGraphDataset, H5PyGHeteroGraphDataset
@@ -228,6 +230,17 @@ def save_hetero_input_distributions(
             },
         }
         summary_path = output / "input_feature_summary.json"
+        summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+        artifacts = _write_sample_values_artifacts(
+            {
+                **samples,
+                "edge_features_by_type": edge_samples,
+            },
+            output,
+            stem="input_feature",
+            extra_arrays={("particle_labels", "label"): np.asarray(particle_labels, dtype=np.float64)},
+        )
+        summary["redraw_artifacts"] = artifacts
         summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
         for group, group_samples in samples.items():
             _plot_feature_group(
@@ -555,6 +568,8 @@ def save_hetero_feature_group_importance(
         "groups": rows,
     }
     json_path = output / "feature_group_importance.json"
+    json_path.write_text(json.dumps(result, indent=2, sort_keys=True))
+    result["redraw_artifacts"] = _write_feature_group_importance_plot_data(result, output)
     json_path.write_text(json.dumps(result, indent=2, sort_keys=True))
     _plot_feature_group_importance(result, output / "feature_group_importance.pdf")
     dataset.close()
