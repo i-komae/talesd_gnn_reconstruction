@@ -402,9 +402,14 @@ edge types:
   (&quot;detector&quot;, &quot;observes&quot;, &quot;pulse&quot;)
 </pre></div>
 </div>
-<p>The production training path keeps explicit tensors, and the optional PyG path
-uses <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code>. This is the actual structure built by
-<code class="docutils literal notranslate"><span class="pre">hetero_data.sample_to_hetero_data</span></code>:</p>
+<p>The production training path uses PyG <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> for batching. The HDF5
+dataset returns one <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> object per event, and
+<code class="docutils literal notranslate"><span class="pre">torch_geometric.loader.DataLoader</span></code> batches those objects. Inside
+<code class="docutils literal notranslate"><span class="pre">MinimalHeteroTaleSdGNN.forward</span></code>, the batched <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> object is
+converted back to the repository's explicit tensor dictionary by
+<code class="docutils literal notranslate"><span class="pre">hetero_data_to_tensors</span></code>. Direct single-event paths can also feed the explicit
+tensor dictionary directly. This is the actual structure built by
+<code class="docutils literal notranslate"><span class="pre">hetero_data.sample_to_hetero_data</span></code> before batching:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">x</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">][</span><span class="s2">&quot;x&quot;</span><span class="p">]</span>
 <span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">context</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">][</span><span class="s2">&quot;context&quot;</span><span class="p">]</span>
 <span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">pos</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">][</span><span class="s2">&quot;pos&quot;</span><span class="p">]</span>
@@ -472,8 +477,9 @@ and target arrays are standardized using training-split statistics.</p>
 </pre></div>
 </div>
 <p>This mirrors the PyTorch Dataset/DataLoader separation: the dataset reads one
-sample, the conversion layer turns it into tensors, and the training loop only
-sees batched tensors.</p>
+sample, the conversion layer turns it into a typed graph object, the PyG
+DataLoader batches typed graph objects, and the model receives a unified tensor
+dictionary internally.</p>
 </section>
 <section id="detector-and-pulse-encoders">
 <h2>Detector and pulse encoders<a class="headerlink" href="#detector-and-pulse-encoders" title="Link to this heading"></a></h2>
@@ -574,7 +580,8 @@ times quality-only or predicted-error-only reco+mass.</p>
   -&gt; split train / validation / test
   -&gt; fit scalers on train split
   -&gt; build model from first sample
-  -&gt; DataLoader batches HeteroData samples
+  -&gt; PyG DataLoader batches HeteroData samples
+  -&gt; model converts batched HeteroData to explicit tensor dict
   -&gt; forward
   -&gt; compute loss against MC target
   -&gt; backward
@@ -592,7 +599,7 @@ same model conversion:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>DST
   -&gt; dstio.tale.graph.iter_graphs
   -&gt; graph_event_to_sample
-  -&gt; hetero_sample_to_tensors / HeteroData
+  -&gt; hetero_sample_to_tensors or sample_to_hetero_data
   -&gt; hetero_attention checkpoint
   -&gt; reconstruction CSV
 </pre></div>

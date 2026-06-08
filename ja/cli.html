@@ -434,9 +434,11 @@ balanced selector は <code class="docutils literal notranslate"><span class="pr
 <section id="heterogeneous-training">
 <h2>Heterogeneous training<a class="headerlink" href="#heterogeneous-training" title="Link to this heading"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">train-hetero</span></code> は <code class="docutils literal notranslate"><span class="pre">export-hetero</span></code> で作成したHDF5を読みます。
-共通変換層は <code class="docutils literal notranslate"><span class="pre">hetero_data.sample_to_hetero_data</span></code> です。
-PyTorch Geometric が使える環境では同じ sample を <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> にも変換できますが、
-本番学習コードでは tensor 変換を明示的に扱います。</p>
+学習用 dataset は各 event sample を <code class="docutils literal notranslate"><span class="pre">hetero_data.sample_to_hetero_data</span></code> で
+PyG <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> に変換します。これにより
+<code class="docutils literal notranslate"><span class="pre">torch_geometric.loader.DataLoader</span></code> が detector/pulse 数の違う graph を batch 化できます。
+model は batch 化された <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> を <code class="docutils literal notranslate"><span class="pre">hetero_data.hetero_data_to_tensors</span></code> で
+この repository の明示的な tensor dict に戻して処理します。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>train-hetero<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/hetero<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-o<span class="w"> </span>/path/to/output/checkpoints/hetero_reco_mass.pt<span class="w"> </span><span class="se">\</span>

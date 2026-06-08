@@ -396,8 +396,13 @@ edge types:
   (&quot;detector&quot;, &quot;observes&quot;, &quot;pulse&quot;)
 </pre></div>
 </div>
-<p>本番学習では明示的な tensor dict を使い、必要な時には PyG <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> にも変換できます。
-次は実際の <code class="docutils literal notranslate"><span class="pre">hetero_data.sample_to_hetero_data</span></code> が作る構造です。</p>
+<p>本番学習では、batch 化のために PyG <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> を使います。
+HDF5 dataset は 1 event につき 1 つの <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> を返し、
+<code class="docutils literal notranslate"><span class="pre">torch_geometric.loader.DataLoader</span></code> がそれらを batch 化します。
+その後、<code class="docutils literal notranslate"><span class="pre">MinimalHeteroTaleSdGNN.forward</span></code> の中で、batch 化された <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> を
+<code class="docutils literal notranslate"><span class="pre">hetero_data_to_tensors</span></code> によりこの repository の明示的な tensor dict に戻します。
+DST 直接推論などの single-event path では、明示的な tensor dict を直接渡すこともできます。
+次は batch 化前に <code class="docutils literal notranslate"><span class="pre">hetero_data.sample_to_hetero_data</span></code> が作る実際の構造です。</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">x</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">][</span><span class="s2">&quot;x&quot;</span><span class="p">]</span>
 <span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">context</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">][</span><span class="s2">&quot;context&quot;</span><span class="p">]</span>
 <span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">pos</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">][</span><span class="s2">&quot;pos&quot;</span><span class="p">]</span>
@@ -461,7 +466,8 @@ scaler が与えられている場合、detector、context、pulse、edge、targ
 </pre></div>
 </div>
 <p>これは PyTorch の Dataset / DataLoader の分離と同じ考え方です。
-dataset は 1 sample を読み、変換層が tensor にし、training loop は batch tensor だけを見ます。</p>
+dataset は 1 sample を読み、変換層が typed graph object にし、PyG DataLoader がそれを batch 化し、
+model 内部では統一された tensor dict として扱います。</p>
 </section>
 <section id="detector-encoder-pulse-encoder">
 <h2>detector encoder と pulse encoder<a class="headerlink" href="#detector-encoder-pulse-encoder" title="Link to this heading"></a></h2>
@@ -557,7 +563,8 @@ quality-only と predicted-error-only の reco+mass を投げます。</p>
   -&gt; train / validation / test split
   -&gt; train split で scaler を fit
   -&gt; first sample から model shape を決める
-  -&gt; DataLoader が HeteroData sample を batch 化
+  -&gt; PyG DataLoader が HeteroData sample を batch 化
+  -&gt; model が batched HeteroData を明示的な tensor dict に変換
   -&gt; forward
   -&gt; MC target と比較して loss を計算
   -&gt; backward
@@ -574,7 +581,7 @@ quality-only と predicted-error-only の reco+mass を投げます。</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>DST
   -&gt; dstio.tale.graph.iter_graphs
   -&gt; graph_event_to_sample
-  -&gt; hetero_sample_to_tensors / HeteroData
+  -&gt; hetero_sample_to_tensors または sample_to_hetero_data
   -&gt; hetero_attention checkpoint
   -&gt; reconstruction CSV
 </pre></div>

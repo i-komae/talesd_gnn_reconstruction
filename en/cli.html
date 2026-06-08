@@ -433,8 +433,11 @@ The balanced selector keeps candidates spread across <code class="docutils liter
 <section id="heterogeneous-training">
 <h2>Heterogeneous training<a class="headerlink" href="#heterogeneous-training" title="Link to this heading"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">train-hetero</span></code> trains from HDF5 files written by <code class="docutils literal notranslate"><span class="pre">export-hetero</span></code>.
-The shared conversion layer is <code class="docutils literal notranslate"><span class="pre">hetero_data.sample_to_hetero_data</span></code>.
-If PyTorch Geometric is available, the same sample can also be represented as <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code>; the production training code keeps the tensor conversion explicit.</p>
+The training dataset converts each event sample to PyG <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> with
+<code class="docutils literal notranslate"><span class="pre">hetero_data.sample_to_hetero_data</span></code> so <code class="docutils literal notranslate"><span class="pre">torch_geometric.loader.DataLoader</span></code>
+can batch variable-size detector/pulse graphs. The model then converts the
+batched <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> back to the repository's explicit tensor dictionary with
+<code class="docutils literal notranslate"><span class="pre">hetero_data.hetero_data_to_tensors</span></code>.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>train-hetero<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--graphs<span class="w"> </span>/path/to/graphs/hetero<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-o<span class="w"> </span>/path/to/output/checkpoints/hetero_reco_mass.pt<span class="w"> </span><span class="se">\</span>

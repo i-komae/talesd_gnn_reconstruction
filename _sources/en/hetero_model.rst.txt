@@ -60,9 +60,14 @@ relation types:
      ("detector", "near", "detector")
      ("detector", "observes", "pulse")
 
-The production training path keeps explicit tensors, and the optional PyG path
-uses ``HeteroData``. This is the actual structure built by
-``hetero_data.sample_to_hetero_data``:
+The production training path uses PyG ``HeteroData`` for batching. The HDF5
+dataset returns one ``HeteroData`` object per event, and
+``torch_geometric.loader.DataLoader`` batches those objects. Inside
+``MinimalHeteroTaleSdGNN.forward``, the batched ``HeteroData`` object is
+converted back to the repository's explicit tensor dictionary by
+``hetero_data_to_tensors``. Direct single-event paths can also feed the explicit
+tensor dictionary directly. This is the actual structure built by
+``hetero_data.sample_to_hetero_data`` before batching:
 
 .. code-block:: python
 
@@ -139,8 +144,9 @@ and target arrays are standardized using training-split statistics.
    target_tensor = _scale_tensor(target_tensor, _scaler_for(scalers, "target"))
 
 This mirrors the PyTorch Dataset/DataLoader separation: the dataset reads one
-sample, the conversion layer turns it into tensors, and the training loop only
-sees batched tensors.
+sample, the conversion layer turns it into a typed graph object, the PyG
+DataLoader batches typed graph objects, and the model receives a unified tensor
+dictionary internally.
 
 Detector and pulse encoders
 ---------------------------
@@ -255,7 +261,8 @@ Training
      -> split train / validation / test
      -> fit scalers on train split
      -> build model from first sample
-     -> DataLoader batches HeteroData samples
+     -> PyG DataLoader batches HeteroData samples
+     -> model converts batched HeteroData to explicit tensor dict
      -> forward
      -> compute loss against MC target
      -> backward
@@ -276,7 +283,7 @@ same model conversion:
    DST
      -> dstio.tale.graph.iter_graphs
      -> graph_event_to_sample
-     -> hetero_sample_to_tensors / HeteroData
+     -> hetero_sample_to_tensors or sample_to_hetero_data
      -> hetero_attention checkpoint
      -> reconstruction CSV
 
