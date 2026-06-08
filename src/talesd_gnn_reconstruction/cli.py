@@ -2157,6 +2157,47 @@ def _hetero_h5_event_entries(paths: list[str], *, stratify_particle: bool) -> li
     return entries
 
 
+def _write_resharded_hetero_h5_shard(
+    payload: tuple[int, list[HeteroH5EventEntry], str, dict[str, Any], bool],
+) -> dict[str, Any]:
+    import h5py
+
+    from .hetero_graph_io import copy_hetero_graph_group, create_hetero_graph_file
+
+    shard_index, entries, output, config, overwrite = payload
+    output_path = _shard_path(output, shard_index)
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(f"output already exists: {output_path}; pass --overwrite to replace")
+
+    shard_config = dict(config)
+    shard_config["shard_index"] = int(shard_index)
+    handle_cache: dict[str, h5py.File] = {}
+    written = 0
+    try:
+        with create_hetero_graph_file(output_path, config=shard_config) as target:
+            for output_index, entry in enumerate(entries):
+                source = handle_cache.get(entry.h5_path)
+                if source is None:
+                    source = h5py.File(entry.h5_path, "r")
+                    handle_cache[entry.h5_path] = source
+                copy_hetero_graph_group(
+                    source,
+                    f"{entry.local_index:08d}",
+                    int(entry.local_index),
+                    target,
+                    int(output_index),
+                )
+                written += 1
+    finally:
+        for source in handle_cache.values():
+            source.close()
+    return {
+        "shard_index": int(shard_index),
+        "path": str(output_path),
+        "written": int(written),
+    }
+
+
 def _resolve_graph_args(paths: list[str], list_paths: list[str] | None = None) -> list[str]:
     if not paths and not list_paths:
         raise SystemExit("graphs files are required; pass paths with --graphs")
@@ -3182,36 +3223,59 @@ def _cmd_reshard_hetero(args: argparse.Namespace) -> None:
         "output_locality_run_size": args.output_locality_run_size,
         "seed": args.seed,
         "shard_size": args.shard_size,
+        "workers": args.workers,
         "energy_sample_stratify_particle": bool(args.energy_sample_stratify_particle),
     }
     written_paths: list[Path] = []
     written_total = 0
-    for shard_index, chunk in enumerate(_progress(chunks, desc="reshard hetero HDF5", total=total_chunks)):
-        output_path = _shard_path(output, shard_index) if shard_size > 0 else output
-        if output_path.exists() and not args.overwrite:
-            raise SystemExit(f"output already exists: {output_path}; pass --overwrite to replace")
-        shard_config = dict(config)
-        shard_config["shard_index"] = shard_index if shard_size > 0 else None
-        handle_cache: dict[str, h5py.File] = {}
-        try:
-            with create_hetero_graph_file(output_path, config=shard_config) as target:
-                for output_index, entry in enumerate(chunk):
-                    source = handle_cache.get(entry.h5_path)
-                    if source is None:
-                        source = h5py.File(entry.h5_path, "r")
-                        handle_cache[entry.h5_path] = source
-                    copy_hetero_graph_group(
-                        source,
-                        f"{entry.local_index:08d}",
-                        int(entry.local_index),
-                        target,
-                        int(output_index),
-                    )
-                    written_total += 1
-        finally:
-            for source in handle_cache.values():
-                source.close()
-        written_paths.append(output_path)
+
+    if shard_size > 0:
+        payloads = [
+            (shard_index, chunk, str(output), config, bool(args.overwrite))
+            for shard_index, chunk in enumerate(chunks)
+        ]
+        workers = min(max(int(args.workers), 1), len(payloads)) if payloads else 1
+        _progress_write(
+            f"reshard hetero HDF5: start shards={len(payloads)} workers={workers} "
+            f"events={len(ordered_entries)}"
+        )
+        written_items: list[tuple[int, Path]] = []
+        for result in _iter_process_pool(
+            payloads,
+            _write_resharded_hetero_h5_shard,
+            workers,
+            "reshard hetero HDF5",
+        ):
+            written_total += int(result["written"])
+            written_items.append((int(result["shard_index"]), Path(str(result["path"]))))
+        written_paths = [path for _index, path in sorted(written_items, key=lambda item: item[0])]
+    else:
+        for shard_index, chunk in enumerate(_progress(chunks, desc="reshard hetero HDF5", total=total_chunks)):
+            output_path = output
+            if output_path.exists() and not args.overwrite:
+                raise SystemExit(f"output already exists: {output_path}; pass --overwrite to replace")
+            shard_config = dict(config)
+            shard_config["shard_index"] = None
+            handle_cache: dict[str, h5py.File] = {}
+            try:
+                with create_hetero_graph_file(output_path, config=shard_config) as target:
+                    for output_index, entry in enumerate(chunk):
+                        source = handle_cache.get(entry.h5_path)
+                        if source is None:
+                            source = h5py.File(entry.h5_path, "r")
+                            handle_cache[entry.h5_path] = source
+                        copy_hetero_graph_group(
+                            source,
+                            f"{entry.local_index:08d}",
+                            int(entry.local_index),
+                            target,
+                            int(output_index),
+                        )
+                        written_total += 1
+            finally:
+                for source in handle_cache.values():
+                    source.close()
+            written_paths.append(output_path)
 
     targets = ", ".join(str(path) for path in written_paths) if written_paths else str(output)
     print(f"wrote {written_total} reshuffled hetero graphs to {targets}")
@@ -3650,6 +3714,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reshard_hetero.add_argument("--seed", type=int, default=12345)
     reshard_hetero.add_argument("--shard-size", type=int, default=100000, help="N graphごとに出力HDF5を分割する。0なら単一ファイル")
+    reshard_hetero.add_argument("--workers", type=int, default=1, help="出力shardコピーに使うworker数。shard-size > 0 の時だけ並列化する")
     reshard_hetero.add_argument("--energy-sample-stratify-particle", action="store_true", help="interleaved order のbinを particle:DAT energy code にする")
     reshard_hetero.add_argument("--overwrite", action="store_true", help="既存出力HDF5を上書きする")
     reshard_hetero.set_defaults(func=_cmd_reshard_hetero)

@@ -516,6 +516,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                     output_locality_run_size=1,
                     seed=24680,
                     shard_size=0,
+                    workers=1,
                     energy_sample_stratify_particle=True,
                     overwrite=False,
                 )
@@ -529,6 +530,46 @@ class HeteroGraphIoTest(unittest.TestCase):
                 target_particles = [float(target["metadata"]["particle_label"][index]) for index in range(8)]
                 self.assertIn(0.0, target_particles[:4])
                 self.assertIn(1.0, target_particles[:4])
+
+    def test_reshard_hetero_parallel_writes_multiple_shards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "source.h5"
+            output_path = Path(tmpdir) / "reshuffled.h5"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(6):
+                    graph = _synthetic_graph(index)
+                    particle = "proton" if index < 3 else "iron"
+                    dat_code = "16" if index % 2 == 0 else "17"
+                    graph.metadata["source_path"] = f"/mc/{particle}/sel/DAT0000{dat_code}_gea_trg_{index:03d}.dst.gz"
+                    graph.metadata["source_index"] = index
+                    graph.metadata["event_id"] = f"event_{index:03d}"
+                    graph.event_id = f"event_{index:03d}"
+                    graph.particle_label = 0.0 if particle == "proton" else 1.0
+                    write_hetero_graph(handle, index, graph)
+
+            _cmd_reshard_hetero(
+                SimpleNamespace(
+                    graphs=[str(graph_path)],
+                    graphs_list=[],
+                    output=str(output_path),
+                    output_order="interleaved",
+                    output_locality_run_size=1,
+                    seed=13579,
+                    shard_size=2,
+                    workers=2,
+                    energy_sample_stratify_particle=True,
+                    overwrite=False,
+                )
+            )
+
+            output_shards = sorted(Path(tmpdir).glob("reshuffled_*.h5"))
+            self.assertEqual(len(output_shards), 3)
+            event_ids = []
+            for shard in output_shards:
+                with h5py.File(shard, "r") as handle:
+                    self.assertEqual(len(handle["events"]), 2)
+                    event_ids.extend(handle["metadata"]["event_id"][index].decode("utf-8") for index in range(2))
+            self.assertEqual(set(event_ids), {f"event_{index:03d}" for index in range(6)})
 
     def test_hetero_input_distributions_write_summary_and_plots(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

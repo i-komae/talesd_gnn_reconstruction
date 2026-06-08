@@ -26,6 +26,7 @@ GRAPH_OUTPUT="${GRAPH_OUTPUT:-${GRAPH_RUN_DIR}/${RUN_NAME}.h5}"
 
 PARTITION="${PARTITION:-edr1-al9_large}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-8}"
+RESHARD_WORKERS="${RESHARD_WORKERS:-${CPUS_PER_TASK}}"
 MEM="${MEM:-96G}"
 TIME_LIMIT="${TIME_LIMIT:-1-00:00:00}"
 SHARD_SIZE="${SHARD_SIZE:-100000}"
@@ -90,6 +91,7 @@ echo "graph_input=${GRAPH_INPUT}"
 echo "graph_output=${GRAPH_OUTPUT}"
 echo "output_order=${OUTPUT_ORDER}"
 echo "shard_size=${SHARD_SIZE}"
+echo "reshard_workers=${RESHARD_WORKERS}"
 echo "seed=${SEED}"
 echo "======================================================================"
 
@@ -107,6 +109,7 @@ env UV_CACHE_DIR="${UV_CACHE_DIR}" uv sync --frozen
   --output-locality-run-size "${OUTPUT_LOCALITY_RUN_SIZE}" \\
   --seed "${SEED}" \\
   --shard-size "${SHARD_SIZE}" \\
+  --workers "${RESHARD_WORKERS}" \\
 ${particle_line}\
   -o "${GRAPH_OUTPUT}"
 
@@ -142,6 +145,7 @@ run_name: ${RUN_NAME}
 graph_input: ${GRAPH_INPUT}
 graph_output: ${GRAPH_OUTPUT}
 output_order: ${OUTPUT_ORDER}
+reshard_workers: ${RESHARD_WORKERS}
 seed: ${SEED}
 split_event_fractions: train=1-val-test, val=${VAL_FRACTION}, test=${TEST_FRACTION}
 split_source_fractions: train=1-val-test, val=${SOURCE_VAL_FRACTION}, test=${SOURCE_TEST_FRACTION}
