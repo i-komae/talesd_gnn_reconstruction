@@ -64,6 +64,9 @@ MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS:-1}"
 INPUT_DISTRIBUTION_MAX_GRAPHS="${INPUT_DISTRIBUTION_MAX_GRAPHS:-100000}"
 INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE="${INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE:-200000}"
 SEED="${SEED:-12345}"
+OUTPUT_ORDER="${OUTPUT_ORDER:-interleaved}"
+OUTPUT_LOCALITY_RUN_SIZE="${OUTPUT_LOCALITY_RUN_SIZE:-32}"
+WRITE_BLOCK_SIZE="${WRITE_BLOCK_SIZE:-2048}"
 DRY_RUN="${DRY_RUN:-0}"
 DRY_RUN_SELECTION="${DRY_RUN_SELECTION:-0}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-/dicos_ui_home/ikomae/work/uv-cache}"
@@ -183,6 +186,9 @@ env UV_CACHE_DIR="${UV_CACHE_DIR}" uv sync --frozen
 ${particle_line}\
   --energy-bin-width "${ENERGY_BIN_WIDTH}" \\
   --seed "${SEED}" \\
+  --output-order "${OUTPUT_ORDER}" \\
+  --output-locality-run-size "${OUTPUT_LOCALITY_RUN_SIZE}" \\
+  --write-block-size "${WRITE_BLOCK_SIZE}" \\
   --workers "${EXPORT_WORKERS}" \\
   --balance-cell-preselect "${BALANCE_CELL_PRESELECT}" \\
   --balance-zenith-bin-width-deg "${BALANCE_ZENITH_BIN_WIDTH_DEG}" \\
@@ -233,6 +239,7 @@ graph_output: ${GRAPH_OUTPUT}
 selection_summary: ${SELECTION_SUMMARY}
 energy_sample_per_bin: ${ENERGY_SAMPLE_PER_BIN}
 seed: ${SEED}
+output_order: ${OUTPUT_ORDER}
 split_event_fractions: train=1-val-test, val=${VAL_FRACTION}, test=${TEST_FRACTION}
 split_source_fractions: train=1-val-test, val=${SOURCE_VAL_FRACTION}, test=${SOURCE_TEST_FRACTION}
 sbatch_file: ${SBATCH_FILE}

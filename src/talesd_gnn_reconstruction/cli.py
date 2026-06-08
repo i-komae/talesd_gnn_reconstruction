@@ -75,6 +75,16 @@ class HeteroSourceGroupManifest:
     cell_counts: dict[tuple[str, ...], int]
 
 
+@dataclass(frozen=True, slots=True)
+class HeteroH5EventEntry:
+    bin_key: int | tuple[str, int]
+    unique_id: str
+    h5_path: str
+    local_index: int
+    source_path: str
+    source_index: int
+
+
 class DstUnitExhaustionError(RuntimeError):
     pass
 
@@ -312,6 +322,98 @@ def _source_group_bin_key(group: HeteroSourceGroupManifest, *, stratify_particle
     if stratify_particle:
         return f"{group.particle}:{group.energy_bin_code}"
     return group.energy_bin_code
+
+
+def _path_energy_code_int(source_path: str) -> int:
+    try:
+        return int(_energy_bin_code_from_dat_tag(_dat_tag_from_path(source_path)))
+    except ValueError:
+        return -1
+
+
+def _hetero_output_bin_key_from_path(source_path: str, *, stratify_particle: bool) -> int | tuple[str, int]:
+    energy_code = _path_energy_code_int(source_path)
+    if stratify_particle:
+        return (_particle_stratum_from_path(source_path), energy_code)
+    return energy_code
+
+
+def _ordered_selected_entries(
+    entries: list[SelectedEntry],
+    *,
+    output_order: str,
+    seed: int,
+    locality_run_size: int,
+) -> list[SelectedEntry]:
+    if output_order == "source":
+        return list(entries)
+    if output_order == "random":
+        return sorted(
+            entries,
+            key=lambda entry: _sample_key_from_parts(int(seed) + 32452843, entry[1], entry[2], int(entry[3])),
+        )
+    if output_order == "interleaved":
+        return _interleaved_selected_entries(entries, seed=seed, locality_run_size=locality_run_size)
+    raise ValueError(f"unsupported output_order: {output_order}")
+
+
+def _ordered_hetero_h5_entries(
+    entries: list[HeteroH5EventEntry],
+    *,
+    output_order: str,
+    seed: int,
+    locality_run_size: int,
+) -> list[HeteroH5EventEntry]:
+    if output_order == "source":
+        return list(entries)
+    if output_order == "random":
+        return sorted(
+            entries,
+            key=lambda entry: _sample_key_from_parts(
+                int(seed) + 49979687,
+                entry.unique_id,
+                entry.source_path,
+                int(entry.source_index),
+            ),
+        )
+    if output_order != "interleaved":
+        raise ValueError(f"unsupported output_order: {output_order}")
+
+    run_size = max(int(locality_run_size), 1)
+    by_bin_and_source: dict[int | tuple[str, int], dict[str, list[HeteroH5EventEntry]]] = {}
+    for entry in entries:
+        by_bin_and_source.setdefault(entry.bin_key, {}).setdefault(entry.source_path, []).append(entry)
+
+    runs_by_bin: dict[int | tuple[str, int], deque[list[HeteroH5EventEntry]]] = {}
+    for bin_key, by_source in by_bin_and_source.items():
+        runs: list[list[HeteroH5EventEntry]] = []
+        for source_entries in by_source.values():
+            source_entries = sorted(source_entries, key=lambda entry: entry.source_index)
+            for start in range(0, len(source_entries), run_size):
+                runs.append(source_entries[start : start + run_size])
+        runs.sort(
+            key=lambda run: _sample_key_from_parts(
+                int(seed) + 67867967,
+                run[0].unique_id,
+                run[0].source_path,
+                int(run[0].source_index),
+            )
+        )
+        runs_by_bin[bin_key] = deque(runs)
+
+    bin_order = list(runs_by_bin)
+    bin_order.sort(key=lambda bin_key: _sample_key_from_parts(int(seed) + 86028121, str(bin_key), "", 0))
+    ordered: list[HeteroH5EventEntry] = []
+    while bin_order:
+        next_bin_order: list[int | tuple[str, int]] = []
+        for bin_key in bin_order:
+            runs = runs_by_bin[bin_key]
+            if runs:
+                ordered.extend(runs.popleft())
+            if runs:
+                next_bin_order.append(bin_key)
+        bin_order = next_bin_order
+    return ordered
 
 
 def _candidate_balance_key(
@@ -1008,12 +1110,15 @@ def _selected_path_chunks(
 def _selected_entries_from_path_indices(
     inputs: list[str],
     selected_indices_by_path: dict[str, set[int]],
+    *,
+    stratify_particle: bool = False,
 ) -> list[SelectedEntry]:
     entries: list[SelectedEntry] = []
     for path in inputs:
+        bin_key = _hetero_output_bin_key_from_path(path, stratify_particle=stratify_particle)
         for source_index in sorted(selected_indices_by_path.get(path, ())):
             unique_id = f"{path}:{int(source_index)}"
-            entries.append((0, unique_id, path, int(source_index), float("nan"), 0, 0))
+            entries.append((bin_key, unique_id, path, int(source_index), float("nan"), 0, 0))
     return entries
 
 
@@ -1364,6 +1469,7 @@ def _write_selected_hetero_graph_shard(
         float,
         str,
         dict[str, Any],
+        int,
     ]
 ) -> dict[str, Any]:
     import dstio.tale.graph as tale_graph
@@ -1387,6 +1493,7 @@ def _write_selected_hetero_graph_shard(
         open_retry_delay,
         output,
         config,
+        write_block_size,
     ) = payload
 
     output_path = _shard_path(output, shard_index)
@@ -1395,61 +1502,72 @@ def _write_selected_hetero_graph_shard(
     handle = None
     written = 0
     skipped = 0
+    processed_blocks = 0
     processed_files = 0
-    wanted_by_path: dict[str, set[int]] = {}
-    for _bin_key, _unique_id, path, source_index, _log10_energy, _date, _time_value in entries:
-        wanted_by_path.setdefault(path, set()).add(int(source_index))
-    selected_total = sum(len(indices) for indices in wanted_by_path.values())
+    selected_total = len(entries)
     interval = max(float(os.environ.get("TALESD_GNN_PROGRESS_INTERVAL", "30")), 1.0)
     last_report = time.perf_counter()
 
     _progress_write(
-        f"hetero export/write shard {shard_index:04d}: start files={len(wanted_by_path)} "
+        f"hetero export/write shard {shard_index:04d}: start ordered_events={selected_total} "
         f"selected={selected_total} output={output_path.name}"
     )
     try:
-        for file_number, path in enumerate(wanted_by_path, start=1):
-            selected = wanted_by_path.get(path)
-            if not selected:
-                continue
-            file_written = 0
-            for graph in tale_graph.iter_graphs(
-                path,
-                kind=kind,
-                cleaning=cleaning,
-                node_policy=node_policy,
-                const_dst=const_dst,
-                mc_calib_dir=mc_calib_dir,
-                max_events=None,
-                require_trigger_mode0=require_trigger_mode0,
-                require_reference_core=require_reference_core,
-                skip_errors=skip_errors,
-                skip_missing_mc_calibration=skip_missing_mc_calibration,
-                source_indices=selected,
-                min_event_date=min_event_date,
-                open_retries=open_retries,
-                open_retry_delay=open_retry_delay,
-            ):
-                if graph.target is None or graph.target.shape[0] == 0:
+        for block in _chunked(entries, max(int(write_block_size), 1)):
+            processed_blocks += 1
+            wanted_by_path: dict[str, set[int]] = {}
+            graph_by_key: dict[tuple[str, int], Any] = {}
+            for _bin_key, _unique_id, path, source_index, _log10_energy, _date, _time_value in block:
+                wanted_by_path.setdefault(path, set()).add(int(source_index))
+            for path, selected in wanted_by_path.items():
+                if not selected:
+                    continue
+                for graph in tale_graph.iter_graphs(
+                    path,
+                    kind=kind,
+                    cleaning=cleaning,
+                    node_policy=node_policy,
+                    const_dst=const_dst,
+                    mc_calib_dir=mc_calib_dir,
+                    max_events=None,
+                    require_trigger_mode0=require_trigger_mode0,
+                    require_reference_core=require_reference_core,
+                    skip_errors=skip_errors,
+                    skip_missing_mc_calibration=skip_missing_mc_calibration,
+                    source_indices=selected,
+                    min_event_date=min_event_date,
+                    open_retries=open_retries,
+                    open_retry_delay=open_retry_delay,
+                ):
+                    try:
+                        graph_source_index = int(graph.metadata.get("source_index", -1))
+                    except Exception:
+                        graph_source_index = -1
+                    if graph.target is None or graph.target.shape[0] == 0:
+                        continue
+                    graph_by_key[(path, graph_source_index)] = graph
+                processed_files += 1
+
+            for _bin_key, _unique_id, path, source_index, _log10_energy, _date, _time_value in block:
+                graph = graph_by_key.get((path, int(source_index)))
+                if graph is None:
                     skipped += 1
                     continue
                 if handle is None:
                     handle = create_hetero_graph_file(output_path, config=shard_config)
                 write_hetero_graph(handle, written, graph)
                 written += 1
-                file_written += 1
-            skipped += max(len(selected) - file_written, 0)
-            processed_files += 1
             now = time.perf_counter()
             if now - last_report >= interval:
                 _progress_write(
-                    f"hetero export/write shard {shard_index:04d}: files={file_number}/{len(wanted_by_path)} "
+                    f"hetero export/write shard {shard_index:04d}: blocks={processed_blocks} "
+                    f"files={processed_files} "
                     f"written={written} skipped={skipped}"
                 )
                 last_report = now
     except BaseException as exc:
         _progress_write(
-            f"hetero export/write shard {shard_index:04d}: failed files={processed_files}/{len(wanted_by_path)} "
+            f"hetero export/write shard {shard_index:04d}: failed blocks={processed_blocks} files={processed_files} "
             f"written={written} skipped={skipped} error={exc}"
         )
         raise
@@ -1458,7 +1576,7 @@ def _write_selected_hetero_graph_shard(
             handle.close()
 
     _progress_write(
-        f"hetero export/write shard {shard_index:04d}: done files={processed_files}/{len(wanted_by_path)} "
+        f"hetero export/write shard {shard_index:04d}: done blocks={processed_blocks} files={processed_files} "
         f"written={written} skipped={skipped} output={output_path.name if written > 0 else '(empty)'}"
     )
     return {
@@ -1523,7 +1641,17 @@ def _iter_selected_hetero_shard_write_results(
     selected_indices_by_path: dict[str, set[int]],
     config: dict[str, Any],
 ) -> Iterator[dict[str, Any]]:
-    selected_entries = _selected_entries_from_path_indices(inputs, selected_indices_by_path)
+    selected_entries = _selected_entries_from_path_indices(
+        inputs,
+        selected_indices_by_path,
+        stratify_particle=bool(args.energy_sample_stratify_particle),
+    )
+    selected_entries = _ordered_selected_entries(
+        selected_entries,
+        output_order=str(args.output_order),
+        seed=int(args.seed),
+        locality_run_size=int(args.output_locality_run_size),
+    )
     chunks = _selected_entry_chunks(selected_entries, int(args.shard_size))
     payloads = [
         (
@@ -1543,6 +1671,7 @@ def _iter_selected_hetero_shard_write_results(
             float(args.open_retry_delay),
             str(Path(args.output).expanduser()),
             config,
+            int(args.write_block_size),
         )
         for shard_index, entries in enumerate(chunks)
     ]
@@ -1852,6 +1981,55 @@ def _iter_selected_hetero_graphs(
         )
 
 
+def _iter_ordered_selected_hetero_graphs(
+    entries: list[SelectedEntry],
+    args: argparse.Namespace,
+    const_dst: Path | None,
+    mc_calib_dir: Path | None,
+) -> Iterator[Any]:
+    import dstio.tale.graph as tale_graph
+
+    min_event_date = None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date)
+    total_blocks = math.ceil(len(entries) / max(int(args.write_block_size), 1)) if entries else 0
+    for block in _progress(
+        _chunked(entries, max(int(args.write_block_size), 1)),
+        desc="build ordered selected hetero graphs",
+        total=total_blocks,
+    ):
+        wanted_by_path: dict[str, set[int]] = {}
+        graph_by_key: dict[tuple[str, int], Any] = {}
+        for _bin_key, _unique_id, path, source_index, _log10_energy, _date, _time_value in block:
+            wanted_by_path.setdefault(path, set()).add(int(source_index))
+        for path, selected_indices in wanted_by_path.items():
+            for graph in tale_graph.iter_graphs(
+                path,
+                kind=args.kind,
+                cleaning=args.cleaning,
+                node_policy=args.node_policy,
+                const_dst=const_dst,
+                mc_calib_dir=mc_calib_dir,
+                max_events=None,
+                require_trigger_mode0=not args.keep_non_mode0,
+                require_reference_core=bool(args.require_reference_core),
+                skip_errors=bool(args.skip_errors),
+                skip_missing_mc_calibration=bool(args.skip_missing_mc_calibration),
+                source_indices=selected_indices,
+                min_event_date=min_event_date,
+                open_retries=args.open_retries,
+                open_retry_delay=args.open_retry_delay,
+            ):
+                try:
+                    graph_source_index = int(graph.metadata.get("source_index", -1))
+                except Exception:
+                    graph_source_index = -1
+                graph_by_key[(path, graph_source_index)] = graph
+
+        for _bin_key, _unique_id, path, source_index, _log10_energy, _date, _time_value in block:
+            graph = graph_by_key.get((path, int(source_index)))
+            if graph is not None:
+                yield graph
+
+
 def _shard_path(output: str | Path, shard_index: int) -> Path:
     base = Path(output).expanduser()
     suffix = base.suffix if base.suffix else ".h5"
@@ -1921,6 +2099,62 @@ def _expand_h5_graph_paths(paths: list[str]) -> list[str]:
         else:
             expanded.append(str(path))
     return list(dict.fromkeys(expanded))
+
+
+def _decode_h5_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _h5_metadata_value(handle: Any, local_index: int, name: str) -> Any | None:
+    metadata = handle.get("metadata")
+    if metadata is None or name not in metadata:
+        return None
+    dataset = metadata[name]
+    if local_index >= dataset.shape[0]:
+        return None
+    return dataset[local_index]
+
+
+def _hetero_h5_event_entries(paths: list[str], *, stratify_particle: bool) -> list[HeteroH5EventEntry]:
+    import h5py
+
+    entries: list[HeteroH5EventEntry] = []
+    for h5_path in paths:
+        with h5py.File(Path(h5_path).expanduser(), "r") as handle:
+            if str(handle.attrs.get("format", "")) != "talesd_gnn_hetero_graphs":
+                raise ValueError(f"{h5_path} is not a hetero graph HDF5 file")
+            n_events = len(handle["events"])
+            for local_index in range(n_events):
+                key = f"{local_index:08d}"
+                event_group = handle["events"][key]
+                event_id_value = _h5_metadata_value(handle, local_index, "event_id")
+                source_path_value = _h5_metadata_value(handle, local_index, "source_path")
+                source_index_value = _h5_metadata_value(handle, local_index, "source_index")
+                event_id = _decode_h5_text(event_id_value) if event_id_value is not None else str(event_group.attrs.get("event_id", key))
+                source_path = (
+                    _decode_h5_text(source_path_value)
+                    if source_path_value is not None
+                    else str(event_group.attrs.get("source_path", ""))
+                )
+                try:
+                    source_index = int(source_index_value) if source_index_value is not None else int(event_group.attrs.get("source_index", local_index))
+                except Exception:
+                    source_index = int(local_index)
+                bin_key = _hetero_output_bin_key_from_path(source_path, stratify_particle=stratify_particle)
+                unique_id = f"{event_id}:{source_path}:{source_index}"
+                entries.append(
+                    HeteroH5EventEntry(
+                        bin_key=bin_key,
+                        unique_id=unique_id,
+                        h5_path=str(Path(h5_path).expanduser()),
+                        local_index=int(local_index),
+                        source_path=source_path,
+                        source_index=int(source_index),
+                    )
+                )
+    return entries
 
 
 def _resolve_graph_args(paths: list[str], list_paths: list[str] | None = None) -> list[str]:
@@ -2812,6 +3046,9 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
         "balance_core_bin_width_km": args.balance_core_bin_width_km,
         "balance_time_bin_width_sec": args.balance_time_bin_width_sec,
         "seed": args.seed,
+        "output_order": args.output_order,
+        "output_locality_run_size": args.output_locality_run_size,
+        "write_block_size": args.write_block_size,
         "workers": args.workers,
         "worker_max_files": args.worker_max_files,
         "shard_size": args.shard_size,
@@ -2855,6 +3092,7 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
             return
         if int(args.shard_size) > 0 and int(args.workers) > 1:
             config["balanced_selection_parallel_shard_write"] = True
+            config["balanced_selection_output_ordered"] = True
             written_total = 0
             skipped_total = 0
             written_path_items: list[tuple[int, Path]] = []
@@ -2874,7 +3112,19 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
             targets = ", ".join(str(path) for path in written_paths) if written_paths else str(args.output)
             print(f"wrote {written_total} hetero graphs to {targets} (skipped {skipped_total} selected events)")
             return
-        graphs = _iter_selected_hetero_graphs(inputs, args, const_dst, mc_calib_dir, selected_by_path)
+        selected_entries = _selected_entries_from_path_indices(
+            inputs,
+            selected_by_path,
+            stratify_particle=bool(args.energy_sample_stratify_particle),
+        )
+        selected_entries = _ordered_selected_entries(
+            selected_entries,
+            output_order=str(args.output_order),
+            seed=int(args.seed),
+            locality_run_size=int(args.output_locality_run_size),
+        )
+        config["balanced_selection_output_ordered"] = True
+        graphs = _iter_ordered_selected_hetero_graphs(selected_entries, args, const_dst, mc_calib_dir)
     else:
         graphs = tale_graph.iter_graphs(
             inputs,
@@ -2895,6 +3145,76 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
     written_total, written_paths = _write_hetero_graph_iterable(graphs, args, config)
     targets = ", ".join(str(path) for path in written_paths) if written_paths else str(args.output)
     print(f"wrote {written_total} hetero graphs to {targets}")
+
+
+def _cmd_reshard_hetero(args: argparse.Namespace) -> None:
+    import h5py
+
+    from .hetero_graph_io import copy_hetero_graph_group, create_hetero_graph_file
+
+    paths = _resolve_graph_args(args.graphs, args.graphs_list)
+    output = Path(args.output).expanduser()
+    input_paths = {Path(path).expanduser().resolve() for path in paths}
+    if output.resolve() in input_paths:
+        raise SystemExit("output must not overwrite an input HDF5 file")
+
+    entries = _hetero_h5_event_entries(paths, stratify_particle=bool(args.energy_sample_stratify_particle))
+    ordered_entries = _ordered_hetero_h5_entries(
+        entries,
+        output_order=str(args.output_order),
+        seed=int(args.seed),
+        locality_run_size=int(args.output_locality_run_size),
+    )
+    shard_size = max(int(args.shard_size), 0)
+    if shard_size > 0:
+        chunks = _chunked(ordered_entries, shard_size)
+        total_chunks = math.ceil(len(ordered_entries) / shard_size)
+    else:
+        chunks = iter([ordered_entries])
+        total_chunks = 1 if ordered_entries else 0
+
+    config = {
+        "operation": "reshard_hetero",
+        "input_count": len(paths),
+        "input": paths[:MAX_CONFIG_PATHS],
+        "input_truncated": len(paths) > MAX_CONFIG_PATHS,
+        "output_order": args.output_order,
+        "output_locality_run_size": args.output_locality_run_size,
+        "seed": args.seed,
+        "shard_size": args.shard_size,
+        "energy_sample_stratify_particle": bool(args.energy_sample_stratify_particle),
+    }
+    written_paths: list[Path] = []
+    written_total = 0
+    for shard_index, chunk in enumerate(_progress(chunks, desc="reshard hetero HDF5", total=total_chunks)):
+        output_path = _shard_path(output, shard_index) if shard_size > 0 else output
+        if output_path.exists() and not args.overwrite:
+            raise SystemExit(f"output already exists: {output_path}; pass --overwrite to replace")
+        shard_config = dict(config)
+        shard_config["shard_index"] = shard_index if shard_size > 0 else None
+        handle_cache: dict[str, h5py.File] = {}
+        try:
+            with create_hetero_graph_file(output_path, config=shard_config) as target:
+                for output_index, entry in enumerate(chunk):
+                    source = handle_cache.get(entry.h5_path)
+                    if source is None:
+                        source = h5py.File(entry.h5_path, "r")
+                        handle_cache[entry.h5_path] = source
+                    copy_hetero_graph_group(
+                        source,
+                        f"{entry.local_index:08d}",
+                        int(entry.local_index),
+                        target,
+                        int(output_index),
+                    )
+                    written_total += 1
+        finally:
+            for source in handle_cache.values():
+                source.close()
+        written_paths.append(output_path)
+
+    targets = ", ".join(str(path) for path in written_paths) if written_paths else str(output)
+    print(f"wrote {written_total} reshuffled hetero graphs to {targets}")
 
 
 def _cmd_train(args: argparse.Namespace) -> None:
@@ -3278,6 +3598,24 @@ def build_parser() -> argparse.ArgumentParser:
     export_hetero.add_argument("--balance-time-bin-width-sec", type=int, default=3600, help="balanced selection用時刻bin幅")
     export_hetero.add_argument("--selection-summary", default=None, help="balanced preselection summary JSONの出力先")
     export_hetero.add_argument("--dry-run-selection", action="store_true", help="balanced preselection summaryだけ作成し、HDF5は書かない")
+    export_hetero.add_argument(
+        "--output-order",
+        choices=["source", "random", "interleaved"],
+        default="interleaved",
+        help="balanced export のHDF5内event順。interleavedはparticle/energy/sourceが連続しないように混ぜる",
+    )
+    export_hetero.add_argument(
+        "--output-locality-run-size",
+        type=int,
+        default=32,
+        help="--output-order=interleavedで同一source/binから連続して書く最大event数",
+    )
+    export_hetero.add_argument(
+        "--write-block-size",
+        type=int,
+        default=2048,
+        help="ordered hetero shard書き出しで一度にgraph化して並べ替えるevent数",
+    )
     export_hetero.add_argument("--cleaning", choices=["ising", "none"], default="ising", help="dstio.tale.graph cleaning mode")
     export_hetero.add_argument(
         "--node-policy",
@@ -3293,6 +3631,28 @@ def build_parser() -> argparse.ArgumentParser:
     export_hetero.add_argument("--skip-errors", action="store_true", help="読めないDSTを警告してスキップする")
     export_hetero.add_argument("--skip-missing-mc-calibration", action="store_true", help="MC calibration が見つからないeventをスキップする")
     export_hetero.set_defaults(func=_cmd_export_hetero)
+
+    reshard_hetero = sub.add_parser("reshard-hetero", help="既存hetero HDF5をDST再読込なしで並べ替え・再shard化する")
+    reshard_hetero.add_argument("--graphs", nargs="*", default=[], help="入力hetero HDF5。shard、shard base、またはHDF5ディレクトリを指定可")
+    reshard_hetero.add_argument("--graphs-list", action="append", default=[], help="入力hetero HDF5 shard path list")
+    reshard_hetero.add_argument("-o", "--output", required=True, help="出力hetero HDF5 base path")
+    reshard_hetero.add_argument(
+        "--output-order",
+        choices=["source", "random", "interleaved"],
+        default="interleaved",
+        help="出力HDF5内event順。interleavedはparticle/energy/sourceが連続しないように混ぜる",
+    )
+    reshard_hetero.add_argument(
+        "--output-locality-run-size",
+        type=int,
+        default=32,
+        help="--output-order=interleavedで同一source/binから連続して書く最大event数",
+    )
+    reshard_hetero.add_argument("--seed", type=int, default=12345)
+    reshard_hetero.add_argument("--shard-size", type=int, default=100000, help="N graphごとに出力HDF5を分割する。0なら単一ファイル")
+    reshard_hetero.add_argument("--energy-sample-stratify-particle", action="store_true", help="interleaved order のbinを particle:DAT energy code にする")
+    reshard_hetero.add_argument("--overwrite", action="store_true", help="既存出力HDF5を上書きする")
+    reshard_hetero.set_defaults(func=_cmd_reshard_hetero)
 
     train = sub.add_parser("train", help="MC truth付きグラフでGNNを学習")
     train.add_argument("--graphs", nargs="*", default=[], help="exportで作成したMC HDF5グラフ。shard、shard base、またはHDF5ディレクトリを指定可")

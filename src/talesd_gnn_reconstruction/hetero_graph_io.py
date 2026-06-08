@@ -97,6 +97,70 @@ def _append_metadata(handle: h5py.File, index: int, graph: Any) -> None:
     metadata_group["metadata_json"][index] = _metadata_json(metadata)
 
 
+def _ensure_metadata_size(metadata_group: h5py.Group, size: int) -> None:
+    for dataset in metadata_group.values():
+        if dataset.shape[0] < size:
+            dataset.resize((size,))
+
+
+def _metadata_dataset_value(source: h5py.File, source_local_index: int, name: str) -> Any | None:
+    metadata_group = source.get("metadata")
+    if metadata_group is None or name not in metadata_group:
+        return None
+    dataset = metadata_group[name]
+    if source_local_index >= dataset.shape[0]:
+        return None
+    return dataset[source_local_index]
+
+
+def copy_hetero_graph_group(
+    source: h5py.File,
+    source_key: str,
+    source_local_index: int,
+    target: h5py.File,
+    target_index: int,
+) -> None:
+    """Copy one hetero event group and rebuild the flat metadata row."""
+
+    target_key = f"{int(target_index):08d}"
+    source.copy(source["events"][source_key], target["events"], name=target_key)
+
+    metadata_group = target.get("metadata")
+    if metadata_group is None:
+        return
+    _ensure_metadata_size(metadata_group, int(target_index) + 1)
+    copied_group = target["events"][target_key]
+    metadata: dict[str, Any] = {}
+    if "metadata_json" in copied_group.attrs:
+        try:
+            metadata = json.loads(str(copied_group.attrs["metadata_json"]))
+        except json.JSONDecodeError:
+            metadata = {}
+
+    for name in metadata_group.keys():
+        value = _metadata_dataset_value(source, int(source_local_index), name)
+        if value is None:
+            if name == "event_id":
+                value = metadata.get("event_id", str(copied_group.attrs.get("event_id", "")))
+            elif name == "source_path":
+                value = metadata.get("source_path", str(copied_group.attrs.get("source_path", "")))
+            elif name == "source_index":
+                value = int(metadata.get("source_index", copied_group.attrs.get("source_index", -1)))
+            elif name == "parttype":
+                value = int(metadata.get("parttype", copied_group.attrs.get("parttype", -1)))
+            elif name == "particle_label":
+                value = copied_group["particle_label"][()] if "particle_label" in copied_group else np.nan
+            elif name == "n_detector_nodes":
+                value = int(copied_group["detector_features"].shape[0])
+            elif name == "n_pulse_nodes":
+                value = int(copied_group["pulse_features"].shape[0])
+            elif name == "metadata_json":
+                value = str(copied_group.attrs.get("metadata_json", _metadata_json(metadata)))
+            else:
+                continue
+        metadata_group[name][int(target_index)] = value
+
+
 def _create_compressed(group: h5py.Group, name: str, data: Any) -> None:
     array = np.asarray(data)
     group.create_dataset(name, data=array, compression="gzip", compression_opts=4)

@@ -39,6 +39,11 @@ from talesd_gnn_reconstruction.hetero_training import (
     _resolve_loader_settings,
     train_hetero_model,
 )
+from talesd_gnn_reconstruction.cli import (
+    _cmd_reshard_hetero,
+    _ordered_selected_entries,
+    _selected_entries_from_path_indices,
+)
 from scripts.summarize_split_distributions import summarize
 
 
@@ -461,6 +466,69 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertGreater(split["detector_nodes"]["n"], 0)
             self.assertGreater(split["pulse_nodes"]["n"], 0)
             self.assertGreater(split["event_time_hour"]["n"], 0)
+
+    def test_hetero_balanced_entries_are_interleaved_before_write(self) -> None:
+        inputs = [
+            "/mc/proton/sel/DAT000016_gea_trg_000.dst.gz",
+            "/mc/proton/sel/DAT000017_gea_trg_000.dst.gz",
+            "/mc/iron/sel/DAT100016_gea_trg_000.dst.gz",
+            "/mc/iron/sel/DAT100017_gea_trg_000.dst.gz",
+        ]
+        selected = {path: set(range(4)) for path in inputs}
+
+        source_entries = _selected_entries_from_path_indices(inputs, selected, stratify_particle=True)
+        ordered = _ordered_selected_entries(
+            source_entries,
+            output_order="interleaved",
+            seed=12345,
+            locality_run_size=1,
+        )
+
+        self.assertEqual(len(ordered), len(source_entries))
+        self.assertEqual({entry[1] for entry in ordered}, {entry[1] for entry in source_entries})
+        self.assertNotEqual([entry[1] for entry in ordered], [entry[1] for entry in source_entries])
+        first_eight_particles = ["iron" if "/iron/" in entry[2] else "proton" for entry in ordered[:8]]
+        self.assertIn("iron", first_eight_particles)
+        self.assertIn("proton", first_eight_particles)
+
+    def test_reshard_hetero_reorders_existing_h5_without_changing_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "source.h5"
+            output_path = Path(tmpdir) / "reshuffled.h5"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(8):
+                    graph = _synthetic_graph(index)
+                    particle = "proton" if index < 4 else "iron"
+                    dat_code = "16" if index % 2 == 0 else "17"
+                    graph.metadata["source_path"] = f"/mc/{particle}/sel/DAT0000{dat_code}_gea_trg_{index:03d}.dst.gz"
+                    graph.metadata["source_index"] = index
+                    graph.metadata["event_id"] = f"event_{index:03d}"
+                    graph.event_id = f"event_{index:03d}"
+                    graph.particle_label = 0.0 if particle == "proton" else 1.0
+                    write_hetero_graph(handle, index, graph)
+
+            _cmd_reshard_hetero(
+                SimpleNamespace(
+                    graphs=[str(graph_path)],
+                    graphs_list=[],
+                    output=str(output_path),
+                    output_order="interleaved",
+                    output_locality_run_size=1,
+                    seed=24680,
+                    shard_size=0,
+                    energy_sample_stratify_particle=True,
+                    overwrite=False,
+                )
+            )
+
+            with h5py.File(graph_path, "r") as source, h5py.File(output_path, "r") as target:
+                source_ids = [source["metadata"]["event_id"][index].decode("utf-8") for index in range(8)]
+                target_ids = [target["metadata"]["event_id"][index].decode("utf-8") for index in range(8)]
+                self.assertEqual(set(target_ids), set(source_ids))
+                self.assertNotEqual(target_ids, source_ids)
+                target_particles = [float(target["metadata"]["particle_label"][index]) for index in range(8)]
+                self.assertIn(0.0, target_particles[:4])
+                self.assertIn(1.0, target_particles[:4])
 
     def test_hetero_input_distributions_write_summary_and_plots(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
