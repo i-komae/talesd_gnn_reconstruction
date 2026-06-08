@@ -113,11 +113,14 @@ env UV_CACHE_DIR="${UV_CACHE_DIR}" uv sync --frozen
 ${particle_line}\
   -o "${GRAPH_OUTPUT}"
 
+echo "stage=start graph_summary"
 .venv/bin/python scripts/summarize_graph_shards.py "${GRAPH_RUN_DIR}" \\
   --workers "${SUMMARY_WORKERS}" \\
   -o "${GRAPH_RUN_DIR}/summaries/graph_summary.json"
 cp -f "${GRAPH_RUN_DIR}/summaries/graph_summary.json" "${RUN_DIR}/summaries/graph_summary.json"
+echo "stage=done graph_summary output=${GRAPH_RUN_DIR}/summaries/graph_summary.json"
 
+echo "stage=start split_distribution_summary"
 .venv/bin/python scripts/summarize_split_distributions.py "${GRAPH_RUN_DIR}" \\
   -o "${GRAPH_RUN_DIR}/summaries/split_distribution_summary.json" \\
   --plot-dir "${GRAPH_RUN_DIR}/summaries/split_distributions" \\
@@ -128,14 +131,17 @@ cp -f "${GRAPH_RUN_DIR}/summaries/graph_summary.json" "${RUN_DIR}/summaries/grap
   --seed "${SEED}" \\
   --split-workers "${SPLIT_WORKERS}"
 cp -f "${GRAPH_RUN_DIR}/summaries/split_distribution_summary.json" "${RUN_DIR}/summaries/split_distribution_summary.json"
+echo "stage=done split_distribution_summary output=${GRAPH_RUN_DIR}/summaries/split_distribution_summary.json"
 
 if [[ "${MAKE_INPUT_DISTRIBUTIONS}" == "1" ]]; then
+  echo "stage=start input_distributions"
   .venv/bin/talesd-gnn input-distributions \\
     --graphs "${GRAPH_RUN_DIR}" \\
     --max-graphs "${INPUT_DISTRIBUTION_MAX_GRAPHS}" \\
     --max-values-per-feature "${INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE}" \\
     --seed "${SEED}" \\
     -o "${GRAPH_RUN_DIR}/summaries/input_distributions"
+  echo "stage=done input_distributions output=${GRAPH_RUN_DIR}/summaries/input_distributions"
 fi
 EOF
 

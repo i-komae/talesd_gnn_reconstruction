@@ -437,8 +437,15 @@ def _scan_stratified_source_paths_parallel(
     show_progress: bool,
     workers: int,
 ) -> tuple[dict[str, list[int]], dict[str, dict[str, Any]]]:
+    if show_progress:
+        _progress_write(f"stage=start scan_stratified_source_paths payloads graphs={len(dataset)}")
     payloads = _stratified_source_scan_payloads(dataset)
     worker_count = min(max(int(workers), 1), max(len(payloads), 1))
+    if show_progress:
+        _progress_write(
+            "stage=done scan_stratified_source_paths payloads "
+            f"shards={len(payloads)} workers={worker_count}"
+        )
     source_to_indices: dict[str, list[int]] = {}
     source_stats: dict[str, dict[str, Any]] = {}
     progress = _progress_bar("scan stratified source paths", len(dataset), enabled=show_progress)
@@ -462,6 +469,7 @@ def _scan_stratified_source_paths_parallel(
         while pending:
             done, pending = wait(pending, timeout=progress.interval, return_when=FIRST_COMPLETED)
             if not done:
+                progress.set_postfix(pending=len(pending), workers=worker_count)
                 progress.update(0)
                 continue
             for future in done:
@@ -486,6 +494,11 @@ def _scan_stratified_source_paths_parallel(
         if not pool_closed:
             pool.shutdown(wait=False, cancel_futures=True)
         progress.close()
+    if show_progress:
+        _progress_write(
+            "stage=done scan_stratified_source_paths "
+            f"sources={len(source_to_indices)} graphs={sum(len(v) for v in source_to_indices.values())}"
+        )
     return source_to_indices, source_stats
 
 

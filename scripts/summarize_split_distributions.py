@@ -17,6 +17,7 @@ from talesd_gnn_reconstruction.hetero_graph_io import FORMAT_NAME as HETERO_FORM
 from talesd_gnn_reconstruction.hetero_graph_io import H5HeteroGraphDataset
 from talesd_gnn_reconstruction.metrics import direction_columns_for_dim, direction_to_angles
 from talesd_gnn_reconstruction.progress import progress
+from talesd_gnn_reconstruction.progress import write as progress_write
 from talesd_gnn_reconstruction.train import source_group_key, split_indices_by_stratified_source_path
 
 
@@ -327,6 +328,10 @@ def summarize(
     show_progress: bool,
     plot_dir: Path | None = None,
 ) -> dict[str, Any]:
+    progress_write(
+        "stage=start split_distribution_summary split_assignment "
+        f"graphs={len(dataset)} split_workers={split_workers}"
+    )
     split = split_indices_by_stratified_source_path(
         dataset,
         val_fraction=val_fraction,
@@ -336,6 +341,10 @@ def summarize(
         seed=seed,
         show_progress=show_progress,
         workers=split_workers,
+    )
+    progress_write(
+        "stage=done split_distribution_summary split_assignment "
+        f"train={len(split['train'])} val={len(split['val'])} test={len(split['test'])}"
     )
     totals = {name: _new_bucket() for name in split}
     by_energy: dict[str, dict[str, dict[str, Any]]] = defaultdict(
@@ -429,11 +438,16 @@ def main() -> None:
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args()
 
+    progress_write("stage=start split_distribution_summary")
     paths = _expand_h5_graph_paths(args.graphs)
     if not paths:
         raise SystemExit("no graph files matched")
+    progress_write(f"stage=done split_distribution_summary expand_paths shards={len(paths)}")
+    progress_write(f"stage=start split_distribution_summary detect_format first_path={paths[0]}")
     with h5py.File(paths[0], "r") as handle:
         is_hetero = str(handle.attrs.get("format", "")) == HETERO_FORMAT_NAME
+    progress_write(f"stage=done split_distribution_summary detect_format hetero={int(is_hetero)}")
+    progress_write("stage=start split_distribution_summary dataset_init")
     if is_hetero:
         dataset: GraphDataset = H5HeteroGraphDataset(
             paths,
@@ -451,6 +465,10 @@ def main() -> None:
             load_particle_label=True,
             show_progress=not args.no_progress,
         )
+    progress_write(
+        "stage=done split_distribution_summary dataset_init "
+        f"graphs={len(dataset)} shards={len(paths)}"
+    )
     try:
         payload = summarize(
             dataset,
@@ -466,10 +484,12 @@ def main() -> None:
         )
     finally:
         dataset.close()
+        progress_write("stage=done split_distribution_summary dataset_close")
     output = Path(args.output).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     print(f"split_distribution_summary={output}")
+    progress_write(f"stage=done split_distribution_summary output={output}")
 
 
 if __name__ == "__main__":
