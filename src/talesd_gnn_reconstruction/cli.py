@@ -3612,6 +3612,46 @@ def _cmd_feature_importance(args: argparse.Namespace) -> None:
     print(f"feature group importance: {summary['summary_json']}")
 
 
+def _parse_index_list(value: str | None) -> list[int] | None:
+    if value is None or not str(value).strip():
+        return None
+    indices: list[int] = []
+    for token in str(value).split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if ":" in token:
+            parts = [part.strip() for part in token.split(":")]
+            if len(parts) not in {2, 3}:
+                raise ValueError(f"invalid index range: {token!r}")
+            start = int(parts[0])
+            stop = int(parts[1])
+            step = int(parts[2]) if len(parts) == 3 and parts[2] else 1
+            indices.extend(range(start, stop, step))
+        else:
+            indices.append(int(token))
+    return indices
+
+
+def _cmd_attention_maps(args: argparse.Namespace) -> None:
+    from .hetero_attention_analysis import save_hetero_attention_maps
+
+    graphs = _resolve_graph_args(args.graphs, args.graphs_list)
+    summary = save_hetero_attention_maps(
+        graphs,
+        args.checkpoint,
+        args.output,
+        split=args.split,
+        max_graphs=args.max_graphs,
+        indices=_parse_index_list(args.indices),
+        device=args.device,
+        seed=args.seed,
+        show_progress=not args.no_progress,
+    )
+    print(f"attention maps: {summary['summary_json']}")
+    print(f"attention arrays: {summary['array_file']}")
+
+
 def _cmd_visualize(args: argparse.Namespace) -> None:
     from .visualize import visualize_graphs
 
@@ -4020,6 +4060,28 @@ def build_parser() -> argparse.ArgumentParser:
     importance.add_argument("--seed", type=int, default=12345)
     importance.add_argument("--no-progress", action="store_true")
     importance.set_defaults(func=_cmd_feature_importance)
+
+    attention_maps = sub.add_parser("attention-maps", help="hetero_attention checkpointのattention mapを保存")
+    attention_maps.add_argument("--graphs", nargs="*", default=[], help="checkpoint作成時と同じhetero HDF5 graph集合")
+    attention_maps.add_argument("--graphs-list", action="append", default=[], help="hetero HDF5 shard path list")
+    attention_maps.add_argument("--checkpoint", required=True, help="train-heteroで作成したhetero_attention checkpoint .pt")
+    attention_maps.add_argument("-o", "--output", required=True, help="出力ディレクトリ")
+    attention_maps.add_argument(
+        "--split",
+        choices=["validation", "val", "test", "train"],
+        default="validation",
+        help="checkpoint内のどのsplitからeventを選ぶか",
+    )
+    attention_maps.add_argument("--max-graphs", type=int, default=16, help="保存する最大event数。0ならsplit全件")
+    attention_maps.add_argument(
+        "--indices",
+        default=None,
+        help="保存するglobal graph index。例: 10,42,100:110。指定時は--splitの選択を上書きする",
+    )
+    attention_maps.add_argument("--device", default="auto")
+    attention_maps.add_argument("--seed", type=int, default=12345)
+    attention_maps.add_argument("--no-progress", action="store_true")
+    attention_maps.set_defaults(func=_cmd_attention_maps)
 
     visualize = sub.add_parser("visualize", help="HDF5グラフをPDFとして描画")
     visualize.add_argument("--graphs", nargs="*", default=[], help="exportで作成したHDF5グラフ。shardを複数指定可")

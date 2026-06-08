@@ -425,12 +425,16 @@ def _selected_checkpoint_indices(checkpoint: dict[str, Any], split: str) -> list
 def _metric_delta(baseline: dict[str, Any] | None, changed: dict[str, Any] | None) -> dict[str, float]:
     if baseline is None or changed is None:
         return {}
-    keys = ["rmse_log10_energy", "angular_68_deg", "core_68_km", "median_abs_log10_energy", "median_abs_relative_energy"]
-    return {
-        key: float(changed[key]) - float(baseline[key])
-        for key in keys
-        if key in baseline and key in changed and baseline[key] is not None and changed[key] is not None
-    }
+    delta = {}
+    for key in sorted(set(baseline) & set(changed)):
+        try:
+            baseline_value = float(baseline[key])
+            changed_value = float(changed[key])
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(baseline_value) and np.isfinite(changed_value):
+            delta[key] = changed_value - baseline_value
+    return delta
 
 
 def _feature_group_importance_plot_data(result: dict[str, Any]) -> dict[str, Any]:

@@ -132,12 +132,15 @@ class HeteroAttentionMessageLayer(nn.Module):
         node_states: dict[str, torch.Tensor],
         edge_index_by_type: Mapping[str, torch.Tensor],
         edge_features_by_type: Mapping[str, torch.Tensor],
-    ) -> dict[str, torch.Tensor]:
+        *,
+        return_attention: bool = False,
+    ) -> dict[str, torch.Tensor] | tuple[dict[str, torch.Tensor], dict[str, Any]]:
         aggregates = {node_type: torch.zeros_like(state) for node_type, state in node_states.items()}
         counts = {
             node_type: torch.zeros(state.shape[0], 1, dtype=state.dtype, device=state.device)
             for node_type, state in node_states.items()
         }
+        attention_by_relation: dict[str, dict[str, torch.Tensor | str]] = {}
         scale = float(self.head_dim) ** -0.5
         for relation in self.query.keys():
             edge_index = edge_index_by_type.get(relation)
@@ -155,6 +158,14 @@ class HeteroAttentionMessageLayer(nn.Module):
             value = self.value[relation](src_input).view(-1, self.heads, self.head_dim)
             scores = (query * key).sum(dim=-1) * scale
             weights = _scatter_softmax(scores, dst_index, dst_state.shape[0])
+            if return_attention:
+                attention_by_relation[str(relation)] = {
+                    "src_type": src_type,
+                    "dst_type": dst_type,
+                    "edge_index": edge_index.detach(),
+                    "scores": scores.detach(),
+                    "weights": weights.detach(),
+                }
             messages = (value * weights[:, :, None]).reshape(-1, self.hidden_dim)
             messages = self.dropout(self.relation_output[relation](messages))
             aggregates[dst_type].index_add_(0, dst_index, messages)
@@ -172,10 +183,13 @@ class HeteroAttentionMessageLayer(nn.Module):
         pulse = self.pulse_norm(
             node_states["pulse"] + self.pulse_update(torch.cat([node_states["pulse"], pulse_aggregate], dim=-1))
         )
-        return {
+        output = {
             "detector": self.detector_ffn_norm(detector + self.detector_ffn(detector)),
             "pulse": self.pulse_ffn_norm(pulse + self.pulse_ffn(pulse)),
         }
+        if return_attention:
+            return output, {"relations": attention_by_relation}
+        return output
 
 
 class HeteroAttentiveReadout(nn.Module):
@@ -186,7 +200,14 @@ class HeteroAttentiveReadout(nn.Module):
         self.score = nn.Linear(self.hidden_dim, self.heads)
         self.output_dim = self.hidden_dim * (2 + self.heads)
 
-    def forward(self, state: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
+    def forward(
+        self,
+        state: torch.Tensor,
+        batch: torch.Tensor,
+        num_graphs: int,
+        *,
+        return_attention: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         weights = _scatter_softmax(self.score(state), batch, num_graphs)
         pooled = [_scatter_mean(state, batch, num_graphs), _scatter_max(state, batch, num_graphs)]
         for head in range(self.heads):
@@ -194,7 +215,10 @@ class HeteroAttentiveReadout(nn.Module):
             out = torch.zeros(num_graphs, state.shape[1], dtype=state.dtype, device=state.device)
             out.index_add_(0, batch, weighted)
             pooled.append(out)
-        return torch.cat(pooled, dim=-1)
+        output = torch.cat(pooled, dim=-1)
+        if return_attention:
+            return output, weights.detach()
+        return output
 
 
 class MinimalHeteroTaleSdGNN(nn.Module):
@@ -383,7 +407,12 @@ class MinimalHeteroTaleSdGNN(nn.Module):
     def _pool(state: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
         return torch.cat([_scatter_mean(state, batch, num_graphs), _scatter_max(state, batch, num_graphs)], dim=-1)
 
-    def forward(self, batch: Mapping[str, Any]) -> torch.Tensor:
+    def forward(
+        self,
+        batch: Mapping[str, Any],
+        *,
+        return_attention: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, Any]]:
         if "detector_features" in batch:
             batch = hetero_sample_to_tensors(batch, waveform_length=int(self.config["waveform_length"]))
         elif "edge_index_by_type" not in batch:
@@ -411,15 +440,46 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         }
         edge_index_by_type = batch["edge_index_by_type"]
         edge_features_by_type = batch["edge_features_by_type"]
-        for layer in self.layers:
-            node_states = layer(node_states, edge_index_by_type, edge_features_by_type)
+        layer_attention = []
+        for layer_index, layer in enumerate(self.layers):
+            if return_attention and isinstance(layer, HeteroAttentionMessageLayer):
+                node_states, attention = layer(
+                    node_states,
+                    edge_index_by_type,
+                    edge_features_by_type,
+                    return_attention=True,
+                )
+                layer_attention.append({"layer": int(layer_index), **attention})
+            else:
+                node_states = layer(node_states, edge_index_by_type, edge_features_by_type)
 
         num_graphs = int(batch.get("num_graphs", 1))
+        readout_attention: dict[str, torch.Tensor] = {}
         if self.architecture == "hetero_attention":
+            if return_attention:
+                detector_readout, detector_weights = self.detector_readout(
+                    node_states["detector"],
+                    detector["batch"],
+                    num_graphs,
+                    return_attention=True,
+                )
+                pulse_readout, pulse_weights = self.pulse_readout(
+                    node_states["pulse"],
+                    pulse["batch"],
+                    num_graphs,
+                    return_attention=True,
+                )
+                readout_attention = {
+                    "detector": detector_weights,
+                    "pulse": pulse_weights,
+                }
+            else:
+                detector_readout = self.detector_readout(node_states["detector"], detector["batch"], num_graphs)
+                pulse_readout = self.pulse_readout(node_states["pulse"], pulse["batch"], num_graphs)
             readout = torch.cat(
                 [
-                    self.detector_readout(node_states["detector"], detector["batch"], num_graphs),
-                    self.pulse_readout(node_states["pulse"], pulse["batch"], num_graphs),
+                    detector_readout,
+                    pulse_readout,
                 ],
                 dim=-1,
             )
@@ -441,5 +501,23 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         if self.error_head is not None:
             outputs.append(self.error_head(readout))
         if not outputs:
-            return readout
-        return torch.cat(outputs, dim=-1)
+            output = readout
+        else:
+            output = torch.cat(outputs, dim=-1)
+        if return_attention:
+            attention_payload = {
+                "layers": layer_attention,
+                "readout": readout_attention,
+                "node_metadata": {
+                    "detector_batch": detector["batch"].detach(),
+                    "detector_lid": detector["lid"].detach(),
+                    "detector_pos": detector["pos"].detach(),
+                    "pulse_batch": pulse["batch"].detach(),
+                    "pulse_lid": pulse["lid"].detach(),
+                    "pulse_pos": pulse["pos"].detach(),
+                    "pulse_detector_index": pulse["detector_index"].detach(),
+                    "pulse_bounds": pulse["pulse_bounds"].detach(),
+                },
+            }
+            return output, attention_payload
+        return output

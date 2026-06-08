@@ -17,6 +17,7 @@ from talesd_gnn_reconstruction.hetero_data import (
     hetero_sample_to_tensors,
     sample_to_hetero_data,
 )
+from talesd_gnn_reconstruction.hetero_attention_analysis import save_hetero_attention_maps
 from talesd_gnn_reconstruction.hetero_feature_analysis import (
     save_hetero_feature_group_importance,
     save_hetero_input_distributions,
@@ -468,7 +469,58 @@ class HeteroGraphIoTest(unittest.TestCase):
             redraw = payload["redraw_artifacts"]
             self.assertTrue(Path(redraw["plot_data_json"]).exists())
             plot_data = json.loads(Path(redraw["plot_data_json"]).read_text())
+            self.assertIn("median_abs_relative_energy", payload["groups"][0]["reconstruction_delta"])
             self.assertIn("plot_specs", plot_data)
+
+    def test_hetero_attention_maps_smoke_writes_json_and_npz(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            checkpoint_path = Path(tmpdir) / "checkpoint.pt"
+            output_dir = Path(tmpdir) / "attention"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(6):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            train_hetero_model(
+                graph_path,
+                checkpoint_path,
+                epochs=1,
+                batch_size=2,
+                hidden_dim=16,
+                num_layers=1,
+                dropout=0.0,
+                waveform_embedding_dim=8,
+                mass_classification=True,
+                split_mode="event",
+                device="cpu",
+                num_workers=0,
+                show_progress=False,
+            )
+
+            result = save_hetero_attention_maps(
+                graph_path,
+                checkpoint_path,
+                output_dir,
+                split="validation",
+                max_graphs=1,
+                device="cpu",
+                show_progress=False,
+            )
+
+            summary_path = Path(result["summary_json"])
+            array_path = Path(result["array_file"])
+            self.assertTrue(summary_path.exists())
+            self.assertTrue(array_path.exists())
+            payload = json.loads(summary_path.read_text())
+            self.assertEqual(payload["format"], "hetero_attention_maps_v1")
+            self.assertEqual(payload["n_graphs"], 1)
+            self.assertTrue(payload["events"][0]["relations"])
+            self.assertIn("readout_detector_weights", payload["events"][0]["arrays"])
+            self.assertIn("pulse_bounds", payload["events"][0]["arrays"])
+            with np.load(array_path) as arrays:
+                self.assertIn(payload["events"][0]["arrays"]["pulse_bounds"], arrays.files)
+                weight_keys = [key for key in arrays.files if key.endswith("_attention_weights")]
+                self.assertTrue(weight_keys)
 
     def test_hetero_split_distribution_summary_reads_counts_and_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -216,6 +216,12 @@ checkpointに対してfeature group ablationを行います。
 metrics がどれだけ悪化するかを見ます。
 出力 JSON には baseline metrics、group ごとの ablated metrics、delta が入ります。
 ``feature_group_importance_plot_data.json`` には bar plot を推論なしで再描画するための値を保存します。
+ここでいう metric は単一の汎用 score ではありません。再構成では、逆scale後の物理出力に対して、
+energy のずれ（``rmse_log10_energy`` や相対energy誤差）、core の xy 平面でのずれ
+（``core_68_km`` など）、到来方向の開き角（``angular_68_deg`` など）を評価します。
+mass は accuracy、balanced accuracy、AUC、confusion count を別に保存します。
+``baseline`` は通常入力での評価、各groupの ``reconstruction`` / ``mass`` はそのgroupを潰した時の評価、
+``*_delta`` は ``ablated - baseline`` です。delta は有限な数値 metric について保存されます。
 
 .. code-block:: bash
 
@@ -231,6 +237,29 @@ checkpoint の runtime/model config から判定し、
 ``hetero_feature_analysis.save_hetero_feature_group_importance`` にdispatchします。
 group は detector signal、detector geometry、detector readout context、
 pulse timing/signal、Ising pulse annotation、detector waveform、型付き edge group に分かれます。
+
+Attention maps
+--------------
+
+``hetero_attention`` checkpoint では、少数eventについて後処理のattention重みを保存できます。
+
+.. code-block:: bash
+
+   .venv/bin/talesd-gnn attention-maps \
+     --graphs /path/to/graphs/hetero_balanced_flat10000 \
+     --checkpoint /path/to/checkpoints/hetero_reco_mass.pt \
+     -o /path/to/attention_maps \
+     --split validation \
+     --max-graphs 16
+
+出力は ``attention_maps.json`` と ``attention_maps.npz`` です。
+JSON には event identity、source path、prediction/target、保存した配列名を入れます。
+NPZ には detector/pulse の lid と位置、``pulse_detector_index``、``pulse_bounds``、
+layer/relation/head ごとの edge attention、detector/pulse readout attention を入れます。
+
+これは event display に重ねるための診断値です。attention が大きいことだけを
+feature importance や物理的説明とはみなしません。必要度の評価は ablation や
+perturbation diagnostics と併用します。
 
 Visualization
 -------------
