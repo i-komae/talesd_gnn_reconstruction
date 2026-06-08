@@ -136,6 +136,81 @@ scaler が与えられている場合、detector、context、pulse、edge、targ
 dataset は 1 sample を読み、変換層が typed graph object にし、PyG DataLoader がそれを batch 化し、
 model 内部では統一された tensor dict として扱います。
 
+tensor shape と行列計算
+-----------------------
+
+PyG で batch 化した後は、複数 event の node が連結された tensor になります。
+どの node がどの event に属するかは ``batch`` vector で保持します。
+以下では ``N_d`` を batch 内の detector node 数、``N_p`` を pulse node 数、
+``E_r`` を relation ``r`` の edge 数、``H`` を hidden dimension、``B`` を event 数とします。
+
+.. list-table::
+   :header-rows: 1
+
+   * - tensor
+     - shape
+     - 意味
+   * - ``detector.x``
+     - ``[N_d, F_detector]``
+     - detector の signal、timing、local geometry
+   * - ``detector.context``
+     - ``[N_d, F_context]``
+     - readout / calibration context
+   * - ``detector.waveform``
+     - ``[N_d, C_waveform, T]``
+     - detector ごとの waveform channel と時間 bin
+   * - ``pulse.x``
+     - ``[N_p, F_pulse]``
+     - Ising annotation を含む pulse feature
+   * - ``edge_index_by_type[r]``
+     - ``[2, E_r]``
+     - relation ``r`` の source node index と destination node index
+   * - ``edge_features_by_type[r]``
+     - ``[E_r, F_edge_r]``
+     - edge ごとの連続的な物理量
+   * - ``detector.batch`` / ``pulse.batch``
+     - ``[N_d]`` / ``[N_p]``
+     - batch 化後に各 node が属する event index
+
+dense な adjacency matrix は作りません。
+``edge_index_by_type[r][0]`` が source row、``edge_index_by_type[r][1]`` が destination row を選びます。
+graph propagation は row selection、destination ごとの softmax、``index_add_`` による加算で実行します。
+
+最初の encoding は通常の学習可能な行列積を含む MLP です。
+
+.. code-block:: text
+
+   detector_feature_embedding = MLP_detector(detector.x)        -> [N_d, H]
+   detector_context_embedding = MLP_context(detector.context)   -> [N_d, H]
+   pulse_hidden_0             = MLP_pulse(pulse.x)              -> [N_p, H]
+
+detector waveform は detector ごとの 1D time series として処理します。
+
+.. code-block:: text
+
+   detector.waveform [N_d, C_waveform, T]
+     -> Conv1d layers
+     -> encoded waveform time sequence [N_d, T, H_waveform]
+
+``WAVEFORM_ENCODER=transformer`` の場合、Transformer はこの detector ごとの waveform time sequence にだけ作用します。
+つまり、同じ detector waveform 内の time bin 同士の self-attention です。
+detector node や pulse node の graph relation を全結合で見るものではありません。
+最後に時間方向を pooling します。
+
+.. code-block:: text
+
+   waveform_embedding =
+     Linear(concat(mean_time(encoded), max_time(encoded))) -> [N_d, H_waveform]
+
+detector branch では、3つの detector embedding を結合して graph hidden space へ射影します。
+
+.. code-block:: text
+
+   detector_hidden_0 =
+     Linear(concat(detector_feature_embedding,
+                   detector_context_embedding,
+                   waveform_embedding)) -> [N_d, H]
+
 detector encoder と pulse encoder
 ---------------------------------
 
@@ -159,6 +234,62 @@ pulse node は pulse feature を MLP に通します。
 waveform encoder は detector ごとに 1 回だけ適用します。
 最初の transformer waveform sweep では submitter で ``WAVEFORM_ENCODER=transformer`` を指定します。
 graph 側の architecture は ``hetero_attention`` のままです。
+
+attention という言葉が出てくる場所
+-----------------------------------
+
+この repository では ``attention`` という言葉が複数の場所で出てきます。
+同じ名前でも、見ている対象が違います。
+
+.. list-table::
+   :header-rows: 1
+
+   * - component
+     - code path
+     - 何が何を見るか
+   * - waveform transformer
+     - ``model.py`` の ``WaveformEncoder(mode="transformer")``
+     - 1 detector waveform の中の time bin 同士
+   * - graph relation attention
+     - ``hetero_model.py`` の ``HeteroAttentionMessageLayer``
+     - typed edge で destination node に入ってくる source node
+   * - event readout attention
+     - ``hetero_model.py`` の ``HeteroAttentiveReadout``
+     - 1 event graph 内の detector nodes または pulse nodes
+
+このうち、PyTorch の ``TransformerEncoder`` block なのは最初の waveform transformer だけです。
+graph relation attention は ``torch.nn.MultiheadAttention`` そのものではなく、
+event 内の全 object を全結合で見る Transformer block でもありません。
+query/key/value と scaled dot-product という考え方は同じですが、attention の候補は物理 graph で制限されます。
+
+.. code-block:: text
+
+   Transformer-style sequence attention:
+     token が基本的に他の全 token を見る
+
+   TALE heterogeneous graph attention:
+     node は edge_index にある incoming edge だけを見る
+     relation type ごとに別の Q/K/V projection を使う
+     edge_attr も key/value に入る
+
+destination node ``j`` と incoming source node ``i`` に対しては、次の計算です。
+
+.. code-block:: text
+
+   src_input_ij = concat(hidden_i, edge_attr_ij)
+   q_j = W_Q[relation](hidden_j)
+   k_ij = W_K[relation](src_input_ij)
+   v_ij = W_V[relation](src_input_ij)
+
+   score_ij = dot(q_j, k_ij) / sqrt(head_dim)
+   alpha_ij = softmax(score_ij over incoming edges to j)
+   message_j = sum_i alpha_ij * v_ij
+
+そのため、現在の model は plain sequence Transformer ではなく、
+relation-specific graph attention と呼ぶ方が正確です。
+graph を全結合にしても、それだけで standard Transformer にはなりません。
+detector / pulse の node type、relation ごとの projection、edge attribute、detector-level waveform、
+type-wise readout を持つ点が残るからです。
 
 Relation attention
 ------------------
@@ -190,6 +321,32 @@ message を集めた後、detector state と pulse state は residual connection
 これは HGT を参考にした実装ですが、HGT そのものではありません。
 PyG ``HGTConv`` は使っていません。HGSampling も使いません。
 TALE では 1 event = 1 graph なので、event graph を丸ごと読みます。
+
+GAT、HGT、Transformer、Laplacian GCN との関係
+----------------------------------------------
+
+現在の実装は、名前を正確に使う必要があります。
+
+.. list-table::
+   :header-rows: 1
+
+   * - reference family
+     - 現行 model との関係
+   * - GAT
+     - learned attention で edge message に重みを付ける点は近い
+   * - Transformer
+     - query/key/value の scaled dot-product attention を使う点は近い
+   * - HGT
+     - node type と edge type に応じた relation-specific projection を持つ点は近い
+   * - PyG ``HGTConv`` / ``HeteroConv``
+     - 直接は使っていない。この repository 独自の layer を使う
+   * - Laplacian / spectral GCN
+     - 使っていない。``L = D - A`` や normalized Laplacian による propagation は出てこない
+
+graph は dense adjacency matrix ではなく、sparse な ``edge_index`` tensor で表します。
+message aggregation は ``_scatter_softmax`` と ``index_add_`` で行います。
+graph construction には Ising edge feature 用の degree normalization が一部ありますが、
+これは入力 feature の正規化であり、Laplacian graph convolution ではありません。
 
 Readout
 -------
