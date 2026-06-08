@@ -148,6 +148,86 @@ sample, the conversion layer turns it into a typed graph object, the PyG
 DataLoader batches typed graph objects, and the model receives a unified tensor
 dictionary internally.
 
+Tensor shapes and matrix operations
+-----------------------------------
+
+After PyG batching, nodes from several events are concatenated. The model keeps
+batch vectors so readout can later separate the events again. In the notation
+below, ``N_d`` is the number of detector nodes in the batch, ``N_p`` is the
+number of pulse nodes, ``E_r`` is the number of edges for relation ``r``,
+``H`` is the hidden dimension, and ``B`` is the number of events in the batch.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Tensor
+     - Shape
+     - Meaning
+   * - ``detector.x``
+     - ``[N_d, F_detector]``
+     - detector signal, timing, and local geometry features
+   * - ``detector.context``
+     - ``[N_d, F_context]``
+     - readout/calibration context features
+   * - ``detector.waveform``
+     - ``[N_d, C_waveform, T]``
+     - detector-level waveform channels over time
+   * - ``pulse.x``
+     - ``[N_p, F_pulse]``
+     - pulse features, including Ising annotations
+   * - ``edge_index_by_type[r]``
+     - ``[2, E_r]``
+     - source and destination node indices for relation ``r``
+   * - ``edge_features_by_type[r]``
+     - ``[E_r, F_edge_r]``
+     - continuous physical edge attributes
+   * - ``detector.batch`` / ``pulse.batch``
+     - ``[N_d]`` / ``[N_p]``
+     - event index for each node after batching
+
+The model does not form a dense adjacency matrix. ``edge_index_by_type[r][0]``
+selects source rows and ``edge_index_by_type[r][1]`` selects destination rows.
+All graph propagation is then done with row selection, grouped softmax, and
+``index_add_`` accumulation.
+
+The first encoding step is a set of ordinary learned matrix multiplications
+inside MLPs:
+
+.. code-block:: text
+
+   detector_feature_embedding = MLP_detector(detector.x)        -> [N_d, H]
+   detector_context_embedding = MLP_context(detector.context)   -> [N_d, H]
+   pulse_hidden_0             = MLP_pulse(pulse.x)              -> [N_p, H]
+
+For detector waveforms, the tensor is first processed as a 1D time series per
+detector:
+
+.. code-block:: text
+
+   detector.waveform [N_d, C_waveform, T]
+     -> Conv1d layers
+     -> encoded waveform time sequence [N_d, T, H_waveform]
+
+If ``WAVEFORM_ENCODER=transformer``, the Transformer operates only on this
+per-detector waveform time sequence. It computes self-attention between time
+bins of the same detector waveform, not between detector and pulse graph nodes.
+The waveform sequence is then pooled:
+
+.. code-block:: text
+
+   waveform_embedding =
+     Linear(concat(mean_time(encoded), max_time(encoded))) -> [N_d, H_waveform]
+
+Finally, the detector branch concatenates the three detector embeddings and
+projects them into the graph hidden space:
+
+.. code-block:: text
+
+   detector_hidden_0 =
+     Linear(concat(detector_feature_embedding,
+                   detector_context_embedding,
+                   waveform_embedding)) -> [N_d, H]
+
 Detector and pulse encoders
 ---------------------------
 
@@ -172,6 +252,64 @@ Pulse nodes have one scalar branch:
 The waveform encoder is applied once per detector. For the first transformer
 waveform sweep, the submitter sets ``WAVEFORM_ENCODER=transformer``. The graph
 attention architecture remains ``hetero_attention``.
+
+Where attention appears
+-----------------------
+
+The word ``attention`` appears in more than one place in this repository, so it
+is important to separate the meanings.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Component
+     - Code path
+     - What attends to what
+   * - Waveform transformer
+     - ``WaveformEncoder(mode="transformer")`` in ``model.py``
+     - time bins inside one detector waveform
+   * - Graph relation attention
+     - ``HeteroAttentionMessageLayer`` in ``hetero_model.py``
+     - source nodes connected to a destination node by one typed edge relation
+   * - Event readout attention
+     - ``HeteroAttentiveReadout`` in ``hetero_model.py``
+     - detector nodes or pulse nodes inside one event graph
+
+Only the first row is a PyTorch ``TransformerEncoder`` block. The graph
+relation attention is not ``torch.nn.MultiheadAttention`` and is not a full
+Transformer block over all event objects. It uses the same query/key/value
+scaled dot-product idea, but the attention candidates are restricted by the
+physics graph:
+
+.. code-block:: text
+
+   Transformer-style sequence attention:
+     every token can usually attend to every other token
+
+   TALE heterogeneous graph attention:
+     a node attends only over incoming edge_index entries
+     relation type chooses a separate Q/K/V projection
+     edge_attr is part of key/value
+
+For a destination node ``j`` and an incoming source node ``i``:
+
+.. code-block:: text
+
+   src_input_ij = concat(hidden_i, edge_attr_ij)
+   q_j = W_Q[relation](hidden_j)
+   k_ij = W_K[relation](src_input_ij)
+   v_ij = W_V[relation](src_input_ij)
+
+   score_ij = dot(q_j, k_ij) / sqrt(head_dim)
+   alpha_ij = softmax(score_ij over incoming edges to j)
+   message_j = sum_i alpha_ij * v_ij
+
+This is why the current model is closer to relation-specific graph attention
+than to a plain sequence Transformer. Making the graph fully connected would
+only change the candidate edges; it would not by itself make the model a
+standard Transformer, because the model still keeps detector/pulse node types,
+relation-specific projections, edge attributes, detector-level waveforms, and
+type-wise readout.
 
 Relation attention
 ------------------
@@ -205,6 +343,33 @@ residual connection, layer normalization, and a feed-forward block:
 This is inspired by HGT, but it is not an exact HGT implementation. The current
 model does not use PyG ``HGTConv`` and does not use HGSampling. Each TALE event
 is one graph and is read as a whole.
+
+Relation to GAT, HGT, Transformer, and Laplacian GCNs
+-----------------------------------------------------
+
+The current implementation should be named precisely:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Reference family
+     - Relation to the current model
+   * - GAT
+     - similar because edge messages are weighted by learned attention
+   * - Transformer
+     - similar because the score uses query/key/value scaled dot-product attention
+   * - HGT
+     - similar because node and edge types use relation-specific projections
+   * - PyG ``HGTConv`` / ``HeteroConv``
+     - not used directly; the repository implements its own layer
+   * - Laplacian / spectral GCN
+     - not used; there is no explicit ``L = D - A`` or normalized Laplacian propagation
+
+The graph is represented by sparse ``edge_index`` tensors, not by a dense
+adjacency matrix. Message aggregation is implemented with ``_scatter_softmax``
+and ``index_add_``. Some graph construction code contains degree-based
+normalization for Ising edge features, but that is an input feature
+normalization, not Laplacian graph convolution.
 
 Readout
 -------

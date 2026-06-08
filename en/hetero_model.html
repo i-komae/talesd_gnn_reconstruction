@@ -11,7 +11,7 @@
       <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
       <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=751d28fa" />
 
-
+  
       <script src="../_static/jquery.js?v=5d32c60e"></script>
       <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../_static/documentation_options.js?v=98e9f989"></script>
@@ -22,17 +22,17 @@
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="検索" href="../search.html" />
     <link rel="next" title="Code Reading Map" href="code_map.html" />
-    <link rel="prev" title="Heterogeneous DST Reconstruction Workflow" href="hetero_workflow.html" />
+    <link rel="prev" title="Heterogeneous DST Reconstruction Workflow" href="hetero_workflow.html" /> 
 </head>
 
-<body class="wy-body-for-nav">
+<body class="wy-body-for-nav"> 
   <div class="wy-grid-for-nav">
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
 
-
-
+          
+          
           <a href="../index.html" class="icon icon-home">
             TALE-SD GNN Reconstruction
           </a>
@@ -70,8 +70,11 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#event-heterogeneous-data-object">1 event を heterogeneous data object として見る</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#field">入力 field</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#scaling">変換と scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#tensor-shape">tensor shape と行列計算</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">学習</a></li>
@@ -215,8 +218,11 @@
 <li class="toctree-l3"><a class="reference internal" href="#one-event-as-a-heterogeneous-data-object">One event as a heterogeneous data object</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#input-fields">Input fields</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#conversion-and-scaling">Conversion and scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#tensor-shapes-and-matrix-operations">Tensor shapes and matrix operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#where-attention-appears">Where attention appears</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#output-heads">Output heads</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#training">Training</a></li>
@@ -336,7 +342,7 @@
 </div>
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
-
+             
   <section id="heterogeneous-model-explained">
 <h1>Heterogeneous model explained<a class="headerlink" href="#heterogeneous-model-explained" title="Link to this heading"></a></h1>
 <p>This page explains the current TALE-SD heterogeneous model from input arrays to
@@ -481,6 +487,86 @@ sample, the conversion layer turns it into a typed graph object, the PyG
 DataLoader batches typed graph objects, and the model receives a unified tensor
 dictionary internally.</p>
 </section>
+<section id="tensor-shapes-and-matrix-operations">
+<h2>Tensor shapes and matrix operations<a class="headerlink" href="#tensor-shapes-and-matrix-operations" title="Link to this heading"></a></h2>
+<p>After PyG batching, nodes from several events are concatenated. The model keeps
+batch vectors so readout can later separate the events again. In the notation
+below, <code class="docutils literal notranslate"><span class="pre">N_d</span></code> is the number of detector nodes in the batch, <code class="docutils literal notranslate"><span class="pre">N_p</span></code> is the
+number of pulse nodes, <code class="docutils literal notranslate"><span class="pre">E_r</span></code> is the number of edges for relation <code class="docutils literal notranslate"><span class="pre">r</span></code>,
+<code class="docutils literal notranslate"><span class="pre">H</span></code> is the hidden dimension, and <code class="docutils literal notranslate"><span class="pre">B</span></code> is the number of events in the batch.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Tensor</p></th>
+<th class="head"><p>Shape</p></th>
+<th class="head"><p>Meaning</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">detector.x</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[N_d,</span> <span class="pre">F_detector]</span></code></p></td>
+<td><p>detector signal, timing, and local geometry features</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">detector.context</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[N_d,</span> <span class="pre">F_context]</span></code></p></td>
+<td><p>readout/calibration context features</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">detector.waveform</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[N_d,</span> <span class="pre">C_waveform,</span> <span class="pre">T]</span></code></p></td>
+<td><p>detector-level waveform channels over time</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">pulse.x</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[N_p,</span> <span class="pre">F_pulse]</span></code></p></td>
+<td><p>pulse features, including Ising annotations</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">edge_index_by_type[r]</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[2,</span> <span class="pre">E_r]</span></code></p></td>
+<td><p>source and destination node indices for relation <code class="docutils literal notranslate"><span class="pre">r</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">edge_features_by_type[r]</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[E_r,</span> <span class="pre">F_edge_r]</span></code></p></td>
+<td><p>continuous physical edge attributes</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">detector.batch</span></code> / <code class="docutils literal notranslate"><span class="pre">pulse.batch</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[N_d]</span></code> / <code class="docutils literal notranslate"><span class="pre">[N_p]</span></code></p></td>
+<td><p>event index for each node after batching</p></td>
+</tr>
+</tbody>
+</table>
+<p>The model does not form a dense adjacency matrix. <code class="docutils literal notranslate"><span class="pre">edge_index_by_type[r][0]</span></code>
+selects source rows and <code class="docutils literal notranslate"><span class="pre">edge_index_by_type[r][1]</span></code> selects destination rows.
+All graph propagation is then done with row selection, grouped softmax, and
+<code class="docutils literal notranslate"><span class="pre">index_add_</span></code> accumulation.</p>
+<p>The first encoding step is a set of ordinary learned matrix multiplications
+inside MLPs:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>detector_feature_embedding = MLP_detector(detector.x)        -&gt; [N_d, H]
+detector_context_embedding = MLP_context(detector.context)   -&gt; [N_d, H]
+pulse_hidden_0             = MLP_pulse(pulse.x)              -&gt; [N_p, H]
+</pre></div>
+</div>
+<p>For detector waveforms, the tensor is first processed as a 1D time series per
+detector:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>detector.waveform [N_d, C_waveform, T]
+  -&gt; Conv1d layers
+  -&gt; encoded waveform time sequence [N_d, T, H_waveform]
+</pre></div>
+</div>
+<p>If <code class="docutils literal notranslate"><span class="pre">WAVEFORM_ENCODER=transformer</span></code>, the Transformer operates only on this
+per-detector waveform time sequence. It computes self-attention between time
+bins of the same detector waveform, not between detector and pulse graph nodes.
+The waveform sequence is then pooled:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>waveform_embedding =
+  Linear(concat(mean_time(encoded), max_time(encoded))) -&gt; [N_d, H_waveform]
+</pre></div>
+</div>
+<p>Finally, the detector branch concatenates the three detector embeddings and
+projects them into the graph hidden space:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>detector_hidden_0 =
+  Linear(concat(detector_feature_embedding,
+                detector_context_embedding,
+                waveform_embedding)) -&gt; [N_d, H]
+</pre></div>
+</div>
+</section>
 <section id="detector-and-pulse-encoders">
 <h2>Detector and pulse encoders<a class="headerlink" href="#detector-and-pulse-encoders" title="Link to this heading"></a></h2>
 <p>The model first embeds each detector and each pulse into a common hidden
@@ -499,6 +585,64 @@ detector_waveforms       -&gt; waveform encoder
 <p>The waveform encoder is applied once per detector. For the first transformer
 waveform sweep, the submitter sets <code class="docutils literal notranslate"><span class="pre">WAVEFORM_ENCODER=transformer</span></code>. The graph
 attention architecture remains <code class="docutils literal notranslate"><span class="pre">hetero_attention</span></code>.</p>
+</section>
+<section id="where-attention-appears">
+<h2>Where attention appears<a class="headerlink" href="#where-attention-appears" title="Link to this heading"></a></h2>
+<p>The word <code class="docutils literal notranslate"><span class="pre">attention</span></code> appears in more than one place in this repository, so it
+is important to separate the meanings.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Component</p></th>
+<th class="head"><p>Code path</p></th>
+<th class="head"><p>What attends to what</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Waveform transformer</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">WaveformEncoder(mode=&quot;transformer&quot;)</span></code> in <code class="docutils literal notranslate"><span class="pre">model.py</span></code></p></td>
+<td><p>time bins inside one detector waveform</p></td>
+</tr>
+<tr class="row-odd"><td><p>Graph relation attention</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">HeteroAttentionMessageLayer</span></code> in <code class="docutils literal notranslate"><span class="pre">hetero_model.py</span></code></p></td>
+<td><p>source nodes connected to a destination node by one typed edge relation</p></td>
+</tr>
+<tr class="row-even"><td><p>Event readout attention</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">HeteroAttentiveReadout</span></code> in <code class="docutils literal notranslate"><span class="pre">hetero_model.py</span></code></p></td>
+<td><p>detector nodes or pulse nodes inside one event graph</p></td>
+</tr>
+</tbody>
+</table>
+<p>Only the first row is a PyTorch <code class="docutils literal notranslate"><span class="pre">TransformerEncoder</span></code> block. The graph
+relation attention is not <code class="docutils literal notranslate"><span class="pre">torch.nn.MultiheadAttention</span></code> and is not a full
+Transformer block over all event objects. It uses the same query/key/value
+scaled dot-product idea, but the attention candidates are restricted by the
+physics graph:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Transformer-style sequence attention:
+  every token can usually attend to every other token
+
+TALE heterogeneous graph attention:
+  a node attends only over incoming edge_index entries
+  relation type chooses a separate Q/K/V projection
+  edge_attr is part of key/value
+</pre></div>
+</div>
+<p>For a destination node <code class="docutils literal notranslate"><span class="pre">j</span></code> and an incoming source node <code class="docutils literal notranslate"><span class="pre">i</span></code>:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>src_input_ij = concat(hidden_i, edge_attr_ij)
+q_j = W_Q[relation](hidden_j)
+k_ij = W_K[relation](src_input_ij)
+v_ij = W_V[relation](src_input_ij)
+
+score_ij = dot(q_j, k_ij) / sqrt(head_dim)
+alpha_ij = softmax(score_ij over incoming edges to j)
+message_j = sum_i alpha_ij * v_ij
+</pre></div>
+</div>
+<p>This is why the current model is closer to relation-specific graph attention
+than to a plain sequence Transformer. Making the graph fully connected would
+only change the candidate edges; it would not by itself make the model a
+standard Transformer, because the model still keeps detector/pulse node types,
+relation-specific projections, edge attributes, detector-level waveforms, and
+type-wise readout.</p>
 </section>
 <section id="relation-attention">
 <h2>Relation attention<a class="headerlink" href="#relation-attention" title="Link to this heading"></a></h2>
@@ -526,6 +670,39 @@ new_state = LayerNorm(new_state + FFN(new_state))
 <p>This is inspired by HGT, but it is not an exact HGT implementation. The current
 model does not use PyG <code class="docutils literal notranslate"><span class="pre">HGTConv</span></code> and does not use HGSampling. Each TALE event
 is one graph and is read as a whole.</p>
+</section>
+<section id="relation-to-gat-hgt-transformer-and-laplacian-gcns">
+<h2>Relation to GAT, HGT, Transformer, and Laplacian GCNs<a class="headerlink" href="#relation-to-gat-hgt-transformer-and-laplacian-gcns" title="Link to this heading"></a></h2>
+<p>The current implementation should be named precisely:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Reference family</p></th>
+<th class="head"><p>Relation to the current model</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>GAT</p></td>
+<td><p>similar because edge messages are weighted by learned attention</p></td>
+</tr>
+<tr class="row-odd"><td><p>Transformer</p></td>
+<td><p>similar because the score uses query/key/value scaled dot-product attention</p></td>
+</tr>
+<tr class="row-even"><td><p>HGT</p></td>
+<td><p>similar because node and edge types use relation-specific projections</p></td>
+</tr>
+<tr class="row-odd"><td><p>PyG <code class="docutils literal notranslate"><span class="pre">HGTConv</span></code> / <code class="docutils literal notranslate"><span class="pre">HeteroConv</span></code></p></td>
+<td><p>not used directly; the repository implements its own layer</p></td>
+</tr>
+<tr class="row-even"><td><p>Laplacian / spectral GCN</p></td>
+<td><p>not used; there is no explicit <code class="docutils literal notranslate"><span class="pre">L</span> <span class="pre">=</span> <span class="pre">D</span> <span class="pre">-</span> <span class="pre">A</span></code> or normalized Laplacian propagation</p></td>
+</tr>
+</tbody>
+</table>
+<p>The graph is represented by sparse <code class="docutils literal notranslate"><span class="pre">edge_index</span></code> tensors, not by a dense
+adjacency matrix. Message aggregation is implemented with <code class="docutils literal notranslate"><span class="pre">_scatter_softmax</span></code>
+and <code class="docutils literal notranslate"><span class="pre">index_add_</span></code>. Some graph construction code contains degree-based
+normalization for Ising edge features, but that is an input feature
+normalization, not Laplacian graph convolution.</p>
 </section>
 <section id="readout">
 <h2>Readout<a class="headerlink" href="#readout" title="Link to this heading"></a></h2>
@@ -646,7 +823,7 @@ six-job sweep at this stage.</p>
   Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
     <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
     provided by <a href="https://readthedocs.org">Read the Docs</a>.
-
+   
 
 </footer>
         </div>
@@ -657,7 +834,7 @@ six-job sweep at this stage.</p>
       jQuery(function () {
           SphinxRtdTheme.Navigation.enable(true);
       });
-  </script>
+  </script> 
 
 </body>
 </html>

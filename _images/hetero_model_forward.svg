@@ -1,121 +1,121 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="900" viewBox="0 0 1280 900" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="920" viewBox="0 0 1280 920" role="img" aria-labelledby="title desc">
   <title id="title">TALE-SD heterogeneous model forward pass</title>
-  <desc id="desc">Diagram of GraphEvent input, tensor conversion, detector and pulse encoders, relation attention layers, type-wise readout, and output heads.</desc>
+  <desc id="desc">A left-to-right diagram of GraphEvent input, tensor conversion, node encoders, relation-specific graph attention, readout, heads, and the matrix operations used by the attention layer.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
       <path d="M0,0 L10,4 L0,8 z" fill="#334155"/>
     </marker>
-    <marker id="arrowBlue" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
-      <path d="M0,0 L10,4 L0,8 z" fill="#2563eb"/>
-    </marker>
     <style>
-      .title { font: 700 28px sans-serif; fill: #0f172a; }
+      .title { font: 700 27px sans-serif; fill: #0f172a; }
       .subtitle { font: 500 15px sans-serif; fill: #475569; }
-      .box-title { font: 700 16px sans-serif; fill: #0f172a; }
-      .text { font: 14px sans-serif; fill: #334155; }
+      .box-title { font: 700 15px sans-serif; fill: #0f172a; }
+      .text { font: 13px sans-serif; fill: #334155; }
       .small { font: 12px sans-serif; fill: #475569; }
-      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 10; }
+      .mono { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #1f2937; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.8; rx: 8; }
       .input { fill: #f8fafc; stroke: #64748b; }
-      .det { fill: #eff6ff; stroke: #2563eb; }
-      .pulse { fill: #fff7ed; stroke: #ea580c; }
-      .edge { fill: #f5f3ff; stroke: #7c3aed; }
-      .model { fill: #ecfdf5; stroke: #059669; }
-      .head { fill: #fef2f2; stroke: #dc2626; }
-      .flow { stroke: #334155; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
-      .blueflow { stroke: #2563eb; stroke-width: 2.2; fill: none; marker-end: url(#arrowBlue); }
-      .soft { stroke: #94a3b8; stroke-width: 1.5; stroke-dasharray: 6 5; fill: none; }
+      .tensor { fill: #f1f5f9; stroke: #475569; }
+      .encoder { fill: #eff6ff; stroke: #2563eb; }
+      .attention { fill: #ecfdf5; stroke: #059669; }
+      .readout { fill: #fff7ed; stroke: #ea580c; }
+      .detail { fill: #ffffff; stroke: #94a3b8; }
+      .warn { fill: #fef2f2; stroke: #dc2626; }
+      .flow { stroke: #334155; stroke-width: 2.1; fill: none; marker-end: url(#arrow); }
+      .soft { stroke: #94a3b8; stroke-width: 1.4; stroke-dasharray: 6 5; fill: none; }
+      .code-bg { fill: #f8fafc; stroke: #d8e0ea; stroke-width: 1.1; rx: 6; }
     </style>
   </defs>
 
-  <rect x="0" y="0" width="1280" height="900" fill="#ffffff"/>
-  <text x="48" y="48" class="title">TALE-SD heterogeneous model: input to output</text>
-  <text x="48" y="73" class="subtitle">One event is kept as a full detector/pulse graph. Waveforms live on detector nodes; pulses reference them by detector index and bounds.</text>
+  <rect x="0" y="0" width="1280" height="920" fill="#ffffff"/>
+  <text x="40" y="45" class="title">TALE-SD heterogeneous model: tensors and attention</text>
+  <text x="40" y="72" class="subtitle">The model is not a dense Transformer over all event objects. It uses typed graph edges for node-to-node messages, and a separate waveform encoder for detector time traces.</text>
 
-  <rect x="48" y="115" width="235" height="205" class="box input"/>
-  <text x="68" y="145" class="box-title">GraphEvent / HDF5 sample</text>
-  <text x="68" y="174" class="text">detector_features</text>
-  <text x="68" y="196" class="text">detector_context_features</text>
-  <text x="68" y="218" class="text">detector_waveforms</text>
-  <text x="68" y="240" class="text">pulse_features</text>
-  <text x="68" y="262" class="text">pulse_detector_index</text>
-  <text x="68" y="284" class="text">pulse_bounds</text>
-  <text x="68" y="306" class="text">typed edge_index / edge_attr</text>
+  <rect x="40" y="105" width="210" height="230" class="box input"/>
+  <text x="60" y="134" class="box-title">GraphEvent / HDF5</text>
+  <text x="60" y="164" class="text">detector_features</text>
+  <text x="60" y="185" class="text">detector_context_features</text>
+  <text x="60" y="206" class="text">detector_waveforms</text>
+  <text x="60" y="227" class="text">pulse_features</text>
+  <text x="60" y="248" class="text">pulse_detector_index</text>
+  <text x="60" y="269" class="text">pulse_bounds</text>
+  <text x="60" y="290" class="text">edge_index_by_type</text>
+  <text x="60" y="311" class="text">edge_features_by_type</text>
 
-  <rect x="345" y="115" width="230" height="205" class="box input"/>
-  <text x="365" y="145" class="box-title">hetero_data.py</text>
-  <text x="365" y="174" class="text">scale train features</text>
-  <text x="365" y="196" class="text">pad / crop waveforms</text>
-  <text x="365" y="218" class="text">build tensor stores</text>
-  <text x="365" y="240" class="text">optional PyG HeteroData</text>
-  <text x="365" y="272" class="small">detector.x / detector.context</text>
-  <text x="365" y="292" class="small">pulse.x / pulse_bounds</text>
-  <path d="M283 218 H345" class="flow"/>
+  <rect x="280" y="105" width="210" height="230" class="box tensor"/>
+  <text x="300" y="134" class="box-title">hetero_data.py</text>
+  <text x="300" y="164" class="text">scale train features</text>
+  <text x="300" y="185" class="text">pad / crop waveforms</text>
+  <text x="300" y="206" class="text">PyG HeteroData batch</text>
+  <text x="300" y="232" class="mono">detector.x [N_d,F_d]</text>
+  <text x="300" y="253" class="mono">pulse.x    [N_p,F_p]</text>
+  <text x="300" y="274" class="mono">edge_index[r] [2,E_r]</text>
+  <text x="300" y="295" class="mono">edge_attr[r]  [E_r,F_r]</text>
 
-  <rect x="650" y="100" width="250" height="125" class="box det"/>
-  <text x="670" y="130" class="box-title">Detector branch</text>
-  <text x="670" y="158" class="text">feature MLP</text>
-  <text x="670" y="180" class="text">context MLP</text>
-  <text x="670" y="202" class="text">waveform encoder</text>
+  <path d="M250 220 H280" class="flow"/>
 
-  <rect x="650" y="250" width="250" height="100" class="box pulse"/>
-  <text x="670" y="280" class="box-title">Pulse branch</text>
-  <text x="670" y="308" class="text">pulse feature MLP</text>
-  <text x="670" y="330" class="small">Ising keep/removed/spin/support stay as input</text>
+  <rect x="520" y="105" width="220" height="230" class="box encoder"/>
+  <text x="540" y="134" class="box-title">Node encoders</text>
+  <text x="540" y="164" class="text">detector feature MLP</text>
+  <text x="540" y="185" class="mono">[N_d,F_d] -> [N_d,H]</text>
+  <text x="540" y="211" class="text">context MLP</text>
+  <text x="540" y="232" class="mono">[N_d,F_c] -> [N_d,H]</text>
+  <text x="540" y="258" class="text">waveform encoder</text>
+  <text x="540" y="279" class="mono">[N_d,C,T] -> [N_d,H_w]</text>
+  <text x="540" y="305" class="text">pulse MLP</text>
+  <text x="540" y="326" class="mono">[N_p,F_p] -> [N_p,H]</text>
 
-  <rect x="650" y="375" width="250" height="112" class="box edge"/>
-  <text x="670" y="405" class="box-title">Typed relations</text>
-  <text x="670" y="433" class="text">pulse interacts pulse</text>
-  <text x="670" y="455" class="text">detector near detector</text>
-  <text x="670" y="477" class="text">detector observes pulse</text>
+  <path d="M490 220 H520" class="flow"/>
 
-  <path d="M575 175 C610 175,610 155,650 155" class="flow"/>
-  <path d="M575 230 C610 230,610 300,650 300" class="flow"/>
-  <path d="M575 260 C610 260,610 430,650 430" class="flow"/>
+  <rect x="770" y="105" width="260" height="230" class="box attention"/>
+  <text x="790" y="134" class="box-title">Graph relation attention</text>
+  <text x="790" y="164" class="text">neighbors come from edge_index</text>
+  <text x="790" y="185" class="text">separate Q/K/V per relation</text>
+  <text x="790" y="206" class="text">K,V include edge_attr</text>
+  <text x="790" y="227" class="text">softmax over incoming edges</text>
+  <text x="790" y="248" class="text">index_add_ accumulates messages</text>
+  <text x="790" y="274" class="small">relations: pulse-pulse, detector-detector,</text>
+  <text x="790" y="292" class="small">detector-pulse</text>
+  <text x="790" y="318" class="small">No dense adjacency or Laplacian matrix.</text>
 
-  <rect x="985" y="165" width="235" height="220" class="box model"/>
-  <text x="1005" y="195" class="box-title">HeteroAttentionMessageLayer</text>
-  <text x="1005" y="226" class="text">per relation Q / K / V</text>
-  <text x="1005" y="248" class="text">K,V include edge_attr</text>
-  <text x="1005" y="270" class="text">softmax per destination node</text>
-  <text x="1005" y="292" class="text">weighted messages</text>
-  <text x="1005" y="314" class="text">residual + LayerNorm</text>
-  <text x="1005" y="336" class="text">FFN update</text>
-  <text x="1005" y="364" class="small">repeated for configured layers</text>
+  <path d="M740 220 H770" class="flow"/>
 
-  <path d="M900 162 C930 162,945 210,985 220" class="blueflow"/>
-  <path d="M900 300 C930 300,945 270,985 270" class="blueflow"/>
-  <path d="M900 430 C935 430,945 320,985 320" class="blueflow"/>
+  <rect x="1060" y="105" width="180" height="230" class="box readout"/>
+  <text x="1080" y="134" class="box-title">Readout + heads</text>
+  <text x="1080" y="164" class="text">detector readout</text>
+  <text x="1080" y="185" class="text">pulse readout</text>
+  <text x="1080" y="206" class="text">event vector [B,R]</text>
+  <text x="1080" y="232" class="text">reconstruction</text>
+  <text x="1080" y="253" class="text">mass logit</text>
+  <text x="1080" y="274" class="text">quality logit</text>
+  <text x="1080" y="295" class="text">predicted error</text>
 
-  <rect x="160" y="530" width="305" height="155" class="box model"/>
-  <text x="180" y="560" class="box-title">Type-wise attention readout</text>
-  <text x="180" y="590" class="text">detector: mean + max + attention sum</text>
-  <text x="180" y="614" class="text">pulse: mean + max + attention sum</text>
-  <text x="180" y="638" class="text">concat detector and pulse summaries</text>
-  <text x="180" y="666" class="small">This produces one event-level vector.</text>
+  <path d="M1030 220 H1060" class="flow"/>
 
-  <path d="M1102 385 V455 C1102 515,465 455,465 530" class="flow"/>
+  <rect x="40" y="390" width="590" height="285" class="box detail"/>
+  <text x="65" y="423" class="box-title">What one graph-attention layer computes</text>
+  <rect x="65" y="445" width="540" height="195" class="code-bg"/>
+  <text x="85" y="474" class="mono">src = edge_index[r][0]        dst = edge_index[r][1]</text>
+  <text x="85" y="500" class="mono">src_input = concat(hidden_src[src], edge_attr[r])</text>
+  <text x="85" y="526" class="mono">q = W_Q[r](hidden_dst[dst])</text>
+  <text x="85" y="552" class="mono">k = W_K[r](src_input)        v = W_V[r](src_input)</text>
+  <text x="85" y="578" class="mono">score = dot(q, k) / sqrt(head_dim)</text>
+  <text x="85" y="604" class="mono">alpha = softmax(score grouped by dst)</text>
+  <text x="85" y="630" class="mono">aggregate[dst] += alpha * v        # index_add_</text>
+  <text x="65" y="660" class="small">The learnable matrices are W_Q, W_K, W_V, relation output projections, MLPs, and output heads.</text>
 
-  <rect x="560" y="525" width="225" height="165" class="box head"/>
-  <text x="580" y="555" class="box-title">Output heads</text>
-  <text x="580" y="586" class="text">reconstruction: 6 values</text>
-  <text x="580" y="610" class="text">mass: iron logit</text>
-  <text x="580" y="634" class="text">quality: quality logit</text>
-  <text x="580" y="658" class="text">error: 3 uncertainty values</text>
+  <rect x="660" y="390" width="580" height="285" class="box detail"/>
+  <text x="685" y="423" class="box-title">Where Transformer attention is used</text>
+  <rect x="685" y="445" width="530" height="195" class="code-bg"/>
+  <text x="705" y="474" class="mono">detector.waveform [N_d, C_waveform, T]</text>
+  <text x="705" y="500" class="mono">  -> Conv1d time feature extraction</text>
+  <text x="705" y="526" class="mono">  -> if WAVEFORM_ENCODER=transformer:</text>
+  <text x="705" y="552" class="mono">       TransformerEncoder over T time bins</text>
+  <text x="705" y="578" class="mono">  -> mean/max over time</text>
+  <text x="705" y="604" class="mono">  -> waveform_embedding [N_d, H_w]</text>
+  <text x="685" y="660" class="small">This transformer is inside each detector waveform. It is separate from graph relation attention.</text>
 
-  <path d="M465 607 H560" class="flow"/>
-
-  <rect x="890" y="530" width="280" height="155" class="box head"/>
-  <text x="910" y="560" class="box-title">Training / inference</text>
-  <text x="910" y="590" class="text">training: compare with MC target</text>
-  <text x="910" y="614" class="text">backprop updates model weights</text>
-  <text x="910" y="638" class="text">checkpoint stores weights + scalers</text>
-  <text x="910" y="662" class="text">reconstruct-dst uses same conversion</text>
-
-  <path d="M785 607 H890" class="flow"/>
-
-  <rect x="48" y="755" width="1172" height="86" class="box input"/>
-  <text x="68" y="785" class="box-title">Important TALE-specific choices</text>
-  <text x="68" y="812" class="text">No HGSampling: one TALE event is one graph and is read as a whole.</text>
-  <text x="535" y="812" class="text">No waveform duplication: detector waveform is stored once, pulses reference detector index + bounds.</text>
-  <text x="68" y="835" class="text">Ising-rejected delayed/tail/multi-pulse candidates are annotated and kept for mass/energy learning.</text>
+  <rect x="40" y="720" width="1200" height="112" class="box warn"/>
+  <text x="65" y="752" class="box-title">Training and direct DST reconstruction</text>
+  <text x="65" y="782" class="text">Training compares output heads with MC targets and backpropagates through all matrix operations above.</text>
+  <text x="65" y="806" class="text">Checkpoints store weights and scalers. Direct DST inference reuses the same GraphEvent-to-tensor conversion without writing HDF5.</text>
 </svg>

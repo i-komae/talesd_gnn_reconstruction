@@ -1,12 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="780" viewBox="0 0 1280 780" role="img" aria-labelledby="title desc">
   <title id="title">TALE-SD heterogeneous graph schema example</title>
-  <desc id="desc">A small heterogeneous graph shows detector nodes, nearby pulse nodes, detector-detector edges, detector-observes-pulse edges, and a few pulse-pulse edges. Detector waveforms are stored once on detector nodes. Pulse nodes retain Ising kept or rejected annotations and reference waveform ranges by pulse bounds.</desc>
+  <desc id="desc">A readable heterogeneous graph schema with detector nodes, pulse nodes, three relation types, detector-level waveform storage, pulse bounds, and Ising kept or rejected pulse annotations.</desc>
   <defs>
     <marker id="arrow-observe" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
       <path d="M1,1 L9,5 L1,9 Z" fill="#455a64"/>
     </marker>
     <style>
       .title { font: 700 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #17212b; }
+      .subtitle { font: 500 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #455a64; }
       .label { font: 700 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #17212b; }
       .small { font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #263238; }
       .tiny { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #455a64; }
@@ -17,108 +18,104 @@
       .pulse-rej { fill: #fff8e1; stroke: #ef6c00; stroke-width: 2.2; stroke-dasharray: 7 5; }
       .node-label { font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #17212b; text-anchor: middle; }
       .state-label { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #455a64; text-anchor: middle; }
-      .edge-det { stroke: #1565c0; stroke-width: 3.2; fill: none; }
-      .edge-pulse { stroke: #6a1b9a; stroke-width: 2.2; fill: none; opacity: 0.9; }
+      .edge-det { stroke: #1565c0; stroke-width: 3.0; fill: none; }
+      .edge-pulse { stroke: #6a1b9a; stroke-width: 2.1; fill: none; opacity: 0.9; }
       .edge-observe { stroke: #455a64; stroke-width: 1.8; stroke-dasharray: 7 5; fill: none; marker-end: url(#arrow-observe); }
       .wave-bg { fill: #ffffff; stroke: #607d8b; stroke-width: 1.1; rx: 5; ry: 5; }
       .wave-line { stroke: #546e7a; stroke-width: 2; fill: none; }
       .bracket { stroke: #d81b60; stroke-width: 3; fill: none; stroke-linecap: round; }
-      .legend-det { stroke: #1565c0; stroke-width: 3.2; fill: none; }
-      .legend-pulse { stroke: #6a1b9a; stroke-width: 2.2; fill: none; }
+      .legend-det { stroke: #1565c0; stroke-width: 3.0; fill: none; }
+      .legend-pulse { stroke: #6a1b9a; stroke-width: 2.1; fill: none; }
       .legend-observe { stroke: #455a64; stroke-width: 1.8; stroke-dasharray: 7 5; fill: none; marker-end: url(#arrow-observe); }
       .legend-window { stroke: #d81b60; stroke-width: 3; fill: none; stroke-linecap: round; }
     </style>
   </defs>
 
-  <rect x="0" y="0" width="1280" height="760" fill="#ffffff"/>
-  <text x="40" y="42" class="title">Heterogeneous graph schema: detector nodes, pulse nodes, and waveform references</text>
+  <rect x="0" y="0" width="1280" height="780" fill="#ffffff"/>
+  <text x="40" y="42" class="title">Heterogeneous graph schema</text>
+  <text x="40" y="68" class="subtitle">Detector nodes and pulse nodes are different physical objects. Edges are typed relations, and detector waveforms are stored once per detector.</text>
 
-  <text x="58" y="88" class="label">Example GraphEvent</text>
-  <rect x="50" y="106" width="760" height="580" class="graph-bg"/>
+  <text x="58" y="103" class="label">Example GraphEvent graph</text>
+  <rect x="50" y="122" width="760" height="555" class="graph-bg"/>
 
-  <line x1="285" y1="255" x2="525" y2="360" class="edge-det"/>
-  <path d="M285,303 C366,348 366,412 285,437" class="edge-det"/>
-  <line x1="285" y1="485" x2="525" y2="360" class="edge-det"/>
+  <line x1="280" y1="255" x2="525" y2="360" class="edge-det"/>
+  <path d="M280,304 C370,340 370,430 280,476" class="edge-det"/>
+  <line x1="280" y1="485" x2="525" y2="360" class="edge-det"/>
 
-  <circle cx="285" cy="255" r="48" class="det-node"/>
-  <text x="285" y="251" class="node-label">D1</text>
-  <text x="285" y="271" class="state-label">detector</text>
+  <circle cx="280" cy="255" r="48" class="det-node"/>
+  <text x="280" y="251" class="node-label">D1</text>
+  <text x="280" y="271" class="state-label">detector</text>
 
-  <circle cx="285" cy="485" r="48" class="det-node"/>
-  <text x="285" y="481" class="node-label">D2</text>
-  <text x="285" y="501" class="state-label">detector</text>
+  <circle cx="280" cy="485" r="48" class="det-node"/>
+  <text x="280" y="481" class="node-label">D2</text>
+  <text x="280" y="501" class="state-label">detector</text>
 
   <circle cx="525" cy="360" r="48" class="det-node"/>
   <text x="525" y="356" class="node-label">D3</text>
   <text x="525" y="376" class="state-label">detector</text>
 
-  <circle cx="170" cy="185" r="29" class="pulse-kept"/>
-  <text x="170" y="181" class="node-label">P1</text>
-  <text x="170" y="200" class="state-label">kept</text>
+  <circle cx="140" cy="190" r="30" class="pulse-kept"/>
+  <text x="140" y="186" class="node-label">P1</text>
+  <text x="140" y="206" class="state-label">kept</text>
 
-  <circle cx="390" cy="190" r="29" class="pulse-rej"/>
-  <text x="390" y="186" class="node-label">P2</text>
-  <text x="390" y="205" class="state-label">rejected</text>
+  <circle cx="420" cy="190" r="30" class="pulse-rej"/>
+  <text x="420" y="186" class="node-label">P2</text>
+  <text x="420" y="206" class="state-label">rejected</text>
 
-  <circle cx="170" cy="560" r="29" class="pulse-kept"/>
-  <text x="170" y="556" class="node-label">P3</text>
-  <text x="170" y="575" class="state-label">kept</text>
+  <circle cx="140" cy="560" r="30" class="pulse-kept"/>
+  <text x="140" y="556" class="node-label">P3</text>
+  <text x="140" y="576" class="state-label">kept</text>
 
-  <circle cx="395" cy="575" r="29" class="pulse-rej"/>
-  <text x="395" y="571" class="node-label">P4</text>
-  <text x="395" y="590" class="state-label">rejected</text>
+  <circle cx="420" cy="560" r="30" class="pulse-rej"/>
+  <text x="420" y="556" class="node-label">P4</text>
+  <text x="420" y="576" class="state-label">rejected</text>
 
-  <circle cx="650" cy="290" r="29" class="pulse-kept"/>
-  <text x="650" y="286" class="node-label">P5</text>
-  <text x="650" y="305" class="state-label">kept</text>
+  <circle cx="665" cy="300" r="30" class="pulse-kept"/>
+  <text x="665" y="296" class="node-label">P5</text>
+  <text x="665" y="316" class="state-label">kept</text>
 
-  <circle cx="650" cy="430" r="29" class="pulse-kept"/>
-  <text x="650" y="426" class="node-label">P6</text>
-  <text x="650" y="445" class="state-label">kept</text>
+  <circle cx="665" cy="430" r="30" class="pulse-kept"/>
+  <text x="665" y="426" class="node-label">P6</text>
+  <text x="665" y="446" class="state-label">kept</text>
 
-  <line x1="247" y1="226" x2="194" y2="201" class="edge-observe"/>
-  <line x1="323" y1="226" x2="366" y2="205" class="edge-observe"/>
-  <line x1="247" y1="514" x2="194" y2="545" class="edge-observe"/>
-  <line x1="323" y1="514" x2="371" y2="562" class="edge-observe"/>
-  <line x1="568" y1="338" x2="625" y2="302" class="edge-observe"/>
-  <line x1="568" y1="382" x2="625" y2="418" class="edge-observe"/>
+  <line x1="242" y1="225" x2="166" y2="202" class="edge-observe"/>
+  <line x1="318" y1="225" x2="392" y2="202" class="edge-observe"/>
+  <line x1="242" y1="515" x2="166" y2="548" class="edge-observe"/>
+  <line x1="318" y1="515" x2="392" y2="548" class="edge-observe"/>
+  <line x1="570" y1="337" x2="638" y2="312" class="edge-observe"/>
+  <line x1="570" y1="383" x2="638" y2="418" class="edge-observe"/>
 
-  <path d="M196,182 C258,150 330,155 365,180" class="edge-pulse"/>
-  <path d="M196,562 C270,620 334,620 371,580" class="edge-pulse"/>
-  <path d="M650,319 C694,354 694,390 650,401" class="edge-pulse"/>
+  <path d="M170,186 C245,145 330,145 392,186" class="edge-pulse"/>
+  <path d="M170,564 C255,620 335,620 392,564" class="edge-pulse"/>
+  <path d="M665,330 C705,360 705,400 665,400" class="edge-pulse"/>
 
-  <rect x="98" y="318" width="214" height="72" class="panel"/>
-  <text x="118" y="342" class="tiny">D1 detector_waveforms</text>
-  <rect x="118" y="354" width="150" height="26" class="wave-bg"/>
-  <path d="M124,368 C137,356 150,356 163,368 S190,382 204,368 S236,354 260,368" class="wave-line"/>
-  <path d="M158,354 L158,380 M204,354 L204,380 M158,380 L204,380" class="bracket"/>
-  <text x="118" y="406" class="tiny">P1/P2 select windows by pulse_bounds.</text>
+  <rect x="105" y="625" width="590" height="34" class="panel"/>
+  <text x="130" y="647" class="tiny">Ising-rejected pulses are annotated and kept: P2 and P4 remain as pulse nodes.</text>
 
-  <rect x="108" y="626" width="592" height="38" class="panel"/>
-  <text x="132" y="650" class="tiny">Ising rejected pulses are not hard-dropped: P2 and P4 remain as pulse nodes with rejected/removed annotation features.</text>
+  <rect x="850" y="105" width="370" height="172" class="panel"/>
+  <text x="878" y="136" class="label">Edge type legend</text>
+  <line x1="880" y1="165" x2="954" y2="165" class="legend-det"/>
+  <text x="972" y="170" class="small">detector__near__detector</text>
+  <line x1="880" y1="197" x2="954" y2="197" class="legend-pulse"/>
+  <text x="972" y="202" class="small">pulse__interacts__pulse</text>
+  <line x1="880" y1="229" x2="954" y2="229" class="legend-observe"/>
+  <text x="972" y="234" class="small">detector__observes__pulse</text>
 
-  <rect x="850" y="78" width="370" height="190" class="panel"/>
-  <text x="878" y="110" class="label">Legend</text>
-  <line x1="880" y1="138" x2="954" y2="138" class="legend-det"/>
-  <text x="972" y="143" class="small">detector__near__detector</text>
-  <line x1="880" y1="170" x2="954" y2="170" class="legend-pulse"/>
-  <text x="972" y="175" class="small">pulse__interacts__pulse</text>
-  <line x1="880" y1="202" x2="954" y2="202" class="legend-observe"/>
-  <text x="972" y="207" class="small">detector__observes__pulse</text>
-  <path d="M880,234 L954,234" class="legend-window"/>
-  <text x="972" y="239" class="small">waveform window reference</text>
+  <rect x="850" y="306" width="370" height="158" class="panel"/>
+  <text x="878" y="338" class="label">Detector node fields</text>
+  <text x="878" y="370" class="small">detector_features</text>
+  <text x="878" y="398" class="small">detector_context_features</text>
+  <text x="878" y="426" class="small">detector_waveforms</text>
+  <text x="878" y="448" class="tiny">waveform is stored once per detector node</text>
 
-  <rect x="850" y="300" width="370" height="184" class="panel"/>
-  <text x="878" y="330" class="label">Detector node fields</text>
-  <text x="878" y="362" class="small">detector_features</text>
-  <text x="878" y="390" class="small">detector_context_features</text>
-  <text x="878" y="418" class="small">detector_waveforms</text>
-  <text x="878" y="450" class="tiny">waveforms stored once per detector node</text>
-
-  <rect x="850" y="520" width="370" height="176" class="panel"/>
-  <text x="878" y="550" class="label">Pulse node fields</text>
-  <text x="878" y="582" class="small">pulse_features</text>
-  <text x="878" y="610" class="small">ising_keep / ising_removed / support</text>
-  <text x="878" y="638" class="small">pulse_detector_index -> detector node</text>
-  <text x="878" y="666" class="small">pulse_bounds -> waveform range</text>
+  <rect x="850" y="492" width="370" height="196" class="panel"/>
+  <text x="878" y="524" class="label">Pulse node fields and waveform reference</text>
+  <text x="878" y="554" class="small">pulse_features, Ising annotations</text>
+  <text x="878" y="582" class="small">pulse_detector_index -> detector node</text>
+  <text x="878" y="610" class="small">pulse_bounds -> waveform range</text>
+  <rect x="878" y="632" width="174" height="30" class="wave-bg"/>
+  <path d="M886,647 C899,635 912,635 925,647 S952,661 966,647 S998,633 1044,647" class="wave-line"/>
+  <path d="M928,632 L928,662 M984,632 L984,662 M928,662 L984,662" class="bracket"/>
+  <path d="M1068,647 L1135,647" class="legend-window"/>
+  <text x="878" y="678" class="tiny">magenta bracket marks the pulse_bounds waveform window</text>
 </svg>
