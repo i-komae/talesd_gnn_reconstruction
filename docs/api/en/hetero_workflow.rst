@@ -4,6 +4,9 @@ Heterogeneous DST Reconstruction Workflow
 The heterogeneous path is the current path for training a model that can later reconstruct DST files directly.
 It uses ``dstio.tale.graph`` for graph semantics and keeps the GNN repository responsible for HDF5 training cache, model input conversion, training, diagnostics, and direct inference.
 
+For the model internals, read :doc:`hetero_model`.
+That page follows the PyTorch and PyG documentation style and explains the actual tensors, encoders, relation attention, readout, loss heads, and direct inference path used in this repository.
+
 The first figure is the workflow diagram. It separates the HDF5 training-cache path from the direct DST reconstruction path.
 
 .. figure:: ../fig/hetero_dst_workflow.svg
@@ -66,6 +69,7 @@ This HDF5 is a cache, not the final reconstruction interface.
 ``train-hetero`` then reads those shards, fits scalers on the training split, trains the heterogeneous model, and saves a checkpoint.
 The default model architecture is ``hetero_attention``: relation-specific multi-head attention over detector/pulse relations plus detector/pulse type-wise attention readout.
 It does not use HGSampling; each TALE event remains a full event graph so detector, pulse, waveform, and Ising-rejected pulse information is not sampled away.
+The first planned waveform-encoder comparison uses ``WAVEFORM_ENCODER=transformer`` for the six reco+mass size-sweep jobs; ``cnn-gru`` should be compared later under the selected condition.
 
 Direct reconstruction path
 --------------------------

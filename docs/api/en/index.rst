@@ -11,6 +11,7 @@ For code study, start with :doc:`code_map`, then read :doc:`code_walkthrough` fo
 
    cli
    hetero_workflow
+   hetero_model
    code_map
    code_walkthrough
    python_api

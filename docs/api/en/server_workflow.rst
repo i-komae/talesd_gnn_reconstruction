@@ -62,11 +62,14 @@ The second run enables the predicted-error head only.
 They should be compared as separate runs on the same heterogeneous graph input.
 Unless explicitly overridden, the heterogeneous model architecture is ``hetero_attention``.
 It uses full event graphs and does not use HGSampling.
+The first waveform-encoder sweep should use ``WAVEFORM_ENCODER=transformer``.
+Do not launch the matching ``cnn-gru`` sweep until the transformer results determine the dataset size and auxiliary-head condition.
 
 .. code-block:: bash
 
    GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
    PARTITION=v100-al9_long \
+   WAVEFORM_ENCODER=transformer \
    RUN_NAME=hetero_reco_mass_quality_v100_128epoch_$(date +%Y%m%d_%H%M%S) \
    scripts/submit_server_hetero_reco_mass_quality_training.sh
 
@@ -74,6 +77,7 @@ It uses full event graphs and does not use HGSampling.
 
    GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
    PARTITION=v100-al9_long \
+   WAVEFORM_ENCODER=transformer \
    RUN_NAME=hetero_reco_mass_error_v100_128epoch_$(date +%Y%m%d_%H%M%S) \
    scripts/submit_server_hetero_reco_mass_error_training.sh
 
@@ -113,9 +117,11 @@ Then submit the six reco+mass comparison runs on those HDF5 files:
    RUN_ID=<same RUN_ID used for export> \
    SUBMIT_EXPORTS=0 \
    SUBMIT_TRAINING=1 \
+   WAVEFORM_ENCODER=transformer \
    scripts/submit_server_hetero_dataset_size_sweep.sh
 
 The six training jobs are ``quality-only`` and ``predicted-error-only`` for each of ``50000``, ``20000``, and ``10000`` events per bin.
+This is the first transformer waveform sweep. The ``cnn-gru`` comparison should be run later only for the selected condition.
 
 Rules
 -----

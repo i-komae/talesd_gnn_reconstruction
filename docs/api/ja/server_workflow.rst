@@ -62,11 +62,14 @@ heterogeneous reco+mass比較
 同じ heterogeneous graph input に対する別 run として比較します。
 明示的に上書きしない限り、heterogeneous model architecture は ``hetero_attention`` です。
 event graph は丸ごと使い、HGSampling は使いません。
+最初の waveform encoder 比較では ``WAVEFORM_ENCODER=transformer`` を使います。
+transformer の結果で dataset size と auxiliary head 条件を決めるまで、対応する ``cnn-gru`` sweep は投げません。
 
 .. code-block:: bash
 
    GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
    PARTITION=v100-al9_long \
+   WAVEFORM_ENCODER=transformer \
    RUN_NAME=hetero_reco_mass_quality_v100_128epoch_$(date +%Y%m%d_%H%M%S) \
    scripts/submit_server_hetero_reco_mass_quality_training.sh
 
@@ -74,6 +77,7 @@ event graph は丸ごと使い、HGSampling は使いません。
 
    GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
    PARTITION=v100-al9_long \
+   WAVEFORM_ENCODER=transformer \
    RUN_NAME=hetero_reco_mass_error_v100_128epoch_$(date +%Y%m%d_%H%M%S) \
    scripts/submit_server_hetero_reco_mass_error_training.sh
 
@@ -113,9 +117,11 @@ validation は early stopping と model selection 用の独立 source-group hold
    RUN_ID=<exportで使った同じRUN_ID> \
    SUBMIT_EXPORTS=0 \
    SUBMIT_TRAINING=1 \
+   WAVEFORM_ENCODER=transformer \
    scripts/submit_server_hetero_dataset_size_sweep.sh
 
 6本の内訳は、``50000``, ``20000``, ``10000`` events/bin それぞれに対する ``quality-only`` と ``predicted-error-only`` です。
+これは最初の transformer waveform sweep です。``cnn-gru`` はこの結果を見て条件を選んだ後に比較します。
 
 注意点
 ------

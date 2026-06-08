@@ -119,7 +119,8 @@ If PyTorch Geometric is available, the same sample can also be represented as ``
      -o /path/to/output/checkpoints/hetero_reco_mass.pt \
      --epochs 128 \
      --batch-size 128 \
-     --waveform-encoder cnn-gru \
+     --model-architecture hetero_attention \
+     --waveform-encoder transformer \
      --loss-mode physics \
      --mass-classification \
      --split-mode source-stratified \
@@ -138,6 +139,9 @@ Implementation path:
          -> hetero_data.sample_to_hetero_data()
          -> hetero_model.MinimalHeteroTaleSdGNN
          -> metrics.py / diagnostics.py
+
+For the current planned heterogeneous comparison, use ``WAVEFORM_ENCODER=transformer`` first.
+The ``cnn-gru`` waveform encoder is a later ablation under the selected condition, not a simultaneous six-job sweep.
 
 Prediction
 ----------
