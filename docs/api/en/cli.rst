@@ -109,8 +109,11 @@ Heterogeneous training
 ----------------------
 
 ``train-hetero`` trains from HDF5 files written by ``export-hetero``.
-The shared conversion layer is ``hetero_data.sample_to_hetero_data``.
-If PyTorch Geometric is available, the same sample can also be represented as ``HeteroData``; the production training code keeps the tensor conversion explicit.
+The training dataset converts each event sample to PyG ``HeteroData`` with
+``hetero_data.sample_to_hetero_data`` so ``torch_geometric.loader.DataLoader``
+can batch variable-size detector/pulse graphs. The model then converts the
+batched ``HeteroData`` back to the repository's explicit tensor dictionary with
+``hetero_data.hetero_data_to_tensors``.
 
 .. code-block:: bash
 

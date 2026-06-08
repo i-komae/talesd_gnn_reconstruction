@@ -110,9 +110,11 @@ Heterogeneous training
 ----------------------
 
 ``train-hetero`` は ``export-hetero`` で作成したHDF5を読みます。
-共通変換層は ``hetero_data.sample_to_hetero_data`` です。
-PyTorch Geometric が使える環境では同じ sample を ``HeteroData`` にも変換できますが、
-本番学習コードでは tensor 変換を明示的に扱います。
+学習用 dataset は各 event sample を ``hetero_data.sample_to_hetero_data`` で
+PyG ``HeteroData`` に変換します。これにより
+``torch_geometric.loader.DataLoader`` が detector/pulse 数の違う graph を batch 化できます。
+model は batch 化された ``HeteroData`` を ``hetero_data.hetero_data_to_tensors`` で
+この repository の明示的な tensor dict に戻して処理します。
 
 .. code-block:: bash
 

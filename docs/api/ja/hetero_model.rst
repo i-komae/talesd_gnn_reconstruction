@@ -54,8 +54,13 @@ TALE-SD graph でも同じ考え方を使います。1 event には 2 種類の 
      ("detector", "near", "detector")
      ("detector", "observes", "pulse")
 
-本番学習では明示的な tensor dict を使い、必要な時には PyG ``HeteroData`` にも変換できます。
-次は実際の ``hetero_data.sample_to_hetero_data`` が作る構造です。
+本番学習では、batch 化のために PyG ``HeteroData`` を使います。
+HDF5 dataset は 1 event につき 1 つの ``HeteroData`` を返し、
+``torch_geometric.loader.DataLoader`` がそれらを batch 化します。
+その後、``MinimalHeteroTaleSdGNN.forward`` の中で、batch 化された ``HeteroData`` を
+``hetero_data_to_tensors`` によりこの repository の明示的な tensor dict に戻します。
+DST 直接推論などの single-event path では、明示的な tensor dict を直接渡すこともできます。
+次は batch 化前に ``hetero_data.sample_to_hetero_data`` が作る実際の構造です。
 
 .. code-block:: python
 
@@ -128,7 +133,8 @@ scaler が与えられている場合、detector、context、pulse、edge、targ
    target_tensor = _scale_tensor(target_tensor, _scaler_for(scalers, "target"))
 
 これは PyTorch の Dataset / DataLoader の分離と同じ考え方です。
-dataset は 1 sample を読み、変換層が tensor にし、training loop は batch tensor だけを見ます。
+dataset は 1 sample を読み、変換層が typed graph object にし、PyG DataLoader がそれを batch 化し、
+model 内部では統一された tensor dict として扱います。
 
 detector encoder と pulse encoder
 ---------------------------------
@@ -238,7 +244,8 @@ quality-only と predicted-error-only の reco+mass を投げます。
      -> train / validation / test split
      -> train split で scaler を fit
      -> first sample から model shape を決める
-     -> DataLoader が HeteroData sample を batch 化
+     -> PyG DataLoader が HeteroData sample を batch 化
+     -> model が batched HeteroData を明示的な tensor dict に変換
      -> forward
      -> MC target と比較して loss を計算
      -> backward
@@ -258,7 +265,7 @@ DST 直接再構成
    DST
      -> dstio.tale.graph.iter_graphs
      -> graph_event_to_sample
-     -> hetero_sample_to_tensors / HeteroData
+     -> hetero_sample_to_tensors または sample_to_hetero_data
      -> hetero_attention checkpoint
      -> reconstruction CSV
 
