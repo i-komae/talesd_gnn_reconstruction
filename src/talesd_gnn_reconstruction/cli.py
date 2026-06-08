@@ -2117,43 +2117,70 @@ def _h5_metadata_value(handle: Any, local_index: int, name: str) -> Any | None:
     return dataset[local_index]
 
 
-def _hetero_h5_event_entries(paths: list[str], *, stratify_particle: bool) -> list[HeteroH5EventEntry]:
+def _scan_hetero_h5_event_entries(
+    payload: tuple[int, str, bool],
+) -> dict[str, Any]:
     import h5py
 
+    path_index, h5_path, stratify_particle = payload
     entries: list[HeteroH5EventEntry] = []
-    for h5_path in paths:
-        with h5py.File(Path(h5_path).expanduser(), "r") as handle:
-            if str(handle.attrs.get("format", "")) != "talesd_gnn_hetero_graphs":
-                raise ValueError(f"{h5_path} is not a hetero graph HDF5 file")
-            n_events = len(handle["events"])
-            for local_index in range(n_events):
-                key = f"{local_index:08d}"
-                event_group = handle["events"][key]
-                event_id_value = _h5_metadata_value(handle, local_index, "event_id")
-                source_path_value = _h5_metadata_value(handle, local_index, "source_path")
-                source_index_value = _h5_metadata_value(handle, local_index, "source_index")
-                event_id = _decode_h5_text(event_id_value) if event_id_value is not None else str(event_group.attrs.get("event_id", key))
-                source_path = (
-                    _decode_h5_text(source_path_value)
-                    if source_path_value is not None
-                    else str(event_group.attrs.get("source_path", ""))
+    with h5py.File(Path(h5_path).expanduser(), "r") as handle:
+        if str(handle.attrs.get("format", "")) != "talesd_gnn_hetero_graphs":
+            raise ValueError(f"{h5_path} is not a hetero graph HDF5 file")
+        n_events = len(handle["events"])
+        for local_index in range(n_events):
+            key = f"{local_index:08d}"
+            event_group = handle["events"][key]
+            event_id_value = _h5_metadata_value(handle, local_index, "event_id")
+            source_path_value = _h5_metadata_value(handle, local_index, "source_path")
+            source_index_value = _h5_metadata_value(handle, local_index, "source_index")
+            event_id = _decode_h5_text(event_id_value) if event_id_value is not None else str(event_group.attrs.get("event_id", key))
+            source_path = (
+                _decode_h5_text(source_path_value)
+                if source_path_value is not None
+                else str(event_group.attrs.get("source_path", ""))
+            )
+            try:
+                source_index = int(source_index_value) if source_index_value is not None else int(event_group.attrs.get("source_index", local_index))
+            except Exception:
+                source_index = int(local_index)
+            bin_key = _hetero_output_bin_key_from_path(source_path, stratify_particle=bool(stratify_particle))
+            unique_id = f"{event_id}:{source_path}:{source_index}"
+            entries.append(
+                HeteroH5EventEntry(
+                    bin_key=bin_key,
+                    unique_id=unique_id,
+                    h5_path=str(Path(h5_path).expanduser()),
+                    local_index=int(local_index),
+                    source_path=source_path,
+                    source_index=int(source_index),
                 )
-                try:
-                    source_index = int(source_index_value) if source_index_value is not None else int(event_group.attrs.get("source_index", local_index))
-                except Exception:
-                    source_index = int(local_index)
-                bin_key = _hetero_output_bin_key_from_path(source_path, stratify_particle=stratify_particle)
-                unique_id = f"{event_id}:{source_path}:{source_index}"
-                entries.append(
-                    HeteroH5EventEntry(
-                        bin_key=bin_key,
-                        unique_id=unique_id,
-                        h5_path=str(Path(h5_path).expanduser()),
-                        local_index=int(local_index),
-                        source_path=source_path,
-                        source_index=int(source_index),
-                    )
-                )
+            )
+    return {"path_index": int(path_index), "entries": entries}
+
+
+def _hetero_h5_event_entries(paths: list[str], *, stratify_particle: bool, workers: int = 1) -> list[HeteroH5EventEntry]:
+    payloads = [(index, path, bool(stratify_particle)) for index, path in enumerate(paths)]
+    worker_count = min(max(int(workers), 1), len(payloads)) if payloads else 1
+    _progress_write(
+        f"scan hetero HDF5 metadata: start shards={len(payloads)} workers={worker_count}"
+    )
+    results: list[dict[str, Any]] = []
+    if worker_count <= 1:
+        for payload in _progress(payloads, desc="scan hetero HDF5 metadata", total=len(payloads)):
+            results.append(_scan_hetero_h5_event_entries(payload))
+    else:
+        results.extend(
+            _iter_process_pool(
+                payloads,
+                _scan_hetero_h5_event_entries,
+                worker_count,
+                "scan hetero HDF5 metadata",
+            )
+        )
+    entries: list[HeteroH5EventEntry] = []
+    for result in sorted(results, key=lambda item: int(item["path_index"])):
+        entries.extend(result["entries"])
     return entries
 
 
@@ -3199,7 +3226,11 @@ def _cmd_reshard_hetero(args: argparse.Namespace) -> None:
     if output.resolve() in input_paths:
         raise SystemExit("output must not overwrite an input HDF5 file")
 
-    entries = _hetero_h5_event_entries(paths, stratify_particle=bool(args.energy_sample_stratify_particle))
+    entries = _hetero_h5_event_entries(
+        paths,
+        stratify_particle=bool(args.energy_sample_stratify_particle),
+        workers=int(args.workers),
+    )
     ordered_entries = _ordered_hetero_h5_entries(
         entries,
         output_order=str(args.output_order),

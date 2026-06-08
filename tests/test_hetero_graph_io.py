@@ -533,23 +533,25 @@ class HeteroGraphIoTest(unittest.TestCase):
 
     def test_reshard_hetero_parallel_writes_multiple_shards(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            graph_path = Path(tmpdir) / "source.h5"
+            graph_paths = [Path(tmpdir) / "source_a.h5", Path(tmpdir) / "source_b.h5"]
             output_path = Path(tmpdir) / "reshuffled.h5"
-            with create_hetero_graph_file(graph_path) as handle:
-                for index in range(6):
-                    graph = _synthetic_graph(index)
-                    particle = "proton" if index < 3 else "iron"
-                    dat_code = "16" if index % 2 == 0 else "17"
-                    graph.metadata["source_path"] = f"/mc/{particle}/sel/DAT0000{dat_code}_gea_trg_{index:03d}.dst.gz"
-                    graph.metadata["source_index"] = index
-                    graph.metadata["event_id"] = f"event_{index:03d}"
-                    graph.event_id = f"event_{index:03d}"
-                    graph.particle_label = 0.0 if particle == "proton" else 1.0
-                    write_hetero_graph(handle, index, graph)
+            for path_number, graph_path in enumerate(graph_paths):
+                with create_hetero_graph_file(graph_path) as handle:
+                    for local_index in range(3):
+                        index = 3 * path_number + local_index
+                        graph = _synthetic_graph(index)
+                        particle = "proton" if index < 3 else "iron"
+                        dat_code = "16" if index % 2 == 0 else "17"
+                        graph.metadata["source_path"] = f"/mc/{particle}/sel/DAT0000{dat_code}_gea_trg_{index:03d}.dst.gz"
+                        graph.metadata["source_index"] = index
+                        graph.metadata["event_id"] = f"event_{index:03d}"
+                        graph.event_id = f"event_{index:03d}"
+                        graph.particle_label = 0.0 if particle == "proton" else 1.0
+                        write_hetero_graph(handle, local_index, graph)
 
             _cmd_reshard_hetero(
                 SimpleNamespace(
-                    graphs=[str(graph_path)],
+                    graphs=[str(path) for path in graph_paths],
                     graphs_list=[],
                     output=str(output_path),
                     output_order="interleaved",
