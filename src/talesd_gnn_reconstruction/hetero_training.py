@@ -417,6 +417,12 @@ def _hetero_batch_loss(
     return loss, components
 
 
+def _scale_gradients(model: MinimalHeteroTaleSdGNN, scale: float) -> None:
+    for parameter in model.parameters():
+        if parameter.grad is not None:
+            parameter.grad.mul_(float(scale))
+
+
 def _predict_hetero_numpy(
     model: MinimalHeteroTaleSdGNN,
     loader: Any,
@@ -748,6 +754,10 @@ def train_hetero_model(
             for name, value in components.items():
                 train_components.setdefault(name, []).append(float(value.detach().cpu()))
         if pending_accumulation_steps > 0:
+            _scale_gradients(
+                model,
+                float(gradient_accumulation_steps) / float(pending_accumulation_steps),
+            )
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
