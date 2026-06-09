@@ -72,6 +72,8 @@ DRY_RUN_SELECTION="${DRY_RUN_SELECTION:-0}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-/dicos_ui_home/ikomae/work/uv-cache}"
 UV_LINK_MODE="${UV_LINK_MODE:-copy}"
 PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
+SBATCH_DEPENDENCY="${SBATCH_DEPENDENCY:-}"
+SBATCH_PARSABLE="${SBATCH_PARSABLE:-0}"
 
 if [[ ! -d "${REPO}" ]]; then
   echo "repo not found: ${REPO}" >&2
@@ -249,4 +251,11 @@ if [[ "${DRY_RUN}" == "1" ]]; then
   exit 0
 fi
 
-sbatch "${SBATCH_FILE}"
+sbatch_args=()
+if [[ -n "${SBATCH_DEPENDENCY}" ]]; then
+  sbatch_args+=(--dependency="${SBATCH_DEPENDENCY}")
+fi
+if [[ "${SBATCH_PARSABLE}" == "1" ]]; then
+  sbatch_args+=(--parsable)
+fi
+sbatch "${sbatch_args[@]}" "${SBATCH_FILE}"

@@ -285,7 +285,6 @@ def _filename_energy_code(source_path: str) -> str:
 
 
 def _source_stratification_keys(source_path: str, target: np.ndarray | None, particle_label: float | None) -> dict[str, tuple[str, ...]]:
-    parent = str(Path(source_path).parent)
     particle = "unknown"
     if particle_label is not None and math.isfinite(float(particle_label)):
         particle = "iron" if float(particle_label) >= 0.5 else "proton"
@@ -300,10 +299,10 @@ def _source_stratification_keys(source_path: str, target: np.ndarray | None, par
         if loge_bin == "nan" and math.isfinite(float(target[0])):
             loge_bin = _centered_finite_bin(float(target[0]), 0.1)
     return {
-        "fine": (parent, particle, loge_bin, zenith_bin),
-        "mid": (parent, particle, loge_bin),
-        "coarse": (parent, particle),
-        "broad": (parent,),
+        "fine": (particle, loge_bin, zenith_bin),
+        "mid": (particle, loge_bin),
+        "coarse": (particle,),
+        "broad": ("all",),
     }
 
 

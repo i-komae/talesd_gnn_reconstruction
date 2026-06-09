@@ -416,6 +416,69 @@ def _ordered_hetero_h5_entries(
     return ordered
 
 
+def _sample_hetero_h5_entries_by_bin(
+    entries: list[HeteroH5EventEntry],
+    *,
+    per_bin: int,
+    seed: int,
+) -> tuple[list[HeteroH5EventEntry], dict[str, Any]]:
+    target = max(int(per_bin), 1)
+    by_bin: dict[int | tuple[str, int], list[HeteroH5EventEntry]] = {}
+    for entry in entries:
+        by_bin.setdefault(entry.bin_key, []).append(entry)
+
+    selected: list[HeteroH5EventEntry] = []
+    by_bin_summary: dict[str, Any] = {}
+    for bin_key, bucket in sorted(by_bin.items(), key=lambda item: str(item[0])):
+        by_source_group: dict[str, list[HeteroH5EventEntry]] = {}
+        for entry in bucket:
+            by_source_group.setdefault(_source_group_key_for_path(entry.source_path), []).append(entry)
+        for source_entries in by_source_group.values():
+            source_entries.sort(
+                key=lambda entry: _sample_key_from_parts(
+                    int(seed) + 982451653,
+                    entry.unique_id,
+                    entry.source_path,
+                    int(entry.source_index),
+                )
+            )
+        source_order = sorted(
+            by_source_group,
+            key=lambda source_group: _sample_key_from_parts(
+                int(seed) + 961748941,
+                source_group,
+                str(bin_key),
+                0,
+            ),
+        )
+        chosen: list[HeteroH5EventEntry] = []
+        while source_order and len(chosen) < target:
+            next_order: list[str] = []
+            for source_group in source_order:
+                if len(chosen) >= target:
+                    break
+                source_entries = by_source_group[source_group]
+                if source_entries:
+                    chosen.append(source_entries.pop(0))
+                if source_entries:
+                    next_order.append(source_group)
+            source_order = next_order
+        selected.extend(chosen)
+        by_bin_summary[str(bin_key)] = {
+            "input_events": len(bucket),
+            "selected_events": len(chosen),
+            "source_groups": len(by_source_group),
+            "short_by_availability": max(target - len(chosen), 0),
+        }
+
+    return selected, {
+        "energy_sample_per_bin": target,
+        "input_events": len(entries),
+        "selected_events": len(selected),
+        "by_bin": by_bin_summary,
+    }
+
+
 def _candidate_balance_key(
     *,
     zenith_deg: float,
@@ -3231,6 +3294,19 @@ def _cmd_reshard_hetero(args: argparse.Namespace) -> None:
         stratify_particle=bool(args.energy_sample_stratify_particle),
         workers=int(args.workers),
     )
+    downsample_summary: dict[str, Any] | None = None
+    if args.energy_sample_per_bin is not None:
+        entries, downsample_summary = _sample_hetero_h5_entries_by_bin(
+            entries,
+            per_bin=max(int(args.energy_sample_per_bin), 1),
+            seed=int(args.seed),
+        )
+        _progress_write(
+            "reshard hetero HDF5 downsample: "
+            f"input_events={downsample_summary['input_events']} "
+            f"selected_events={downsample_summary['selected_events']} "
+            f"per_bin={downsample_summary['energy_sample_per_bin']}"
+        )
     ordered_entries = _ordered_hetero_h5_entries(
         entries,
         output_order=str(args.output_order),
@@ -3256,6 +3332,8 @@ def _cmd_reshard_hetero(args: argparse.Namespace) -> None:
         "shard_size": args.shard_size,
         "workers": args.workers,
         "energy_sample_stratify_particle": bool(args.energy_sample_stratify_particle),
+        "energy_sample_per_bin": args.energy_sample_per_bin,
+        "downsample_summary": downsample_summary,
     }
     written_paths: list[Path] = []
     written_total = 0
@@ -3793,6 +3871,12 @@ def build_parser() -> argparse.ArgumentParser:
     reshard_hetero.add_argument("--shard-size", type=int, default=100000, help="N graphごとに出力HDF5を分割する。0なら単一ファイル")
     reshard_hetero.add_argument("--workers", type=int, default=1, help="出力shardコピーに使うworker数。shard-size > 0 の時だけ並列化する")
     reshard_hetero.add_argument("--energy-sample-stratify-particle", action="store_true", help="interleaved order のbinを particle:DAT energy code にする")
+    reshard_hetero.add_argument(
+        "--energy-sample-per-bin",
+        type=int,
+        default=None,
+        help="既存hetero HDF5からDAT filename energy binごとに最大N graphを選んでコピーする",
+    )
     reshard_hetero.add_argument("--overwrite", action="store_true", help="既存出力HDF5を上書きする")
     reshard_hetero.set_defaults(func=_cmd_reshard_hetero)
 

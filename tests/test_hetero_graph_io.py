@@ -611,6 +611,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                     shard_size=0,
                     workers=1,
                     energy_sample_stratify_particle=True,
+                    energy_sample_per_bin=None,
                     overwrite=False,
                 )
             )
@@ -653,6 +654,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                     shard_size=2,
                     workers=2,
                     energy_sample_stratify_particle=True,
+                    energy_sample_per_bin=None,
                     overwrite=False,
                 )
             )
@@ -665,6 +667,54 @@ class HeteroGraphIoTest(unittest.TestCase):
                     self.assertEqual(len(handle["events"]), 2)
                     event_ids.extend(handle["metadata"]["event_id"][index].decode("utf-8") for index in range(2))
             self.assertEqual(set(event_ids), {f"event_{index:03d}" for index in range(6)})
+
+    def test_reshard_hetero_can_downsample_existing_h5_by_filename_energy_bin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "source.h5"
+            output_path = Path(tmpdir) / "downsampled.h5"
+            with create_hetero_graph_file(graph_path) as handle:
+                index = 0
+                for particle in ("proton", "iron"):
+                    for dat_code in ("16", "17"):
+                        for local in range(5):
+                            graph = _synthetic_graph(index)
+                            graph.metadata["source_path"] = (
+                                f"/mc/{particle}/sel/DAT{index:04d}{dat_code}_gea_trg_{local:03d}.dst.gz"
+                            )
+                            graph.metadata["source_index"] = local
+                            graph.metadata["event_id"] = f"event_{index:03d}"
+                            graph.event_id = f"event_{index:03d}"
+                            graph.particle_label = 0.0 if particle == "proton" else 1.0
+                            write_hetero_graph(handle, index, graph)
+                            index += 1
+
+            _cmd_reshard_hetero(
+                SimpleNamespace(
+                    graphs=[str(graph_path)],
+                    graphs_list=[],
+                    output=str(output_path),
+                    output_order="interleaved",
+                    output_locality_run_size=1,
+                    seed=97531,
+                    shard_size=0,
+                    workers=1,
+                    energy_sample_stratify_particle=True,
+                    energy_sample_per_bin=2,
+                    overwrite=False,
+                )
+            )
+
+            with h5py.File(output_path, "r") as handle:
+                self.assertEqual(len(handle["events"]), 8)
+                config = json.loads(handle.attrs["config_json"])
+                self.assertEqual(config["downsample_summary"]["selected_events"], 8)
+                counts: dict[tuple[str, str], int] = {}
+                for local_index in range(8):
+                    source_path = handle["metadata"]["source_path"][local_index].decode("utf-8")
+                    particle = "iron" if "/iron/" in source_path else "proton"
+                    dat_code = "16" if "16_gea" in source_path else "17"
+                    counts[(particle, dat_code)] = counts.get((particle, dat_code), 0) + 1
+                self.assertEqual(set(counts.values()), {2})
 
     def test_hetero_input_distributions_write_summary_and_plots(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

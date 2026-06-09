@@ -34,6 +34,7 @@ SEED="${SEED:-12345}"
 OUTPUT_ORDER="${OUTPUT_ORDER:-interleaved}"
 OUTPUT_LOCALITY_RUN_SIZE="${OUTPUT_LOCALITY_RUN_SIZE:-32}"
 ENERGY_SAMPLE_STRATIFY_PARTICLE="${ENERGY_SAMPLE_STRATIFY_PARTICLE:-1}"
+ENERGY_SAMPLE_PER_BIN="${ENERGY_SAMPLE_PER_BIN:-}"
 VAL_FRACTION="${VAL_FRACTION:-0.10}"
 TEST_FRACTION="${TEST_FRACTION:-0.45}"
 SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION:-0.10}"
@@ -47,6 +48,8 @@ DRY_RUN="${DRY_RUN:-0}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-/dicos_ui_home/ikomae/work/uv-cache}"
 UV_LINK_MODE="${UV_LINK_MODE:-copy}"
 PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
+SBATCH_DEPENDENCY="${SBATCH_DEPENDENCY:-}"
+SBATCH_PARSABLE="${SBATCH_PARSABLE:-0}"
 
 if [[ ! -d "${REPO}" ]]; then
   echo "repo not found: ${REPO}" >&2
@@ -62,6 +65,10 @@ mkdir -p "${LOG_DIR}"
 particle_line=""
 if [[ "${ENERGY_SAMPLE_STRATIFY_PARTICLE}" == "1" ]]; then
   printf -v particle_line '  --energy-sample-stratify-particle \\\n'
+fi
+sample_line=""
+if [[ -n "${ENERGY_SAMPLE_PER_BIN}" ]]; then
+  printf -v sample_line '  --energy-sample-per-bin "%s" \\\n' "${ENERGY_SAMPLE_PER_BIN}"
 fi
 
 cat > "${SBATCH_FILE}" <<EOF
@@ -92,6 +99,7 @@ echo "graph_output=${GRAPH_OUTPUT}"
 echo "output_order=${OUTPUT_ORDER}"
 echo "shard_size=${SHARD_SIZE}"
 echo "reshard_workers=${RESHARD_WORKERS}"
+echo "energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}"
 echo "seed=${SEED}"
 echo "======================================================================"
 
@@ -111,6 +119,7 @@ env UV_CACHE_DIR="${UV_CACHE_DIR}" uv sync --frozen
   --shard-size "${SHARD_SIZE}" \\
   --workers "${RESHARD_WORKERS}" \\
 ${particle_line}\
+${sample_line}\
   -o "${GRAPH_OUTPUT}"
 
 echo "stage=start graph_summary"
@@ -152,6 +161,7 @@ graph_input: ${GRAPH_INPUT}
 graph_output: ${GRAPH_OUTPUT}
 output_order: ${OUTPUT_ORDER}
 reshard_workers: ${RESHARD_WORKERS}
+energy_sample_per_bin: ${ENERGY_SAMPLE_PER_BIN}
 seed: ${SEED}
 split_event_fractions: train=1-val-test, val=${VAL_FRACTION}, test=${TEST_FRACTION}
 split_source_fractions: train=1-val-test, val=${SOURCE_VAL_FRACTION}, test=${SOURCE_TEST_FRACTION}
@@ -162,4 +172,11 @@ if [[ "${DRY_RUN}" == "1" ]]; then
   exit 0
 fi
 
-sbatch "${SBATCH_FILE}"
+sbatch_args=()
+if [[ -n "${SBATCH_DEPENDENCY}" ]]; then
+  sbatch_args+=(--dependency="${SBATCH_DEPENDENCY}")
+fi
+if [[ "${SBATCH_PARSABLE}" == "1" ]]; then
+  sbatch_args+=(--parsable)
+fi
+sbatch "${sbatch_args[@]}" "${SBATCH_FILE}"

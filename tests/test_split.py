@@ -164,16 +164,25 @@ class SourceSplitTest(unittest.TestCase):
 
         keys = _source_stratification_keys("/mc/proton/DAT123416", target, 0.0)
 
-        self.assertEqual(keys["fine"][2], "16")
-        self.assertEqual(keys["mid"][2], "16")
+        self.assertEqual(keys["fine"][1], "16")
+        self.assertEqual(keys["mid"][1], "16")
 
     def test_source_stratification_energy_falls_back_for_non_dat_sources(self) -> None:
         target = np.asarray([18.9, 0.0, 0.0, 1.0, 0.0, 0.0], dtype=np.float32)
 
         keys = _source_stratification_keys("/mc/proton/source_without_dat.dst.gz", target, 0.0)
 
-        self.assertEqual(keys["fine"][2], "189")
-        self.assertEqual(keys["mid"][2], "189")
+        self.assertEqual(keys["fine"][1], "189")
+        self.assertEqual(keys["mid"][1], "189")
+
+    def test_source_stratification_keys_do_not_include_source_parent(self) -> None:
+        target = np.asarray([18.9, 0.0, 0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+
+        keys_a = _source_stratification_keys("/mc/a/DAT123416_gea_trg_000.dst.gz", target, 0.0)
+        keys_b = _source_stratification_keys("/mc/b/DAT999916_gea_trg_000.dst.gz", target, 0.0)
+
+        self.assertEqual(keys_a["fine"], keys_b["fine"])
+        self.assertEqual(keys_a["mid"], keys_b["mid"])
 
     def test_source_path_split_keeps_corsika_chunks_in_same_split(self) -> None:
         source_counts = {}
