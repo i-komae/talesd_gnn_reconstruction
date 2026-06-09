@@ -75,10 +75,11 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#id1">方向出力の正規化</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
-<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#id1">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#id2">学習</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#dst">DST 直接再構成</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
@@ -224,6 +225,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#where-attention-appears">Where attention appears</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#direction-output-normalization">Direction output normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#output-heads">Output heads</a></li>
@@ -417,7 +419,13 @@ scripts/submit_server_mass_only_training.sh
 明示的に上書きしない限り、heterogeneous model architecture は <code class="docutils literal notranslate"><span class="pre">hetero_attention</span></code> です。
 event graph は丸ごと使い、HGSampling は使いません。
 最初の waveform encoder 比較では <code class="docutils literal notranslate"><span class="pre">WAVEFORM_ENCODER=transformer</span></code> を使います。
-transformer の結果で dataset size と auxiliary head 条件を決めるまで、対応する <code class="docutils literal notranslate"><span class="pre">cnn-gru</span></code> sweep は投げません。</p>
+transformer の結果で dataset size と auxiliary head 条件を決めるまで、対応する <code class="docutils literal notranslate"><span class="pre">cnn-gru</span></code> sweep は投げません。
+transformer waveform run では、submitter の既定を GPU micro-batch
+<code class="docutils literal notranslate"><span class="pre">BATCH_SIZE=32</span></code>、<code class="docutils literal notranslate"><span class="pre">GRADIENT_ACCUMULATION_STEPS=4</span></code> にします。
+effective batch size は 128 のまま保ち、<code class="docutils literal notranslate"><span class="pre">BATCH_SIZE=128</span></code> をそのまま
+waveform Transformer に入れた時の大きな activation memory を避けます。
+log に出る <code class="docutils literal notranslate"><span class="pre">hetero_loader_memory</span></code> は CPU/DataLoader prefetch の見積もりであり、
+GPU activation memory の保証ではありません。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">GRAPH_INPUT</span><span class="o">=</span>/dicos_ui_home/ikomae/work/gnn/graphs/&lt;hetero_graph_dir&gt;<span class="w"> </span><span class="se">\</span>
 <span class="nv">PARTITION</span><span class="o">=</span>v100-al9_long<span class="w"> </span><span class="se">\</span>
 <span class="nv">WAVEFORM_ENCODER</span><span class="o">=</span>transformer<span class="w"> </span><span class="se">\</span>

@@ -146,6 +146,8 @@ model は batch 化された ``HeteroData`` を ``hetero_data.hetero_data_to_ten
 
 現在予定している heterogeneous 比較では、まず ``WAVEFORM_ENCODER=transformer`` を使います。
 ``cnn-gru`` は同時に6本投げるのではなく、transformer の結果を見て採用条件を決めた後の ablation として比較します。
+relation 定義の ablation が必要な場合は、``dstio`` 側へ追加仕様として入れ、
+別 HDF5 graph dataset として export します。``train-hetero`` は graph connectivity を編集しません。
 
 Prediction
 ----------

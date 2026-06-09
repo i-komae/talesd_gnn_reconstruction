@@ -48,7 +48,7 @@
   <rect x="945" y="116" width="185" height="88" class="box"/>
   <text x="972" y="144" class="box-title">Graph definition</text>
   <text x="972" y="168" class="text">tale_sd_hetero_ising</text>
-  <text x="972" y="188" class="text">pulse_detector_graph_v1</text>
+  <text x="972" y="188" class="text">pulse_detector_graph_v2</text>
 
   <path d="M235 160 H305" class="flow"/>
   <path d="M515 160 H590" class="flow"/>

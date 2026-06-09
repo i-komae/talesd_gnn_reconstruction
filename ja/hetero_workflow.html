@@ -56,6 +56,7 @@
 <li class="toctree-l3"><a class="reference internal" href="cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#attention-maps">Attention maps</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
@@ -74,10 +75,11 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#id1">方向出力の正規化</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
-<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#id1">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#id2">学習</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#dst">DST 直接再構成</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
@@ -204,6 +206,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/cli.html#attention-maps">Attention maps</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
@@ -222,6 +225,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#where-attention-appears">Where attention appears</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#direction-output-normalization">Direction output normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#output-heads">Output heads</a></li>
@@ -371,7 +375,7 @@ Ising-kept pulse candidate と Ising-rejected pulse candidate はどちらも ML
 </figcaption>
 </figure>
 <p><code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.iter_graphs</span></code> は
-<code class="docutils literal notranslate"><span class="pre">tale_sd_hetero_ising_pulse_detector_graph_v1</span></code> の <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> を返します。
+<code class="docutils literal notranslate"><span class="pre">tale_sd_hetero_ising_pulse_detector_graph_v2</span></code> の <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> を返します。
 ML graph の標準は <code class="docutils literal notranslate"><span class="pre">node_policy=&quot;all_candidates_with_ising&quot;</span></code> です。
 Ising で rejected になった pulse candidate も graph から消さず、Ising annotation feature を持たせます。
 <code class="docutils literal notranslate"><span class="pre">node_policy=&quot;ising_kept&quot;</span></code> は reconstruction-cleaned subset が必要な時だけ使います。</p>
@@ -390,10 +394,16 @@ Ising で rejected になった pulse candidate も graph から消さず、Isin
 <td><p><code class="docutils literal notranslate"><span class="pre">pulse_features</span></code>, <code class="docutils literal notranslate"><span class="pre">pulse_positions_km</span></code>, <code class="docutils literal notranslate"><span class="pre">pulse_lids</span></code>, <code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code>, <code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>relation</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">pulse__interacts__pulse</span></code>, <code class="docutils literal notranslate"><span class="pre">detector__near__detector</span></code>, <code class="docutils literal notranslate"><span class="pre">detector__observes__pulse</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">pulse__same_detector_next__pulse</span></code>, <code class="docutils literal notranslate"><span class="pre">pulse__same_detector_prev__pulse</span></code>, <code class="docutils literal notranslate"><span class="pre">pulse__near_space__pulse</span></code>, <code class="docutils literal notranslate"><span class="pre">pulse__time_causal__pulse</span></code>, <code class="docutils literal notranslate"><span class="pre">detector__near__detector</span></code>, <code class="docutils literal notranslate"><span class="pre">detector__observes__pulse</span></code>, <code class="docutils literal notranslate"><span class="pre">pulse__observed_by__detector</span></code></p></td>
 </tr>
 </tbody>
 </table>
+<p>v2 schema の <code class="docutils literal notranslate"><span class="pre">pulse__time_causal__pulse</span></code> は、全距離の緩い compatible-pair relation ではありません。
+<code class="docutils literal notranslate"><span class="pre">distance</span> <span class="pre">&lt;=</span> <span class="pre">1.5</span> <span class="pre">km</span></code>、<code class="docutils literal notranslate"><span class="pre">abs(dt)</span> <span class="pre">&lt;=</span> <span class="pre">distance</span> <span class="pre">/</span> <span class="pre">c</span> <span class="pre">+</span> <span class="pre">2</span> <span class="pre">FADC</span> <span class="pre">bins</span></code>、Ising
+<code class="docutils literal notranslate"><span class="pre">raw_weight</span> <span class="pre">&gt;=</span> <span class="pre">0.2</span></code> を満たす near-space subset です。
+ただし、この relation は新しい dataset ごとに edge density を確認します。
+GNN 側では graph edge を作成・接続・削除しません。
+relation 定義の ablation が必要な場合は、<code class="docutils literal notranslate"><span class="pre">dstio</span></code> / <code class="docutils literal notranslate"><span class="pre">export-hetero</span></code> 側で別 graph dataset として作成します。</p>
 <p>core-relative pulse feature は Ising reference core がある時だけ有効です。
 そのため、学習用 export では通常 <code class="docutils literal notranslate"><span class="pre">--require-reference-core</span></code> を使います。</p>
 </section>

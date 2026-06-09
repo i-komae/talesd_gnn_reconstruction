@@ -75,10 +75,11 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">方向出力の正規化</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id2">学習</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#dst">DST 直接再構成</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
@@ -224,6 +225,7 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#where-attention-appears">Where attention appears</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#direction-output-normalization">Direction output normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
@@ -472,7 +474,10 @@ batched <code class="docutils literal notranslate"><span class="pre">HeteroData<
 </pre></div>
 </div>
 <p>For the current planned heterogeneous comparison, use <code class="docutils literal notranslate"><span class="pre">WAVEFORM_ENCODER=transformer</span></code> first.
-The <code class="docutils literal notranslate"><span class="pre">cnn-gru</span></code> waveform encoder is a later ablation under the selected condition, not a simultaneous six-job sweep.</p>
+The <code class="docutils literal notranslate"><span class="pre">cnn-gru</span></code> waveform encoder is a later ablation under the selected condition, not a simultaneous six-job sweep.
+If a relation-definition ablation is needed, request or implement that in
+<code class="docutils literal notranslate"><span class="pre">dstio</span></code> and export a separate HDF5 graph dataset. <code class="docutils literal notranslate"><span class="pre">train-hetero</span></code> does not
+edit graph connectivity.</p>
 </section>
 <section id="prediction">
 <h2>Prediction<a class="headerlink" href="#prediction" title="Link to this heading"></a></h2>

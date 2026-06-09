@@ -56,6 +56,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#attention-maps">Attention maps</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
@@ -74,10 +75,11 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">方向出力の正規化</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id2">学習</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#dst">DST 直接再構成</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
@@ -204,6 +206,7 @@
 <li class="toctree-l3"><a class="reference internal" href="cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#attention-maps">Attention maps</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
 </ul>
 </li>
@@ -222,6 +225,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#where-attention-appears">Where attention appears</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#direction-output-normalization">Direction output normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#output-heads">Output heads</a></li>
@@ -396,16 +400,20 @@ type-wise readout produces one event vector.</span><a class="headerlink" href="#
 <section id="one-event-as-a-heterogeneous-data-object">
 <h2>One event as a heterogeneous data object<a class="headerlink" href="#one-event-as-a-heterogeneous-data-object" title="Link to this heading"></a></h2>
 <p>PyG represents heterogeneous graphs with separate node stores and edge stores.
-The TALE-SD graph uses the same idea. One event has two node types and three
-relation types:</p>
+The TALE-SD graph uses the same idea. One event has two node types and seven
+v2 relation types:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>node types:
   detector
   pulse
 
 edge types:
-  (&quot;pulse&quot;, &quot;interacts&quot;, &quot;pulse&quot;)
+  (&quot;pulse&quot;, &quot;same_detector_next&quot;, &quot;pulse&quot;)
+  (&quot;pulse&quot;, &quot;same_detector_prev&quot;, &quot;pulse&quot;)
+  (&quot;pulse&quot;, &quot;near_space&quot;, &quot;pulse&quot;)
+  (&quot;pulse&quot;, &quot;time_causal&quot;, &quot;pulse&quot;)
   (&quot;detector&quot;, &quot;near&quot;, &quot;detector&quot;)
   (&quot;detector&quot;, &quot;observes&quot;, &quot;pulse&quot;)
+  (&quot;pulse&quot;, &quot;observed_by&quot;, &quot;detector&quot;)
 </pre></div>
 </div>
 <p>The production training path uses PyG <code class="docutils literal notranslate"><span class="pre">HeteroData</span></code> for batching. The HDF5
@@ -428,12 +436,9 @@ tensor dictionary directly. This is the actual structure built by
 <span class="n">data</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">detector_index</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">][</span><span class="s2">&quot;detector_index&quot;</span><span class="p">]</span>
 <span class="n">data</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">pulse_bounds</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">][</span><span class="s2">&quot;pulse_bounds&quot;</span><span class="p">]</span>
 
-<span class="n">data</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">,</span> <span class="s2">&quot;interacts&quot;</span><span class="p">,</span> <span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">edge_index</span> <span class="o">=</span> <span class="o">...</span>
-<span class="n">data</span><span class="p">[</span><span class="s2">&quot;pulse&quot;</span><span class="p">,</span> <span class="s2">&quot;interacts&quot;</span><span class="p">,</span> <span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">edge_attr</span> <span class="o">=</span> <span class="o">...</span>
-<span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">,</span> <span class="s2">&quot;near&quot;</span><span class="p">,</span> <span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">edge_index</span> <span class="o">=</span> <span class="o">...</span>
-<span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">,</span> <span class="s2">&quot;near&quot;</span><span class="p">,</span> <span class="s2">&quot;detector&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">edge_attr</span> <span class="o">=</span> <span class="o">...</span>
-<span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">,</span> <span class="s2">&quot;observes&quot;</span><span class="p">,</span> <span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">edge_index</span> <span class="o">=</span> <span class="o">...</span>
-<span class="n">data</span><span class="p">[</span><span class="s2">&quot;detector&quot;</span><span class="p">,</span> <span class="s2">&quot;observes&quot;</span><span class="p">,</span> <span class="s2">&quot;pulse&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">edge_attr</span> <span class="o">=</span> <span class="o">...</span>
+<span class="k">for</span> <span class="n">relation</span><span class="p">,</span> <span class="n">edge_type</span> <span class="ow">in</span> <span class="n">EDGE_TYPE_BY_RELATION</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">data</span><span class="p">[</span><span class="n">edge_type</span><span class="p">]</span><span class="o">.</span><span class="n">edge_index</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;edge_index_by_type&quot;</span><span class="p">][</span><span class="n">relation</span><span class="p">]</span>
+    <span class="n">data</span><span class="p">[</span><span class="n">edge_type</span><span class="p">]</span><span class="o">.</span><span class="n">edge_attr</span> <span class="o">=</span> <span class="n">tensors</span><span class="p">[</span><span class="s2">&quot;edge_features_by_type&quot;</span><span class="p">][</span><span class="n">relation</span><span class="p">]</span>
 </pre></div>
 </div>
 <p>This is not a single homogeneous feature matrix. Detector nodes and pulse nodes
@@ -448,7 +453,10 @@ without silently mixing it with shower features.</p>
 <p><code class="docutils literal notranslate"><span class="pre">detector_waveforms</span></code> are full detector-level calibrated VEM waveforms. They
 are not duplicated on pulse nodes. A pulse points back to its detector with
 <code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code> and records the relevant time window through
-<code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code>.</p>
+<code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code>. In schema v2, no-signal live detectors have
+<code class="docutils literal notranslate"><span class="pre">detector_waveform_valid</span> <span class="pre">=</span> <span class="pre">0</span></code>. Their waveform arrays are zero-filled by
+<code class="docutils literal notranslate"><span class="pre">dstio</span></code> and the model masks the waveform embedding to zero before it is
+concatenated with detector scalar/context embeddings.</p>
 <p><code class="docutils literal notranslate"><span class="pre">pulse_features</span></code> contain pulse timing, charge, core-relative coordinates when
 the Ising reference core exists, and Ising annotations. Ising-rejected pulse
 candidates are kept as input because delayed pulses, waveform tails, and
@@ -457,6 +465,21 @@ multi-pulse structure are physically relevant for mass and energy.</p>
 example, pulse-pulse edges include timing differences, spatial separation, and
 Ising weights. These are not just labels; they are numerical inputs to the
 attention calculation.</p>
+<p>The v2 pulse-pulse relations are deliberately separated:</p>
+<dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">pulse__same_detector_next__pulse</span></code> / <code class="docutils literal notranslate"><span class="pre">pulse__same_detector_prev__pulse</span></code></dt><dd><p>Consecutive pulses in the same detector, with explicit forward and reverse
+time-order relations.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">pulse__near_space__pulse</span></code></dt><dd><p>Pulses on different detectors with detector distance <code class="docutils literal notranslate"><span class="pre">&lt;=</span> <span class="pre">1.5</span> <span class="pre">km</span></code>. This is
+bidirectional and has no time cut.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">pulse__time_causal__pulse</span></code></dt><dd><p>A stricter near-space subset: <code class="docutils literal notranslate"><span class="pre">abs(dt)</span> <span class="pre">&lt;=</span> <span class="pre">distance</span> <span class="pre">/</span> <span class="pre">c</span> <span class="pre">+</span> <span class="pre">2</span> <span class="pre">FADC</span> <span class="pre">bins</span></code> and
+Ising <code class="docutils literal notranslate"><span class="pre">raw_weight</span> <span class="pre">&gt;=</span> <span class="pre">0.2</span></code>. This is still bidirectional because it marks a
+compatible pair, not a directed shower-front ordering.</p>
+</dd>
+</dl>
+<p>These relations are graph schema decisions. The GNN model consumes the edge
+sets written by <code class="docutils literal notranslate"><span class="pre">dstio</span></code> and does not cut or add edges during training.</p>
 </section>
 <section id="conversion-and-scaling">
 <h2>Conversion and scaling<a class="headerlink" href="#conversion-and-scaling" title="Link to this heading"></a></h2>
@@ -584,7 +607,11 @@ detector_waveforms       -&gt; waveform encoder
 </div>
 <p>The waveform encoder is applied once per detector. For the first transformer
 waveform sweep, the submitter sets <code class="docutils literal notranslate"><span class="pre">WAVEFORM_ENCODER=transformer</span></code>. The graph
-attention architecture remains <code class="docutils literal notranslate"><span class="pre">hetero_attention</span></code>.</p>
+attention architecture remains <code class="docutils literal notranslate"><span class="pre">hetero_attention</span></code>.
+If <code class="docutils literal notranslate"><span class="pre">detector_waveform_valid</span></code> is zero, the waveform embedding is multiplied by
+zero. The detector can still contribute through live-status, geometry, detector
+scalar features, and detector-detector edges, but not through a fake waveform
+signal.</p>
 </section>
 <section id="where-attention-appears">
 <h2>Where attention appears<a class="headerlink" href="#where-attention-appears" title="Link to this heading"></a></h2>
@@ -670,6 +697,23 @@ new_state = LayerNorm(new_state + FFN(new_state))
 <p>This is inspired by HGT, but it is not an exact HGT implementation. The current
 model does not use PyG <code class="docutils literal notranslate"><span class="pre">HGTConv</span></code> and does not use HGSampling. Each TALE event
 is one graph and is read as a whole.</p>
+</section>
+<section id="direction-output-normalization">
+<h2>Direction output normalization<a class="headerlink" href="#direction-output-normalization" title="Link to this heading"></a></h2>
+<p>The reconstruction head emits six raw target values:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>log10_energy_eV, core_x_km, core_y_km, dir_x, dir_y, dir_z
+</pre></div>
+</div>
+<p>Before physics loss, NLL loss, quality-target construction, or predicted-error
+target construction, the scaled output is converted back to physical target
+units and the three direction components are normalized:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>u = (dir_x, dir_y, dir_z)
+n_hat = u / (||u|| + eps)
+</pre></div>
+</div>
+<p>The direction loss is computed from the opening angle between <code class="docutils literal notranslate"><span class="pre">n_hat</span></code> and the
+true unit direction. This removes the unused direction-vector norm from the
+reconstruction objective while keeping the three-component output format.</p>
 </section>
 <section id="relation-to-gat-hgt-transformer-and-laplacian-gcns">
 <h2>Relation to GAT, HGT, Transformer, and Laplacian GCNs<a class="headerlink" href="#relation-to-gat-hgt-transformer-and-laplacian-gcns" title="Link to this heading"></a></h2>
