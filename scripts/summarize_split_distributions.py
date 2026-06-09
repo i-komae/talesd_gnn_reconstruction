@@ -132,9 +132,11 @@ def _add(
 def _finish_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
     labels = np.asarray(bucket["particle_labels"], dtype=np.float64)
     finite_labels = labels[np.isfinite(labels)]
+    independent_showers = int(len(bucket["sources"]))
     return {
         "events": int(bucket["events"]),
-        "sources": int(len(bucket["sources"])),
+        "sources": independent_showers,
+        "independent_showers": independent_showers,
         "proton": int(np.sum(finite_labels < 0.5)),
         "iron": int(np.sum(finite_labels >= 0.5)),
         "unknown_particle": int(bucket["events"] - finite_labels.size),
@@ -202,22 +204,24 @@ def _plot_split_distributions(
         "split_order": split_order,
         "features": {},
         "energy_bin_counts": {},
+        "count_definitions": {
+            "independent_showers": "distinct source_group_key(source_path) values; DAT??????_gea_trg_XXX files are counted once per DAT?????? CORSIKA shower group",
+            "sources": "backward-compatible alias for independent_showers in summary JSON",
+        },
     }
 
     features = [
         ("log10_energy", r"$\log_{10}(E/\mathrm{eV})$"),
         ("core_x_km", "core x [km]"),
         ("core_y_km", "core y [km]"),
-        ("core_radius_km", "core radius [km]"),
         ("zenith_deg", "zenith [deg]"),
         ("azimuth_deg", "azimuth [deg]"),
-        ("event_time_hour", "event time [hour]"),
         ("detector_nodes", "detectors / event"),
         ("pulse_nodes", "pulses / event"),
         ("edges", "edges / event"),
         ("particle_labels", "particle label"),
     ]
-    fig, axes = plt.subplots(4, 3, figsize=(FIGSIZE_GRID[0], FIGSIZE_GRID[1] * 1.25))
+    fig, axes = plt.subplots(3, 3, figsize=FIGSIZE_GRID)
     for ax, (key, xlabel) in zip(axes.reshape(-1), features):
         arrays = [_finite_array(totals[name][key]) for name in split_order]
         if key == "particle_labels":
@@ -277,7 +281,7 @@ def _plot_split_distributions(
         fig, axes = plt.subplots(1, 2, figsize=FIGSIZE_PAIR)
         for ax, value_key, ylabel in (
             (axes[0], "events", "events"),
-            (axes[1], "sources", "sources"),
+            (axes[1], "independent_showers", "independent shower groups"),
         ):
             for name in split_order:
                 y = [float(_finish_bucket(by_energy[bin_key][name])[value_key]) for bin_key in energy_bins]

@@ -551,11 +551,20 @@ class HeteroGraphIoTest(unittest.TestCase):
             plot_data = json.loads(Path(redraw["split_distribution_plot_data_json"]).read_text())
             self.assertIn("features", plot_data)
             self.assertIn("energy_bin_counts", plot_data)
+            self.assertEqual(len(plot_data["features"]), 9)
+            self.assertNotIn("core_radius_km", plot_data["features"])
+            self.assertNotIn("event_time_hour", plot_data["features"])
+            self.assertIn("independent_showers", plot_data["count_definitions"])
+            for split_counts in plot_data["energy_bin_counts"]["splits"].values():
+                self.assertIn("events", split_counts)
+                self.assertIn("independent_showers", split_counts)
+                self.assertNotIn("sources", split_counts)
 
         self.assertEqual(payload["config"]["graph_format"], "hetero")
         total_events = sum(split["events"] for split in payload["totals"].values())
         self.assertEqual(total_events, 12)
         for split in payload["totals"].values():
+            self.assertEqual(split["sources"], split["independent_showers"])
             self.assertGreater(split["detector_nodes"]["n"], 0)
             self.assertGreater(split["pulse_nodes"]["n"], 0)
             self.assertGreater(split["event_time_hour"]["n"], 0)
