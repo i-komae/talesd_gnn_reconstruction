@@ -719,6 +719,21 @@ def _inverse_scaled_target(values: Any, mean: Any, std: Any) -> Any:
     return values * std + mean
 
 
+def _normalize_reconstruction_direction(values: Any) -> Any:
+    import torch.nn.functional as F
+
+    if values.shape[1] < 6:
+        return values
+    direction_slice = direction_columns_for_dim(values.shape[1])
+    normalized = values.clone()
+    normalized[:, direction_slice] = F.normalize(values[:, direction_slice], dim=1, eps=1.0e-8)
+    return normalized
+
+
+def _inverse_scaled_target_with_unit_direction(values: Any, mean: Any, std: Any) -> Any:
+    return _normalize_reconstruction_direction(_inverse_scaled_target(values, mean, std))
+
+
 def _angular_loss_from_vectors(pred: Any, target: Any, *, angular_loss_scale_deg: float) -> Any:
     import torch
     import torch.nn.functional as F
@@ -835,8 +850,8 @@ def _reconstruction_loss(
             + float(direction_weight) * direction_loss
         ) / max(float(energy_weight) + float(core_weight) + float(direction_weight), 1.0e-12)
 
-    pred = _inverse_scaled_target(pred_scaled, target_mean, target_std)
-    target = _inverse_scaled_target(target_scaled, target_mean, target_std)
+    pred = _inverse_scaled_target_with_unit_direction(pred_scaled, target_mean, target_std)
+    target = _inverse_scaled_target_with_unit_direction(target_scaled, target_mean, target_std)
     if mode == "hybrid-angle":
         delta = pred_scaled - target_scaled
         energy_loss = torch.mean(delta[:, 0] * delta[:, 0])
@@ -882,8 +897,8 @@ def _gaussian_reconstruction_nll(
     import torch
     import torch.nn.functional as F
 
-    pred = _inverse_scaled_target(pred_scaled, target_mean, target_std)
-    target = _inverse_scaled_target(target_scaled, target_mean, target_std)
+    pred = _inverse_scaled_target_with_unit_direction(pred_scaled, target_mean, target_std)
+    target = _inverse_scaled_target_with_unit_direction(target_scaled, target_mean, target_std)
     predicted_error = _physical_error_predictions(
         error_raw,
         angular_scale_deg=error_angular_scale_deg,
@@ -1012,8 +1027,8 @@ def _reconstruction_training_loss(
             angular_loss_scale_deg=angular_loss_scale_deg,
         )
     if float(energy_bias_loss_weight) > 0.0:
-        pred = _inverse_scaled_target(pred_scaled, target_mean, target_std)
-        target = _inverse_scaled_target(target_scaled, target_mean, target_std)
+        pred = _inverse_scaled_target_with_unit_direction(pred_scaled, target_mean, target_std)
+        target = _inverse_scaled_target_with_unit_direction(target_scaled, target_mean, target_std)
         bias_loss = _energy_bin_bias_loss(
             pred,
             target,
@@ -1025,8 +1040,8 @@ def _reconstruction_training_loss(
     if float(energy_particle_bias_loss_weight) > 0.0:
         if particle_labels is None:
             raise ValueError("energy particle bias loss requires particle labels in the training batch")
-        pred = _inverse_scaled_target(pred_scaled, target_mean, target_std)
-        target = _inverse_scaled_target(target_scaled, target_mean, target_std)
+        pred = _inverse_scaled_target_with_unit_direction(pred_scaled, target_mean, target_std)
+        target = _inverse_scaled_target_with_unit_direction(target_scaled, target_mean, target_std)
         particle_bias_loss = _energy_particle_bias_loss(
             pred,
             target,
@@ -1052,8 +1067,8 @@ def _quality_targets_from_reconstruction(
     import torch
     import torch.nn.functional as F
 
-    pred = _inverse_scaled_target(pred_scaled, target_mean, target_std)
-    target = _inverse_scaled_target(target_scaled, target_mean, target_std)
+    pred = _inverse_scaled_target_with_unit_direction(pred_scaled, target_mean, target_std)
+    target = _inverse_scaled_target_with_unit_direction(target_scaled, target_mean, target_std)
     loge_delta = pred[:, 0] - target[:, 0]
     energy_score = torch.abs(torch.exp(loge_delta * math.log(10.0)) - 1.0) / max(float(energy_scale), 1.0e-6)
     core_score = torch.linalg.vector_norm(pred[:, 1:3] - target[:, 1:3], dim=1) / max(float(core_scale_km), 1.0e-6)
@@ -1104,8 +1119,8 @@ def _reconstruction_error_targets(
     import torch
     import torch.nn.functional as F
 
-    pred = _inverse_scaled_target(pred_scaled, target_mean, target_std)
-    target = _inverse_scaled_target(target_scaled, target_mean, target_std)
+    pred = _inverse_scaled_target_with_unit_direction(pred_scaled, target_mean, target_std)
+    target = _inverse_scaled_target_with_unit_direction(target_scaled, target_mean, target_std)
     loge_delta = pred[:, 0] - target[:, 0]
     energy_error = torch.abs(torch.exp(loge_delta * math.log(10.0)) - 1.0)
     core_error = torch.linalg.vector_norm(pred[:, 1:3] - target[:, 1:3], dim=1)

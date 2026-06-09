@@ -11,6 +11,7 @@ from talesd_gnn_reconstruction.train import (
     _energy_bin_bias_loss,
     _energy_particle_bias_loss,
     _gaussian_reconstruction_nll,
+    _inverse_scaled_target_with_unit_direction,
     _mass_classification_loss,
 )
 
@@ -130,6 +131,16 @@ class QualityModelTest(unittest.TestCase):
         old_cosine_loss = 1.0 - math.cos(angle_rad)
 
         self.assertGreater(angular_loss, 100.0 * old_cosine_loss)
+
+    def test_inverse_scaled_target_normalizes_direction_components(self) -> None:
+        pred_scaled = torch.tensor([[18.0, 0.1, -0.2, 10.0, 0.0, 0.0]], dtype=torch.float32)
+        mean = torch.zeros(6, dtype=torch.float32)
+        std = torch.ones(6, dtype=torch.float32)
+
+        pred = _inverse_scaled_target_with_unit_direction(pred_scaled, mean, std)
+
+        self.assertAlmostEqual(float(torch.linalg.vector_norm(pred[:, 3:6], dim=1)[0]), 1.0, places=6)
+        self.assertAlmostEqual(float(pred[0, 3]), 1.0, places=6)
 
     def test_energy_bin_bias_loss_penalizes_mean_loge_bias(self) -> None:
         target = torch.tensor(

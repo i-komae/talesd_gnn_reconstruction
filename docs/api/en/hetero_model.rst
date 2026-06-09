@@ -104,7 +104,10 @@ without silently mixing it with shower features.
 ``detector_waveforms`` are full detector-level calibrated VEM waveforms. They
 are not duplicated on pulse nodes. A pulse points back to its detector with
 ``pulse_detector_index`` and records the relevant time window through
-``pulse_bounds``.
+``pulse_bounds``. In schema v2, no-signal live detectors have
+``detector_waveform_valid = 0``. Their waveform arrays are zero-filled by
+``dstio`` and the model masks the waveform embedding to zero before it is
+concatenated with detector scalar/context embeddings.
 
 ``pulse_features`` contain pulse timing, charge, core-relative coordinates when
 the Ising reference core exists, and Ising annotations. Ising-rejected pulse
@@ -115,6 +118,24 @@ multi-pulse structure are physically relevant for mass and energy.
 example, pulse-pulse edges include timing differences, spatial separation, and
 Ising weights. These are not just labels; they are numerical inputs to the
 attention calculation.
+
+The v2 pulse-pulse relations are deliberately separated:
+
+``pulse__same_detector_next__pulse`` / ``pulse__same_detector_prev__pulse``
+   Consecutive pulses in the same detector, with explicit forward and reverse
+   time-order relations.
+
+``pulse__near_space__pulse``
+   Pulses on different detectors with detector distance ``<= 1.5 km``. This is
+   bidirectional and has no time cut.
+
+``pulse__time_causal__pulse``
+   A stricter near-space subset: ``abs(dt) <= distance / c + 2 FADC bins`` and
+   Ising ``raw_weight >= 0.2``. This is still bidirectional because it marks a
+   compatible pair, not a directed shower-front ordering.
+
+These relations are graph schema decisions. The GNN model consumes the edge
+sets written by ``dstio`` and does not cut or add edges during training.
 
 Conversion and scaling
 ----------------------
@@ -252,6 +273,10 @@ Pulse nodes have one scalar branch:
 The waveform encoder is applied once per detector. For the first transformer
 waveform sweep, the submitter sets ``WAVEFORM_ENCODER=transformer``. The graph
 attention architecture remains ``hetero_attention``.
+If ``detector_waveform_valid`` is zero, the waveform embedding is multiplied by
+zero. The detector can still contribute through live-status, geometry, detector
+scalar features, and detector-detector edges, but not through a fake waveform
+signal.
 
 Where attention appears
 -----------------------
@@ -343,6 +368,28 @@ residual connection, layer normalization, and a feed-forward block:
 This is inspired by HGT, but it is not an exact HGT implementation. The current
 model does not use PyG ``HGTConv`` and does not use HGSampling. Each TALE event
 is one graph and is read as a whole.
+
+Direction output normalization
+------------------------------
+
+The reconstruction head emits six raw target values:
+
+.. code-block:: text
+
+   log10_energy_eV, core_x_km, core_y_km, dir_x, dir_y, dir_z
+
+Before physics loss, NLL loss, quality-target construction, or predicted-error
+target construction, the scaled output is converted back to physical target
+units and the three direction components are normalized:
+
+.. code-block:: text
+
+   u = (dir_x, dir_y, dir_z)
+   n_hat = u / (||u|| + eps)
+
+The direction loss is computed from the opening angle between ``n_hat`` and the
+true unit direction. This removes the unused direction-vector norm from the
+reconstruction objective while keeping the three-component output format.
 
 Relation to GAT, HGT, Transformer, and Laplacian GCNs
 -----------------------------------------------------

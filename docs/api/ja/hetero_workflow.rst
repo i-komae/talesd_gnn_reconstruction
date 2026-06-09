@@ -49,6 +49,13 @@ node と relation は次の通りです。
    * - relation
      - ``pulse__same_detector_next__pulse``, ``pulse__same_detector_prev__pulse``, ``pulse__near_space__pulse``, ``pulse__time_causal__pulse``, ``detector__near__detector``, ``detector__observes__pulse``, ``pulse__observed_by__detector``
 
+v2 schema の ``pulse__time_causal__pulse`` は、全距離の緩い compatible-pair relation ではありません。
+``distance <= 1.5 km``、``abs(dt) <= distance / c + 2 FADC bins``、Ising
+``raw_weight >= 0.2`` を満たす near-space subset です。
+ただし、この relation は新しい dataset ごとに edge density を確認します。
+GNN 側では graph edge を作成・接続・削除しません。
+relation 定義の ablation が必要な場合は、``dstio`` / ``export-hetero`` 側で別 graph dataset として作成します。
+
 core-relative pulse feature は Ising reference core がある時だけ有効です。
 そのため、学習用 export では通常 ``--require-reference-core`` を使います。
 

@@ -62,6 +62,7 @@ EDGE_FEATURE_DIMS = {
     relation: len(GRAPH_COLUMNS["edge_features_by_type"].get(relation, []))
     for relation in EDGE_RELATIONS
 }
+DETECTOR_FEATURE_INDEX = {name: index for index, name in enumerate(GRAPH_COLUMNS["detector_features"])}
 
 
 def _edge_features(rng: np.random.Generator, relation: str, count: int) -> np.ndarray:
@@ -86,9 +87,18 @@ def _synthetic_graph(index: int) -> SimpleNamespace:
         ],
         dtype=np.float32,
     )
+    detector_features = rng.normal(size=(detector_count, DETECTOR_FEATURE_DIM)).astype(np.float32)
+    for name in (
+        "detector_has_signal",
+        "detector_arrival_time_valid",
+        "detector_live_status",
+        "detector_waveform_valid",
+    ):
+        if name in DETECTOR_FEATURE_INDEX:
+            detector_features[:, DETECTOR_FEATURE_INDEX[name]] = 1.0
     return SimpleNamespace(
         event_id=f"synthetic_{index:04d}",
-        detector_features=rng.normal(size=(detector_count, DETECTOR_FEATURE_DIM)).astype(np.float32),
+        detector_features=detector_features,
         detector_context_features=rng.normal(size=(detector_count, DETECTOR_CONTEXT_DIM)).astype(np.float32),
         detector_positions_km=rng.normal(size=(detector_count, 3)).astype(np.float32),
         detector_lids=np.asarray([101, 102, 103], dtype=np.int64),
@@ -340,6 +350,49 @@ class HeteroGraphIoTest(unittest.TestCase):
         loss = output_tensor.square().mean()
         loss.backward()
         self.assertTrue(any(param.grad is not None for param in model.parameters() if param.requires_grad))
+
+    def test_invalid_detector_waveform_is_masked(self) -> None:
+        graph = _synthetic_graph(0)
+        if "detector_waveform_valid" not in DETECTOR_FEATURE_INDEX:
+            self.skipTest("detector_waveform_valid is not available in this graph schema")
+        invalid_detector = 0
+        graph.detector_features[invalid_detector, DETECTOR_FEATURE_INDEX["detector_waveform_valid"]] = 0.0
+        sample_a = {
+            "detector_features": graph.detector_features,
+            "detector_context_features": graph.detector_context_features,
+            "detector_positions_km": graph.detector_positions_km,
+            "detector_lids": graph.detector_lids,
+            "detector_waveforms": graph.detector_waveforms,
+            "pulse_features": graph.pulse_features,
+            "pulse_positions_km": graph.pulse_positions_km,
+            "pulse_lids": graph.pulse_lids,
+            "pulse_detector_index": graph.pulse_detector_index,
+            "pulse_bounds": graph.pulse_bounds,
+            "edge_index_by_type": graph.edge_index_by_type,
+            "edge_features_by_type": graph.edge_features_by_type,
+            "target": graph.target,
+            "particle_label": graph.particle_label,
+            "metadata": graph.metadata,
+        }
+        sample_b = dict(sample_a)
+        sample_b["detector_waveforms"] = np.array(sample_a["detector_waveforms"], copy=True)
+        sample_b["detector_waveforms"][invalid_detector] += 1000.0
+
+        model = MinimalHeteroTaleSdGNN.from_sample(
+            sample_a,
+            target_dim=6,
+            classification_dim=1,
+            hidden_dim=24,
+            num_layers=1,
+            dropout=0.0,
+            waveform_embedding_dim=12,
+        )
+        model.eval()
+        with torch.no_grad():
+            output_a = model(hetero_sample_to_tensors(sample_a))
+            output_b = model(hetero_sample_to_tensors(sample_b))
+
+        self.assertTrue(torch.allclose(output_a, output_b, atol=1.0e-6, rtol=1.0e-6))
 
     def test_train_hetero_smoke_saves_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

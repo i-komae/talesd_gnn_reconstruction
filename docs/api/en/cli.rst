@@ -145,6 +145,9 @@ Implementation path:
 
 For the current planned heterogeneous comparison, use ``WAVEFORM_ENCODER=transformer`` first.
 The ``cnn-gru`` waveform encoder is a later ablation under the selected condition, not a simultaneous six-job sweep.
+If a relation-definition ablation is needed, request or implement that in
+``dstio`` and export a separate HDF5 graph dataset. ``train-hetero`` does not
+edit graph connectivity.
 
 Prediction
 ----------

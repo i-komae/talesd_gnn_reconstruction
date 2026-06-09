@@ -17,6 +17,37 @@ EDGE_TYPE_BY_RELATION: dict[str, tuple[str, str, str]] = {
     "pulse__observed_by__detector": ("pulse", "observed_by", "detector"),
 }
 
+DETECTOR_WAVEFORM_VALID_COLUMN = "detector_waveform_valid"
+V2_DETECTOR_FEATURE_COLUMNS = (
+    "detector_trigger_usec_rel",
+    "log10_detector_max_pulse_rho",
+    "log10_detector_sum_pulse_rho",
+    "sqrt_detector_sum_pulse_rho",
+    "detector_accepted_pulse_count",
+    "detector_accepted_pulse_time_span_usec",
+    "nearest_detector_distance_km",
+    "mean3_detector_distance_km",
+    "neighbor_count_1p5km",
+    "local_detector_density_1p5km",
+    "detector_has_signal",
+    "detector_arrival_time_valid",
+    "detector_live_status",
+    "detector_waveform_valid",
+)
+
+
+def detector_feature_index(name: str) -> int | None:
+    try:
+        import dstio.tale.graph as tale_graph
+
+        columns = list(tale_graph.graph_columns().get("detector_features", []))
+    except Exception:
+        columns = list(V2_DETECTOR_FEATURE_COLUMNS)
+    try:
+        return int(columns.index(str(name)))
+    except ValueError:
+        return None
+
 
 class TorchGeometricUnavailableError(ImportError):
     """Raised when PyG conversion is requested without torch_geometric installed."""
@@ -65,6 +96,11 @@ def hetero_sample_to_tensors(
 ) -> dict[str, Any]:
     resolved_device = torch.device(device) if device is not None else None
     detector_features = _tensor(sample["detector_features"], dtype=torch.float32, device=resolved_device)
+    waveform_valid_index = detector_feature_index(DETECTOR_WAVEFORM_VALID_COLUMN)
+    if waveform_valid_index is not None and waveform_valid_index < detector_features.shape[1]:
+        detector_waveform_valid = detector_features[:, waveform_valid_index].clamp(0.0, 1.0)
+    else:
+        detector_waveform_valid = torch.ones(detector_features.shape[0], dtype=torch.float32, device=resolved_device)
     pulse_features = _tensor(sample["pulse_features"], dtype=torch.float32, device=resolved_device)
     edge_index_by_type = {
         relation: _long_tensor(edge_index, device=resolved_device)
@@ -103,6 +139,7 @@ def hetero_sample_to_tensors(
                 _tensor(sample["detector_waveforms"], dtype=torch.float32, device=resolved_device),
                 waveform_length,
             ),
+            "waveform_valid": detector_waveform_valid,
             "batch": torch.zeros(detector_features.shape[0], dtype=torch.long, device=resolved_device),
         },
         "pulse": {
@@ -173,6 +210,7 @@ def sample_to_hetero_data(
     data["detector"].pos = tensors["detector"]["pos"]
     data["detector"].lid = tensors["detector"]["lid"]
     data["detector"].waveform = tensors["detector"]["waveform"]
+    data["detector"].waveform_valid = tensors["detector"]["waveform_valid"]
 
     data["pulse"].x = tensors["pulse"]["x"]
     data["pulse"].pos = tensors["pulse"]["pos"]
@@ -233,6 +271,9 @@ def hetero_data_to_tensors(data: Any) -> dict[str, Any]:
             "pos": detector["pos"].to(dtype=torch.float32),
             "lid": detector["lid"].to(dtype=torch.long),
             "waveform": detector["waveform"].to(dtype=torch.float32),
+            "waveform_valid": detector["waveform_valid"].to(dtype=torch.float32)
+            if "waveform_valid" in detector
+            else torch.ones(detector_x.shape[0], dtype=torch.float32, device=detector_x.device),
             "batch": _storage_batch(detector, detector_x.shape[0], device=detector_x.device),
         },
         "pulse": {

@@ -49,6 +49,14 @@ The node and relation types are:
    * - Relations
      - ``pulse__same_detector_next__pulse``, ``pulse__same_detector_prev__pulse``, ``pulse__near_space__pulse``, ``pulse__time_causal__pulse``, ``detector__near__detector``, ``detector__observes__pulse``, ``pulse__observed_by__detector``
 
+In the v2 schema, ``pulse__time_causal__pulse`` is not a loose all-distance
+compatible-pair relation. It is the near-space subset with
+``distance <= 1.5 km``, ``abs(dt) <= distance / c + 2 FADC bins``, and Ising
+``raw_weight >= 0.2``. This relation still needs a density check on each new
+dataset. The GNN code does not create, reconnect, or remove graph edges; any
+relation-definition ablation must be produced by ``dstio`` / ``export-hetero``
+as a separate graph dataset.
+
 The core-relative pulse features are valid only when the Ising reference core exists.
 Training export should therefore use ``--require-reference-core`` unless a separate diagnostic dataset is being made.
 

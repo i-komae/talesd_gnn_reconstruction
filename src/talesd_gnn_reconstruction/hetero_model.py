@@ -426,17 +426,24 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         detector_x = detector["x"]
         detector_context = detector["context"]
         detector_waveform = normalize_detector_waveforms(detector["waveform"], int(self.config["waveform_length"]))
+        detector_waveform_valid = detector.get("waveform_valid")
+        if detector_waveform_valid is None:
+            detector_waveform_valid = torch.ones(detector_x.shape[0], dtype=detector_x.dtype, device=detector_x.device)
+        else:
+            detector_waveform_valid = detector_waveform_valid.to(dtype=detector_x.dtype, device=detector_x.device).reshape(-1)
         pulse_x = pulse["x"]
+        waveform_embedding = self.waveform_encoder(
+            detector_waveform,
+            detector_x.shape[0],
+            device=detector_x.device,
+            dtype=detector_x.dtype,
+        )
+        waveform_embedding = waveform_embedding * detector_waveform_valid.clamp(0.0, 1.0).unsqueeze(-1)
 
         detector_parts = [
             self.detector_feature_encoder(detector_x),
             self.detector_context_encoder(detector_context),
-            self.waveform_encoder(
-                detector_waveform,
-                detector_x.shape[0],
-                device=detector_x.device,
-                dtype=detector_x.dtype,
-            ),
+            waveform_embedding,
         ]
         node_states = {
             "detector": self.detector_node_encoder(torch.cat(detector_parts, dim=-1)),
