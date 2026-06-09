@@ -11,7 +11,7 @@ import numpy as np
 
 FORMAT_NAME = "talesd_gnn_hetero_graphs"
 FORMAT_VERSION = "0.1"
-GRAPH_DEFINITION = "tale_sd_hetero_ising_pulse_detector_graph_v2"
+GRAPH_DEFINITION = "tale_sd_hetero_ising_pulse_detector_graph_v3"
 WAVEFORM_SCHEMA = "detector_full_calibrated_vem_v1"
 
 EDGE_RELATIONS = (

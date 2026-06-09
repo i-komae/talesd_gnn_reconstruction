@@ -47,7 +47,7 @@ One event as a heterogeneous data object
 
 PyG represents heterogeneous graphs with separate node stores and edge stores.
 The TALE-SD graph uses the same idea. One event has two node types and seven
-v2 relation types:
+v3 relation types:
 
 .. code-block:: text
 
@@ -105,10 +105,17 @@ without silently mixing it with shower features.
 ``detector_waveforms`` are full detector-level calibrated VEM waveforms. They
 are not duplicated on pulse nodes. A pulse points back to its detector with
 ``pulse_detector_index`` and records the relevant time window through
-``pulse_bounds``. In schema v2, no-signal live detectors have
+``pulse_bounds``. In schema v3, no-signal live detectors have
 ``detector_waveform_valid = 0``. Their waveform arrays are zero-filled by
 ``dstio`` and the model masks the waveform embedding to zero before it is
 concatenated with detector scalar/context embeddings.
+
+Schema v3 detector features also include
+``detector_has_ising_kept_pulse``, ``detector_ising_kept_pulse_count``, and
+``detector_ising_removed_pulse_count``. These values are detector-level
+summaries of the retained pulse nodes. They prevent an Ising-rejected-only
+detector from being treated the same as a detector with at least one
+Ising-kept pulse.
 
 ``pulse_features`` contain pulse timing, charge, core-relative coordinates when
 the Ising reference core exists, and Ising annotations. Ising-rejected pulse
@@ -120,7 +127,7 @@ example, pulse-pulse edges include timing differences, spatial separation, and
 Ising weights. These are not just labels; they are numerical inputs to the
 attention calculation.
 
-The v2 pulse-pulse relations are deliberately separated:
+The v3 pulse-pulse relations are deliberately separated:
 
 ``pulse__same_detector_next__pulse`` / ``pulse__same_detector_prev__pulse``
    Consecutive pulses in the same detector, with explicit forward and reverse

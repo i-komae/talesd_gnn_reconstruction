@@ -63,6 +63,11 @@ EDGE_FEATURE_DIMS = {
     for relation in EDGE_RELATIONS
 }
 DETECTOR_FEATURE_INDEX = {name: index for index, name in enumerate(GRAPH_COLUMNS["detector_features"])}
+DETECTOR_ISING_FEATURE_COLUMNS = (
+    "detector_has_ising_kept_pulse",
+    "detector_ising_kept_pulse_count",
+    "detector_ising_removed_pulse_count",
+)
 
 
 def _edge_features(rng: np.random.Generator, relation: str, count: int) -> np.ndarray:
@@ -96,6 +101,19 @@ def _synthetic_graph(index: int) -> SimpleNamespace:
     ):
         if name in DETECTOR_FEATURE_INDEX:
             detector_features[:, DETECTOR_FEATURE_INDEX[name]] = 1.0
+    if all(name in DETECTOR_FEATURE_INDEX for name in DETECTOR_ISING_FEATURE_COLUMNS):
+        detector_features[:, DETECTOR_FEATURE_INDEX["detector_has_ising_kept_pulse"]] = np.asarray(
+            [1.0, 1.0, 0.0],
+            dtype=np.float32,
+        )
+        detector_features[:, DETECTOR_FEATURE_INDEX["detector_ising_kept_pulse_count"]] = np.asarray(
+            [1.0, 1.0, 0.0],
+            dtype=np.float32,
+        )
+        detector_features[:, DETECTOR_FEATURE_INDEX["detector_ising_removed_pulse_count"]] = np.asarray(
+            [0.0, 1.0, 1.0],
+            dtype=np.float32,
+        )
     return SimpleNamespace(
         event_id=f"synthetic_{index:04d}",
         detector_features=detector_features,
@@ -155,6 +173,13 @@ def _synthetic_graph(index: int) -> SimpleNamespace:
 
 
 class SyntheticHeteroGraphIoTest(unittest.TestCase):
+    def test_dstio_v3_columns_are_used(self) -> None:
+        self.assertEqual(GRAPH_DEFINITION, tale_graph.GRAPH_DEFINITION)
+        self.assertEqual(GRAPH_DEFINITION, "tale_sd_hetero_ising_pulse_detector_graph_v3")
+        self.assertEqual(list(GRAPH_COLUMNS["detector_features"]), list(tale_graph.graph_columns()["detector_features"]))
+        for name in DETECTOR_ISING_FEATURE_COLUMNS:
+            self.assertIn(name, DETECTOR_FEATURE_INDEX)
+
     def test_training_scaler_sample_does_not_load_waveforms(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "synthetic_hetero.h5"
@@ -170,6 +195,19 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 self.assertEqual(dataset.detector_waveform_shape(0), (3, 2, 16))
                 self.assertGreaterEqual(dataset.graph_nbytes(0), 3 * 2 * 16 * np.dtype(np.float32).itemsize)
                 self.assertEqual(scaler_sample["detector_features"].shape, (3, DETECTOR_FEATURE_DIM))
+                self.assertEqual(DETECTOR_FEATURE_DIM, 17)
+                np.testing.assert_array_equal(
+                    scaler_sample["detector_features"][:, DETECTOR_FEATURE_INDEX["detector_has_ising_kept_pulse"]],
+                    np.asarray([1.0, 1.0, 0.0], dtype=np.float32),
+                )
+                np.testing.assert_array_equal(
+                    scaler_sample["detector_features"][:, DETECTOR_FEATURE_INDEX["detector_ising_kept_pulse_count"]],
+                    np.asarray([1.0, 1.0, 0.0], dtype=np.float32),
+                )
+                np.testing.assert_array_equal(
+                    scaler_sample["detector_features"][:, DETECTOR_FEATURE_INDEX["detector_ising_removed_pulse_count"]],
+                    np.asarray([0.0, 1.0, 1.0], dtype=np.float32),
+                )
                 self.assertEqual(scaler_sample["pulse_features"].shape, (4, PULSE_FEATURE_DIM))
                 self.assertEqual(set(scaler_sample["edge_features_by_type"]), set(EDGE_RELATIONS))
             finally:

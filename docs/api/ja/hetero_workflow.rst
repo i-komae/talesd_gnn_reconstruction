@@ -30,7 +30,7 @@ Ising-kept pulse candidate と Ising-rejected pulse candidate はどちらも ML
    detector-detector、pulse-pulse、detector-pulse relation は別 edge type です。Ising rejected pulse candidate は hard drop せず、annotation付きで入力に残します。
 
 ``dstio.tale.graph.iter_graphs`` は
-``tale_sd_hetero_ising_pulse_detector_graph_v2`` の ``GraphEvent`` を返します。
+``tale_sd_hetero_ising_pulse_detector_graph_v3`` の ``GraphEvent`` を返します。
 ML graph の標準は ``node_policy="all_candidates_with_ising"`` です。
 Ising で rejected になった pulse candidate も graph から消さず、Ising annotation feature を持たせます。
 ``node_policy="ising_kept"`` は reconstruction-cleaned subset が必要な時だけ使います。
@@ -49,12 +49,18 @@ node と relation は次の通りです。
    * - relation
      - ``pulse__same_detector_next__pulse``, ``pulse__same_detector_prev__pulse``, ``pulse__near_space__pulse``, ``pulse__time_causal__pulse``, ``detector__near__detector``, ``detector__observes__pulse``, ``pulse__observed_by__detector``
 
-v2 schema の ``pulse__time_causal__pulse`` は、全距離の緩い compatible-pair relation ではありません。
+v3 schema の ``pulse__time_causal__pulse`` は、全距離の緩い compatible-pair relation ではありません。
 ``distance <= 1.5 km``、``abs(dt) <= distance / c + 2 FADC bins``、Ising
 ``raw_weight >= 0.2`` を満たす near-space subset です。
 ただし、この relation は新しい dataset ごとに edge density を確認します。
 GNN 側では graph edge を作成・接続・削除しません。
 relation 定義の ablation が必要な場合は、``dstio`` / ``export-hetero`` 側で別 graph dataset として作成します。
+
+v3 では detector-level の Ising summary column として
+``detector_has_ising_kept_pulse``, ``detector_ising_kept_pulse_count``,
+``detector_ising_removed_pulse_count`` が追加されています。
+これにより、Ising-kept pulse を持つ detector と、Ising rejected candidate pulse だけを持つ detector を区別します。
+rejected pulse node は ML input から hard drop しません。
 
 core-relative pulse feature は Ising reference core がある時だけ有効です。
 そのため、学習用 export では通常 ``--require-reference-core`` を使います。

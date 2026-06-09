@@ -3246,7 +3246,7 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
         "const_dst": str(const_dst) if const_dst is not None else None,
         "mc_calib_dir": str(mc_calib_dir) if mc_calib_dir is not None else None,
         "max_events": args.max_events,
-        "graph_definition": "tale_sd_hetero_ising_pulse_detector_graph_v1",
+        "graph_definition": str(getattr(tale_graph, "GRAPH_DEFINITION", "tale_sd_hetero_ising_pulse_detector_graph_v3")),
         "cleaning": args.cleaning,
         "node_policy": args.node_policy,
         "require_reference_core": bool(args.require_reference_core),

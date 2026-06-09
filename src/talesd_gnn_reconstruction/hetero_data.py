@@ -18,7 +18,7 @@ EDGE_TYPE_BY_RELATION: dict[str, tuple[str, str, str]] = {
 }
 
 DETECTOR_WAVEFORM_VALID_COLUMN = "detector_waveform_valid"
-V2_DETECTOR_FEATURE_COLUMNS = (
+V3_DETECTOR_FEATURE_COLUMNS = (
     "detector_trigger_usec_rel",
     "log10_detector_max_pulse_rho",
     "log10_detector_sum_pulse_rho",
@@ -33,6 +33,9 @@ V2_DETECTOR_FEATURE_COLUMNS = (
     "detector_arrival_time_valid",
     "detector_live_status",
     "detector_waveform_valid",
+    "detector_has_ising_kept_pulse",
+    "detector_ising_kept_pulse_count",
+    "detector_ising_removed_pulse_count",
 )
 
 
@@ -42,7 +45,7 @@ def detector_feature_index(name: str) -> int | None:
 
         columns = list(tale_graph.graph_columns().get("detector_features", []))
     except Exception:
-        columns = list(V2_DETECTOR_FEATURE_COLUMNS)
+        columns = list(V3_DETECTOR_FEATURE_COLUMNS)
     try:
         return int(columns.index(str(name)))
     except ValueError:
