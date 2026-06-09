@@ -20,8 +20,8 @@ EDGE_TYPE_BY_RELATION: dict[str, tuple[str, str, str]] = {
 DETECTOR_WAVEFORM_VALID_COLUMN = "detector_waveform_valid"
 V3_DETECTOR_FEATURE_COLUMNS = (
     # v3-compatible name kept by dstio: this is the detector node time,
-    # defined as the first valid attached pulse rise time relative to the
-    # event's first valid pulse. It is not the detector waveform start time.
+    # defined as the first Ising-kept pulse onset on the pulse_arrival_usec_rel
+    # axis. It is not the detector waveform start time.
     "detector_trigger_usec_rel",
     "log10_detector_max_pulse_rho",
     "log10_detector_sum_pulse_rho",

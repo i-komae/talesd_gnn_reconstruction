@@ -368,7 +368,7 @@ node特徴量
 - detectorの位置 ``x, y, z``。
 - event内barycenterからの相対位置、半径。
 - event内の最初のaccepted pulseから見た、そのpulse自身の相対時刻。
-- detector trigger time。
+- detector timing feature。
 - そのaccepted pulse自身のchargeの対数・平方根。
 - 同一detector内のaccepted pulse最大charge、合計charge、accepted pulse数、accepted pulse time span。
 - detector waveform segment数、waveform length。
