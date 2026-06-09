@@ -410,13 +410,20 @@ as a separate graph dataset.</p>
 and <code class="docutils literal notranslate"><span class="pre">detector_ising_removed_pulse_count</span></code>. These distinguish a detector with
 at least one Ising-kept pulse from a detector that only has Ising-rejected
 candidate pulses. The rejected pulse nodes are still kept as ML input.</p>
-<p>In the same v3 schema, <code class="docutils literal notranslate"><span class="pre">detector_trigger_usec_rel</span></code> keeps its historical name
-for column compatibility, but its value is the detector node time: the first
-valid attached pulse rise time relative to the first valid pulse in the event.
-It is not the detector waveform start time. No-signal live detectors carry
-<code class="docutils literal notranslate"><span class="pre">detector_trigger_usec_rel</span> <span class="pre">=</span> <span class="pre">0</span></code> with <code class="docutils literal notranslate"><span class="pre">detector_arrival_time_valid</span> <span class="pre">=</span> <span class="pre">0</span></code>.
-When waveform timing is needed, use <code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code> and
-<code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code> to relate each pulse to the detector waveform.</p>
+<p>In the same v3 schema, <code class="docutils literal notranslate"><span class="pre">pulse_arrival_usec_rel</span></code> is the pulse node time. It is
+computed from the pulse onset, namely the earlier of the upper/lower rise
+times, and is measured relative to the first accepted graph pulse candidate in
+the event. The time origin is not redefined with the Ising-kept subset, because
+Ising-rejected candidates remain in the ML graph.</p>
+<p><code class="docutils literal notranslate"><span class="pre">detector_trigger_usec_rel</span></code> keeps its historical name for column
+compatibility, but its value is the detector node time. With
+<code class="docutils literal notranslate"><span class="pre">cleaning=&quot;ising&quot;</span></code>, it is the first <code class="docutils literal notranslate"><span class="pre">ising_keep</span> <span class="pre">=</span> <span class="pre">1</span></code> pulse onset attached to
+that detector, expressed on the same <code class="docutils literal notranslate"><span class="pre">pulse_arrival_usec_rel</span></code> axis. A detector
+with candidate/rejected pulses but no Ising-kept pulse carries
+<code class="docutils literal notranslate"><span class="pre">detector_trigger_usec_rel</span> <span class="pre">=</span> <span class="pre">0</span></code> and <code class="docutils literal notranslate"><span class="pre">detector_arrival_time_valid</span> <span class="pre">=</span> <span class="pre">0</span></code>.
+It is not the detector waveform start time. When waveform timing is needed, use
+<code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code> and <code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code> to relate each pulse to the
+detector waveform.</p>
 <p>The core-relative pulse features are valid only when the Ising reference core exists.
 Training export should therefore use <code class="docutils literal notranslate"><span class="pre">--require-reference-core</span></code> unless a separate diagnostic dataset is being made.</p>
 </section>

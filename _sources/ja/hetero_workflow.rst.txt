@@ -62,12 +62,18 @@ v3 では detector-level の Ising summary column として
 これにより、Ising-kept pulse を持つ detector と、Ising rejected candidate pulse だけを持つ detector を区別します。
 rejected pulse node は ML input から hard drop しません。
 
-同じ v3 schema の ``detector_trigger_usec_rel`` は、互換性のため名前を維持していますが、
-値の意味は detector node time です。その detector に属する最初の有効 pulse の立ち上がり時刻を、
-event 内の最初の有効 pulse からの相対時刻にした値です。
+同じ v3 schema の ``pulse_arrival_usec_rel`` は pulse node の時刻です。
+上下層 rise の平均ではなく、上下層 rise の早い方である pulse onset から作ります。
+0 点は event 内の最初の accepted graph pulse candidate です。
+Ising rejected candidate pulse も ML graph に残すため、Ising-kept subset を基準に時刻を引き直しません。
+
+``detector_trigger_usec_rel`` は、互換性のため名前を維持していますが、
+値の意味は detector node time です。
+``cleaning="ising"`` では、その detector に属する最初の ``ising_keep = 1`` pulse onset を、
+``pulse_arrival_usec_rel`` と同じ 0 点で表します。
+candidate/rejected pulse や waveform が残っていても Ising-kept pulse がない detector は、
+``detector_trigger_usec_rel = 0``、``detector_arrival_time_valid = 0`` です。
 detector waveform の開始時刻ではありません。
-no-signal live detector では ``detector_trigger_usec_rel = 0`` とし、
-``detector_arrival_time_valid = 0`` で無効を示します。
 waveform の時刻対応が必要な場合は、``pulse_detector_index`` と ``pulse_bounds`` で
 pulse と detector waveform を対応させます。
 

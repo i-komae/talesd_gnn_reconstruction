@@ -450,11 +450,17 @@ carry different fields because they represent different physical objects.</p>
 features. <code class="docutils literal notranslate"><span class="pre">detector_context_features</span></code> are readout and calibration context.
 Keeping them separate makes it possible to include, remove, or ablate context
 without silently mixing it with shower features.</p>
-<p>Within schema v3, <code class="docutils literal notranslate"><span class="pre">detector_trigger_usec_rel</span></code> is a compatibility name. The
-value is used as the detector node's representative arrival time: the first
-valid attached pulse rise time relative to the first valid pulse in the event.
-It is not used as the detector waveform start time. No-signal live detectors
-have <code class="docutils literal notranslate"><span class="pre">detector_arrival_time_valid</span> <span class="pre">=</span> <span class="pre">0</span></code> and a zero value in this column, so the
+<p>Within schema v3, <code class="docutils literal notranslate"><span class="pre">pulse_arrival_usec_rel</span></code> is built from the pulse onset, the
+earlier of the upper/lower rise times, not from the averaged coincidence time.
+Its zero point is the first accepted graph pulse candidate in the event. The
+zero point is not shifted to the first Ising-kept pulse, because Ising-rejected
+candidate pulses remain part of the ML input.</p>
+<p><code class="docutils literal notranslate"><span class="pre">detector_trigger_usec_rel</span></code> is a compatibility name. The value is used as the
+detector node's representative arrival time: with <code class="docutils literal notranslate"><span class="pre">cleaning=&quot;ising&quot;</span></code>, it is
+the first <code class="docutils literal notranslate"><span class="pre">ising_keep</span> <span class="pre">=</span> <span class="pre">1</span></code> pulse onset attached to that detector, expressed on
+the same <code class="docutils literal notranslate"><span class="pre">pulse_arrival_usec_rel</span></code> axis. It is not used as the detector
+waveform start time. Detectors without an Ising-kept pulse have
+<code class="docutils literal notranslate"><span class="pre">detector_arrival_time_valid</span> <span class="pre">=</span> <span class="pre">0</span></code> and a zero value in this column, so the
 validity flag must be checked when interpreting detector timing.</p>
 <p><code class="docutils literal notranslate"><span class="pre">detector_waveforms</span></code> are full detector-level calibrated VEM waveforms. They
 are not duplicated on pulse nodes. A pulse points back to its detector with
