@@ -55,7 +55,24 @@ export WAVEFORM_EMBEDDING_DIM="${WAVEFORM_EMBEDDING_DIM:-64}"
 export WAVEFORM_LENGTH="${WAVEFORM_LENGTH:-}"
 
 export TRAIN_EPOCHS
-export BATCH_SIZE="${BATCH_SIZE:-128}"
+if [[ -z "${BATCH_SIZE:-}" ]]; then
+  if [[ "${WAVEFORM_ENCODER}" == "transformer" ]]; then
+    export BATCH_SIZE=32
+  else
+    export BATCH_SIZE=128
+  fi
+else
+  export BATCH_SIZE
+fi
+if [[ -z "${GRADIENT_ACCUMULATION_STEPS:-}" ]]; then
+  if [[ "${WAVEFORM_ENCODER}" == "transformer" ]]; then
+    export GRADIENT_ACCUMULATION_STEPS=4
+  else
+    export GRADIENT_ACCUMULATION_STEPS=1
+  fi
+else
+  export GRADIENT_ACCUMULATION_STEPS
+fi
 export LR="${LR:-5e-4}"
 export WEIGHT_DECAY="${WEIGHT_DECAY:-3e-4}"
 export LOSS_MODE="${LOSS_MODE:-physics}"

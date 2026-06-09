@@ -3722,6 +3722,7 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         output_path=args.output,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.lr,
         weight_decay=args.weight_decay,
         hidden_dim=args.hidden_dim,
@@ -4214,6 +4215,12 @@ def build_parser() -> argparse.ArgumentParser:
     train_hetero.add_argument("-o", "--output", required=True, help="出力checkpoint .pt")
     train_hetero.add_argument("--epochs", type=int, default=1)
     train_hetero.add_argument("--batch-size", type=int, default=8)
+    train_hetero.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        default=1,
+        help="GPU micro-batchを小さくした時にeffective batch sizeを保つための累積step数",
+    )
     train_hetero.add_argument("--lr", type=float, default=1.0e-3)
     train_hetero.add_argument("--weight-decay", type=float, default=0.0)
     train_hetero.add_argument("--hidden-dim", type=int, default=128)

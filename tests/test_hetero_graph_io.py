@@ -407,6 +407,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                 checkpoint_path,
                 epochs=1,
                 batch_size=2,
+                gradient_accumulation_steps=2,
                 hidden_dim=16,
                 num_layers=1,
                 dropout=0.0,
@@ -426,6 +427,8 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertEqual(checkpoint["runtime"]["model_architecture"], "hetero_attention")
             self.assertEqual(checkpoint["model_config"]["quality_dim"], 1)
             self.assertEqual(checkpoint["model_config"]["error_dim"], 0)
+            self.assertEqual(checkpoint["runtime"]["gradient_accumulation_steps"], 2)
+            self.assertEqual(checkpoint["runtime"]["effective_batch_size"], 4)
             self.assertIn("hetero_scalers", checkpoint)
             self.assertIn("detector", checkpoint["hetero_scalers"])
             self.assertIn("target", checkpoint["hetero_scalers"])

@@ -490,6 +490,7 @@ def train_hetero_model(
     *,
     epochs: int = 1,
     batch_size: int = 8,
+    gradient_accumulation_steps: int = 1,
     learning_rate: float = 1.0e-3,
     weight_decay: float = 0.0,
     hidden_dim: int = 128,
@@ -555,6 +556,7 @@ def train_hetero_model(
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = resolve_device(device)
+    gradient_accumulation_steps = max(int(gradient_accumulation_steps), 1)
     prefetch_factor = max(int(prefetch_factor), 1)
     persistent_workers = bool(persistent_workers)
     pin_memory = device.startswith("cuda") if pin_memory is None else bool(pin_memory)
@@ -611,6 +613,8 @@ def train_hetero_model(
         f"p95_graph_bytes={graph_byte_summary['p95_graph_bytes']} "
         f"max_graph_bytes={graph_byte_summary['max_graph_bytes']} "
         f"batch_size={max(int(batch_size), 1)} "
+        f"gradient_accumulation_steps={gradient_accumulation_steps} "
+        f"effective_batch_size={max(int(batch_size), 1) * gradient_accumulation_steps} "
         f"requested_workers={loader_settings['requested_workers']} "
         f"resolved_workers={loader_settings['resolved_workers']} "
         f"cpu_worker_limit={loader_settings['cpu_worker_limit']} "
@@ -692,6 +696,8 @@ def train_hetero_model(
         model.train()
         train_losses = []
         train_components: dict[str, list[float]] = {}
+        optimizer.zero_grad(set_to_none=True)
+        pending_accumulation_steps = 0
         for batch in train_loader:
             batch = batch.to(device)
             loss, components = _hetero_batch_loss(
@@ -731,13 +737,20 @@ def train_hetero_model(
                 nll_sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
                 nll_sigma_core_floor_km=nll_sigma_core_floor_km,
             )
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-            optimizer.step()
+            (loss / float(gradient_accumulation_steps)).backward()
+            pending_accumulation_steps += 1
+            if pending_accumulation_steps >= gradient_accumulation_steps:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                pending_accumulation_steps = 0
             train_losses.append(float(loss.detach().cpu()))
             for name, value in components.items():
                 train_components.setdefault(name, []).append(float(value.detach().cpu()))
+        if pending_accumulation_steps > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
         model.eval()
         val_losses = []
         val_components: dict[str, list[float]] = {}
@@ -917,6 +930,9 @@ def train_hetero_model(
             "nll_sigma_angle_floor_deg": float(nll_sigma_angle_floor_deg),
             "nll_sigma_core_floor_km": float(nll_sigma_core_floor_km),
             "waveform_length": int(resolved_waveform_length),
+            "batch_size": int(max(int(batch_size), 1)),
+            "gradient_accumulation_steps": int(gradient_accumulation_steps),
+            "effective_batch_size": int(max(int(batch_size), 1) * gradient_accumulation_steps),
             "data_loader": {
                 **loader_settings,
                 **graph_byte_summary,
