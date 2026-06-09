@@ -451,17 +451,19 @@ full-dataset attention dump.</p>
 <section id="balanced-heterogeneous-hdf5-size-sweep">
 <h2>Balanced heterogeneous HDF5 size sweep<a class="headerlink" href="#balanced-heterogeneous-hdf5-size-sweep" title="Link to this heading"></a></h2>
 <p>Use <code class="docutils literal notranslate"><span class="pre">scripts/submit_server_hetero_dataset_size_sweep.sh</span></code> to make the next balanced datasets.
-The default sizes are <code class="docutils literal notranslate"><span class="pre">50000</span></code>, <code class="docutils literal notranslate"><span class="pre">20000</span></code>, and <code class="docutils literal notranslate"><span class="pre">10000</span></code> selected events per true-energy/particle bin.
+The default final sizes are <code class="docutils literal notranslate"><span class="pre">50000</span></code>, <code class="docutils literal notranslate"><span class="pre">20000</span></code>, and <code class="docutils literal notranslate"><span class="pre">10000</span></code> selected events per true-energy/particle bin.
+The script first writes one overdrawn pool dataset, then derives the three final HDF5 datasets by resharding/subsampling that pool.
 The balanced export preselects candidates by <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source group, zenith bin, azimuth bin, core-position bin, and event-time bin, then writes a selection summary and a train/validation/test split distribution summary.</p>
 <p>The default split for this sweep is source-group based <code class="docutils literal notranslate"><span class="pre">45/10/45</span></code> for train/validation/test.
 The same <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source group is not shared across splits.
 Validation is kept as an independent source-group holdout for early stopping and model selection; the test split is left for final comparison.</p>
-<p>First submit the three export jobs:</p>
+<p>First submit the HDF5 export stage.  With defaults this submits one pool export
+job and three dependent reshard jobs:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">RUN_ID</span><span class="o">=</span>hetero_balance_<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d_%H%M%S<span class="k">)</span><span class="w"> </span><span class="se">\</span>
 scripts/submit_server_hetero_dataset_size_sweep.sh
 </pre></div>
 </div>
-<p>After the three HDF5 exports and their summaries are complete, inspect:</p>
+<p>After the three final HDF5 datasets and their summaries are complete, inspect:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>/dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/hetero_selection_summary.json
 /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distribution_summary.json
 /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distributions/split_distribution_plot_data.json

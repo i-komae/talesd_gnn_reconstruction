@@ -449,17 +449,18 @@ scripts/submit_server_hetero_reco_mass_error_training.sh
 <section id="balanced-heterogeneous-hdf5">
 <h2>balanced heterogeneous HDF5 サイズ比較<a class="headerlink" href="#balanced-heterogeneous-hdf5" title="Link to this heading"></a></h2>
 <p>次の balanced dataset 作成には <code class="docutils literal notranslate"><span class="pre">scripts/submit_server_hetero_dataset_size_sweep.sh</span></code> を使います。
-既定では true energy / particle bin ごとに <code class="docutils literal notranslate"><span class="pre">50000</span></code>, <code class="docutils literal notranslate"><span class="pre">20000</span></code>, <code class="docutils literal notranslate"><span class="pre">10000</span></code> event を選ぶ3種類のHDF5を作ります。
+最終的な既定サイズは true energy / particle bin ごとに <code class="docutils literal notranslate"><span class="pre">50000</span></code>, <code class="docutils literal notranslate"><span class="pre">20000</span></code>, <code class="docutils literal notranslate"><span class="pre">10000</span></code> event を選ぶ3種類のHDF5です。
+この script はまず overdraw した pool dataset を1つ作り、その pool から reshard/subsample して3種類の最終HDF5を作ります。
 balanced export は <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source group、zenith bin、azimuth bin、core位置bin、event時刻binで候補を分散させ、selection summary と train/validation/test split distribution summary を出します。</p>
 <p>この sweep の既定 split は、train/validation/test の source group が約 <code class="docutils literal notranslate"><span class="pre">45/10/45</span></code> です。
 同じ <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source group は split 間で共有しません。
 validation は early stopping と model selection 用の独立 source-group holdout とし、test は最終比較用として触らない split にします。</p>
-<p>まず3本の export job を投げます。</p>
+<p>まず HDF5 export stage を投げます。既定では pool export 1本と、それに依存する reshard 3本が投入されます。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">RUN_ID</span><span class="o">=</span>hetero_balance_<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d_%H%M%S<span class="k">)</span><span class="w"> </span><span class="se">\</span>
 scripts/submit_server_hetero_dataset_size_sweep.sh
 </pre></div>
 </div>
-<p>3種類のHDF5とsummaryが完了したら、以下を確認します。</p>
+<p>3種類の最終HDF5とsummaryが完了したら、以下を確認します。</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>/dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/hetero_selection_summary.json
 /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distribution_summary.json
 /dicos_ui_home/ikomae/work/gnn/graphs/hetero_balanced_flat*/summaries/split_distributions/split_distribution_plot_data.json
