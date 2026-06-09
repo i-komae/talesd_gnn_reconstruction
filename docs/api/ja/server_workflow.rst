@@ -97,21 +97,22 @@ balanced heterogeneous HDF5 サイズ比較
 ---------------------------------------
 
 次の balanced dataset 作成には ``scripts/submit_server_hetero_dataset_size_sweep.sh`` を使います。
-既定では true energy / particle bin ごとに ``50000``, ``20000``, ``10000`` event を選ぶ3種類のHDF5を作ります。
+最終的な既定サイズは true energy / particle bin ごとに ``50000``, ``20000``, ``10000`` event を選ぶ3種類のHDF5です。
+この script はまず overdraw した pool dataset を1つ作り、その pool から reshard/subsample して3種類の最終HDF5を作ります。
 balanced export は ``DAT??????`` source group、zenith bin、azimuth bin、core位置bin、event時刻binで候補を分散させ、selection summary と train/validation/test split distribution summary を出します。
 
 この sweep の既定 split は、train/validation/test の source group が約 ``45/10/45`` です。
 同じ ``DAT??????`` source group は split 間で共有しません。
 validation は early stopping と model selection 用の独立 source-group holdout とし、test は最終比較用として触らない split にします。
 
-まず3本の export job を投げます。
+まず HDF5 export stage を投げます。既定では pool export 1本と、それに依存する reshard 3本が投入されます。
 
 .. code-block:: bash
 
    RUN_ID=hetero_balance_$(date +%Y%m%d_%H%M%S) \
    scripts/submit_server_hetero_dataset_size_sweep.sh
 
-3種類のHDF5とsummaryが完了したら、以下を確認します。
+3種類の最終HDF5とsummaryが完了したら、以下を確認します。
 
 .. code-block:: text
 
