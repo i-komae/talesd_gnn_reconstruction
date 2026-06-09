@@ -54,6 +54,20 @@ CONST_DST = Path("/Users/ikomae/TALE/TASoft/development/data/SD/talesdconst_pass
 MC_CALIB_DIR = Path("/Users/ikomae/TALE/TASoft/development/data/SD")
 
 
+GRAPH_COLUMNS = tale_graph.graph_columns()
+DETECTOR_FEATURE_DIM = len(GRAPH_COLUMNS["detector_features"])
+DETECTOR_CONTEXT_DIM = len(GRAPH_COLUMNS["detector_context_features"])
+PULSE_FEATURE_DIM = len(GRAPH_COLUMNS["pulse_features"])
+EDGE_FEATURE_DIMS = {
+    relation: len(GRAPH_COLUMNS["edge_features_by_type"].get(relation, []))
+    for relation in EDGE_RELATIONS
+}
+
+
+def _edge_features(rng: np.random.Generator, relation: str, count: int) -> np.ndarray:
+    return rng.normal(size=(count, EDGE_FEATURE_DIMS[relation])).astype(np.float32)
+
+
 def _synthetic_graph(index: int) -> SimpleNamespace:
     rng = np.random.default_rng(1000 + index)
     detector_count = 3
@@ -74,12 +88,12 @@ def _synthetic_graph(index: int) -> SimpleNamespace:
     )
     return SimpleNamespace(
         event_id=f"synthetic_{index:04d}",
-        detector_features=rng.normal(size=(detector_count, 10)).astype(np.float32),
-        detector_context_features=rng.normal(size=(detector_count, 7)).astype(np.float32),
+        detector_features=rng.normal(size=(detector_count, DETECTOR_FEATURE_DIM)).astype(np.float32),
+        detector_context_features=rng.normal(size=(detector_count, DETECTOR_CONTEXT_DIM)).astype(np.float32),
         detector_positions_km=rng.normal(size=(detector_count, 3)).astype(np.float32),
         detector_lids=np.asarray([101, 102, 103], dtype=np.int64),
         detector_waveforms=rng.normal(size=(detector_count, 2, 16)).astype(np.float32),
-        pulse_features=rng.normal(size=(pulse_count, 13)).astype(np.float32),
+        pulse_features=rng.normal(size=(pulse_count, PULSE_FEATURE_DIM)).astype(np.float32),
         pulse_positions_km=rng.normal(size=(pulse_count, 3)).astype(np.float32),
         pulse_lids=pulse_lids,
         pulse_detector_index=pulse_detector_index,
@@ -88,17 +102,28 @@ def _synthetic_graph(index: int) -> SimpleNamespace:
             dtype=np.float32,
         ),
         edge_index_by_type={
-            "pulse__interacts__pulse": np.asarray([[0, 1, 2, 3], [1, 2, 3, 0]], dtype=np.int64),
+            "pulse__same_detector_next__pulse": np.asarray([[1], [2]], dtype=np.int64),
+            "pulse__same_detector_prev__pulse": np.asarray([[2], [1]], dtype=np.int64),
+            "pulse__near_space__pulse": np.asarray([[0, 1, 2, 3], [1, 2, 3, 0]], dtype=np.int64),
+            "pulse__time_causal__pulse": np.asarray([[0, 2], [2, 0]], dtype=np.int64),
             "detector__near__detector": np.asarray([[0, 1, 2], [1, 2, 0]], dtype=np.int64),
             "detector__observes__pulse": np.asarray(
                 [pulse_detector_index, np.arange(pulse_count, dtype=np.int64)],
                 dtype=np.int64,
             ),
+            "pulse__observed_by__detector": np.asarray(
+                [np.arange(pulse_count, dtype=np.int64), pulse_detector_index],
+                dtype=np.int64,
+            ),
         },
         edge_features_by_type={
-            "pulse__interacts__pulse": rng.normal(size=(4, 4)).astype(np.float32),
-            "detector__near__detector": rng.normal(size=(3, 3)).astype(np.float32),
-            "detector__observes__pulse": rng.normal(size=(pulse_count, 2)).astype(np.float32),
+            "pulse__same_detector_next__pulse": _edge_features(rng, "pulse__same_detector_next__pulse", 1),
+            "pulse__same_detector_prev__pulse": _edge_features(rng, "pulse__same_detector_prev__pulse", 1),
+            "pulse__near_space__pulse": _edge_features(rng, "pulse__near_space__pulse", 4),
+            "pulse__time_causal__pulse": _edge_features(rng, "pulse__time_causal__pulse", 2),
+            "detector__near__detector": _edge_features(rng, "detector__near__detector", 3),
+            "detector__observes__pulse": _edge_features(rng, "detector__observes__pulse", pulse_count),
+            "pulse__observed_by__detector": _edge_features(rng, "pulse__observed_by__detector", pulse_count),
         },
         target=target,
         particle_label=label,
@@ -134,8 +159,8 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 self.assertNotIn("edge_index_by_type", scaler_sample)
                 self.assertEqual(dataset.detector_waveform_shape(0), (3, 2, 16))
                 self.assertGreaterEqual(dataset.graph_nbytes(0), 3 * 2 * 16 * np.dtype(np.float32).itemsize)
-                self.assertEqual(scaler_sample["detector_features"].shape, (3, 10))
-                self.assertEqual(scaler_sample["pulse_features"].shape, (4, 13))
+                self.assertEqual(scaler_sample["detector_features"].shape, (3, DETECTOR_FEATURE_DIM))
+                self.assertEqual(scaler_sample["pulse_features"].shape, (4, PULSE_FEATURE_DIM))
                 self.assertEqual(set(scaler_sample["edge_features_by_type"]), set(EDGE_RELATIONS))
             finally:
                 dataset.close()
@@ -231,9 +256,9 @@ class HeteroGraphIoTest(unittest.TestCase):
                 dataset.close()
 
         tensors = hetero_sample_to_tensors(sample)
-        self.assertEqual(tensors["detector"]["x"].shape[1], 10)
-        self.assertEqual(tensors["detector"]["context"].shape[1], 7)
-        self.assertEqual(tensors["pulse"]["x"].shape[1], 13)
+        self.assertEqual(tensors["detector"]["x"].shape[1], DETECTOR_FEATURE_DIM)
+        self.assertEqual(tensors["detector"]["context"].shape[1], DETECTOR_CONTEXT_DIM)
+        self.assertEqual(tensors["pulse"]["x"].shape[1], PULSE_FEATURE_DIM)
         self.assertEqual(tensors["detector"]["waveform"].ndim, 3)
 
         model = MinimalHeteroTaleSdGNN.from_sample(
@@ -271,9 +296,10 @@ class HeteroGraphIoTest(unittest.TestCase):
             data = sample_to_hetero_data(sample)
         except TorchGeometricUnavailableError:
             self.skipTest("torch_geometric is not installed")
-        self.assertEqual(data["detector"].x.shape[1], 10)
-        self.assertEqual(data["pulse"].x.shape[1], 13)
+        self.assertEqual(data["detector"].x.shape[1], DETECTOR_FEATURE_DIM)
+        self.assertEqual(data["pulse"].x.shape[1], PULSE_FEATURE_DIM)
         self.assertIn(("detector", "observes", "pulse"), data.edge_types)
+        self.assertIn(("pulse", "observed_by", "detector"), data.edge_types)
 
     def test_pyg_batch_forward(self) -> None:
         from torch_geometric.loader import DataLoader

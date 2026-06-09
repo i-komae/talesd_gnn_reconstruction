@@ -47,7 +47,7 @@ node と relation は次の通りです。
    * - pulse node
      - ``pulse_features``, ``pulse_positions_km``, ``pulse_lids``, ``pulse_detector_index``, ``pulse_bounds``
    * - relation
-     - ``pulse__interacts__pulse``, ``detector__near__detector``, ``detector__observes__pulse``
+     - ``pulse__same_detector_next__pulse``, ``pulse__same_detector_prev__pulse``, ``pulse__near_space__pulse``, ``pulse__time_causal__pulse``, ``detector__near__detector``, ``detector__observes__pulse``, ``pulse__observed_by__detector``
 
 core-relative pulse feature は Ising reference core がある時だけ有効です。
 そのため、学習用 export では通常 ``--require-reference-core`` を使います。

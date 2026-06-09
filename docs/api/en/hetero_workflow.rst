@@ -47,7 +47,7 @@ The node and relation types are:
    * - Pulse node
      - ``pulse_features``, ``pulse_positions_km``, ``pulse_lids``, ``pulse_detector_index``, ``pulse_bounds``
    * - Relations
-     - ``pulse__interacts__pulse``, ``detector__near__detector``, ``detector__observes__pulse``
+     - ``pulse__same_detector_next__pulse``, ``pulse__same_detector_prev__pulse``, ``pulse__near_space__pulse``, ``pulse__time_causal__pulse``, ``detector__near__detector``, ``detector__observes__pulse``, ``pulse__observed_by__detector``
 
 The core-relative pulse features are valid only when the Ising reference core exists.
 Training export should therefore use ``--require-reference-core`` unless a separate diagnostic dataset is being made.

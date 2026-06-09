@@ -131,7 +131,13 @@ def _iter_process_pool(
             yield worker_fn(payload)
         return
 
-    pool = _make_process_pool(workers, max_tasks_per_child=max_tasks_per_child)
+    try:
+        pool = _make_process_pool(workers, max_tasks_per_child=max_tasks_per_child)
+    except (OSError, PermissionError) as exc:
+        _progress_write(f"warning: process pool unavailable for {desc}; falling back to serial: {exc}")
+        for payload in _progress(payloads, desc=desc, total=len(payloads)):
+            yield worker_fn(payload)
+        return
     progress = _progress_bar(desc, len(payloads))
     pending = set()
     payload_iter = iter(payloads)

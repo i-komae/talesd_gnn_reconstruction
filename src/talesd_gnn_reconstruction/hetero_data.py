@@ -8,9 +8,13 @@ import torch
 
 
 EDGE_TYPE_BY_RELATION: dict[str, tuple[str, str, str]] = {
-    "pulse__interacts__pulse": ("pulse", "interacts", "pulse"),
+    "pulse__same_detector_next__pulse": ("pulse", "same_detector_next", "pulse"),
+    "pulse__same_detector_prev__pulse": ("pulse", "same_detector_prev", "pulse"),
+    "pulse__near_space__pulse": ("pulse", "near_space", "pulse"),
+    "pulse__time_causal__pulse": ("pulse", "time_causal", "pulse"),
     "detector__near__detector": ("detector", "near", "detector"),
     "detector__observes__pulse": ("detector", "observes", "pulse"),
+    "pulse__observed_by__detector": ("pulse", "observed_by", "detector"),
 }
 
 

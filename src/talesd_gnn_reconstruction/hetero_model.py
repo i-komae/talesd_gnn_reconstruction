@@ -16,9 +16,13 @@ from .model import WaveformEncoder, _make_mlp, _scatter_max, _scatter_mean, _sca
 
 
 NODE_TYPE_BY_RELATION = {
-    "pulse__interacts__pulse": ("pulse", "pulse"),
+    "pulse__same_detector_next__pulse": ("pulse", "pulse"),
+    "pulse__same_detector_prev__pulse": ("pulse", "pulse"),
+    "pulse__near_space__pulse": ("pulse", "pulse"),
+    "pulse__time_causal__pulse": ("pulse", "pulse"),
     "detector__near__detector": ("detector", "detector"),
     "detector__observes__pulse": ("detector", "pulse"),
+    "pulse__observed_by__detector": ("pulse", "detector"),
 }
 
 
