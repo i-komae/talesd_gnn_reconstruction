@@ -527,7 +527,15 @@ class HeteroGraphIoTest(unittest.TestCase):
             graph_path = Path(tmpdir) / "synthetic_hetero.h5"
             with create_hetero_graph_file(graph_path) as handle:
                 for index in range(12):
-                    write_hetero_graph(handle, index, _synthetic_graph(index))
+                    graph = _synthetic_graph(index)
+                    particle = "proton" if index < 6 else "iron"
+                    graph.particle_label = 0.0 if particle == "proton" else 1.0
+                    graph.target[0] = 17.0
+                    graph.target[3:6] = np.asarray([0.0, 0.0, 1.0], dtype=np.float32)
+                    graph.metadata["source_path"] = f"/synthetic/{particle}/DAT{index:04d}16_gea_trg_000.dst.gz"
+                    graph.metadata["source_index"] = 0
+                    graph.metadata["parttype"] = 14 if particle == "proton" else 5626
+                    write_hetero_graph(handle, index, graph)
 
             dataset = H5HeteroGraphDataset(graph_path, require_target=True, require_particle_label=True)
             try:

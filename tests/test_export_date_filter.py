@@ -217,6 +217,34 @@ class ExportDateFilterTest(unittest.TestCase):
         self.assertEqual(max(quotas.values()) - min(quotas.values()), 1)
         self.assertEqual(summary["by_bin"]["proton:16"]["source_groups"], 3)
 
+    def test_hetero_source_group_refill_quotas_are_group_balanced(self) -> None:
+        groups = {}
+        for index in range(3):
+            source_group = f"/mc/proton/DAT0001{index}16"
+            groups[source_group] = HeteroSourceGroupManifest(
+                source_group=source_group,
+                dat_tag=f"DAT0001{index}16",
+                energy_bin_code="16",
+                particle="proton",
+                source_zenith_deg=20.0,
+                eligible_event_count=100,
+                files=(),
+                date_counts={"260606": 100},
+                cell_counts={("0", "0", "0", "0"): 100},
+            )
+
+        quotas, summary = _allocate_hetero_source_group_quotas(
+            groups,
+            per_bin=50,
+            seed=123,
+            stratify_particle=True,
+            bin_targets={"proton:16": 6},
+        )
+
+        self.assertEqual(sum(quotas.values()), 6)
+        self.assertEqual(set(quotas.values()), {2})
+        self.assertEqual(summary["by_bin"]["proton:16"]["assigned_events"], 6)
+
     def test_hetero_refill_targets_use_actual_write_efficiency(self) -> None:
         targets = _hetero_refill_bin_targets(
             {"proton:16": 100000},

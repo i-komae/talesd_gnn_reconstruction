@@ -507,99 +507,31 @@ def _assign_source_group(
     val_fraction: float,
     test_fraction: float,
     rng: random.Random,
-    source_event_counts: dict[str, int] | None = None,
     source_val_fraction: float | None = None,
     source_test_fraction: float | None = None,
-    source_balance_weight: float = 0.75,
-    source_size_weight: float = 0.75,
 ) -> None:
     sources = list(sources)
     rng.shuffle(sources)
     if len(sources) < 3:
         split_sources["train"].extend(sources)
         return
-    counts = source_event_counts or {source_path: 1 for source_path in sources}
-    total_events = sum(max(int(counts.get(source_path, 1)), 1) for source_path in sources)
-    total_sources = len(sources)
+
+    def split_count(fraction: float | None, *, default_fraction: float, reserve: int) -> int:
+        use_fraction = float(default_fraction if fraction is None else fraction)
+        if use_fraction <= 0.0:
+            return 0
+        available = max(len(sources) - int(reserve), 0)
+        if available <= 0:
+            return 0
+        return min(max(int(round(len(sources) * use_fraction)), 1), available)
+
     remaining = list(sources)
-
-    def target_source_count(fraction: float | None, min_remaining_sources: int) -> int:
-        if fraction is None:
-            return 0
-        if fraction <= 0.0:
-            return 0
-        max_selectable = max(len(remaining) - int(min_remaining_sources), 0)
-        if max_selectable <= 0:
-            return 0
-        target = int(round(total_sources * float(fraction)))
-        target = max(target, 1)
-        return min(target, max_selectable)
-
-    def split_score(events: int, n_sources: int, target_events: float, target_sources: int) -> float:
-        event_scale = max(float(target_events), 1.0)
-        event_score = abs(float(events) - float(target_events)) / event_scale
-        if target_sources <= 0:
-            return event_score
-        source_score = abs(float(n_sources) - float(target_sources)) / max(float(target_sources), 1.0)
-        return event_score + max(float(source_balance_weight), 0.0) * source_score
-
-    def source_size_score(source_events: int, target_events: float, target_sources: int) -> float:
-        if target_sources <= 0 or target_events <= 0.0:
-            return 0.0
-        target_events_per_source = float(target_events) / max(float(target_sources), 1.0)
-        scale = max(target_events_per_source, 1.0)
-        return max(float(source_events) - target_events_per_source, 0.0) / scale
-
-    def pick_for_target(target_events: float, target_sources: int, min_remaining_sources: int) -> list[str]:
-        selected: list[str] = []
-        selected_events = 0
-        if target_events <= 0.0 and target_sources <= 0:
-            return selected
-        while len(remaining) > min_remaining_sources and (
-            selected_events < target_events or len(selected) < target_sources
-        ):
-            current_score = split_score(selected_events, len(selected), target_events, target_sources)
-            best_index = min(
-                range(len(remaining)),
-                key=lambda index: (
-                    split_score(
-                        selected_events + max(int(counts.get(remaining[index], 1)), 1),
-                        len(selected) + 1,
-                        target_events,
-                        target_sources,
-                    )
-                    + max(float(source_size_weight), 0.0)
-                    * source_size_score(
-                        max(int(counts.get(remaining[index], 1)), 1),
-                        target_events,
-                        target_sources,
-                    )
-                ),
-            )
-            best_count = max(int(counts.get(remaining[best_index], 1)), 1)
-            best_score = split_score(
-                selected_events + best_count,
-                len(selected) + 1,
-                target_events,
-                target_sources,
-            )
-            if selected and len(selected) >= target_sources and best_score >= current_score:
-                break
-            source_path = remaining.pop(best_index)
-            selected.append(source_path)
-            selected_events += best_count
-        return selected
-
-    test_sources = pick_for_target(
-        total_events * float(test_fraction),
-        target_source_count(source_test_fraction, min_remaining_sources=2),
-        min_remaining_sources=2,
-    )
-    val_sources = pick_for_target(
-        total_events * float(val_fraction),
-        target_source_count(source_val_fraction, min_remaining_sources=1),
-        min_remaining_sources=1,
-    )
+    n_test = split_count(source_test_fraction, default_fraction=test_fraction, reserve=2)
+    test_sources = remaining[:n_test]
+    remaining = remaining[n_test:]
+    n_val = split_count(source_val_fraction, default_fraction=val_fraction, reserve=1)
+    val_sources = remaining[:n_val]
+    remaining = remaining[n_val:]
     split_sources["test"].extend(test_sources)
     split_sources["val"].extend(val_sources)
     split_sources["train"].extend(remaining)
@@ -626,6 +558,7 @@ def split_indices_by_stratified_source_path(
         raise ValueError(
             "source_val_fraction and source_test_fraction must be non-negative and sum to less than 1"
         )
+    del min_group_sources
     source_to_indices: dict[str, list[int]] = {}
     source_stats: dict[str, dict[str, Any]] = {}
     if int(workers) > 1 and len(dataset) >= 1024 and len(dataset._path_lengths) > 1:
@@ -676,52 +609,17 @@ def split_indices_by_stratified_source_path(
         )
 
     rng = random.Random(seed)
-    pending = list(source_to_indices)
     split_sources = {"train": [], "val": [], "test": []}
-    source_event_counts = {source_path: len(indices) for source_path, indices in source_to_indices.items()}
-    for key_name in ("fine", "mid", "coarse", "broad"):
-        groups: dict[tuple[str, ...], list[str]] = {}
-        for source_path in pending:
-            groups.setdefault(source_keys[source_path][key_name], []).append(source_path)
-        next_pending: list[str] = []
-        for sources in groups.values():
-            if key_name == "broad" or len(sources) >= int(min_group_sources):
-                _assign_source_group(
-                    split_sources,
-                    sources,
-                    val_fraction,
-                    test_fraction,
-                    rng,
-                    source_event_counts=source_event_counts,
-                    source_val_fraction=source_val_fraction,
-                    source_test_fraction=source_test_fraction,
-                )
-            else:
-                next_pending.extend(sources)
-        pending = next_pending
-
-    if pending:
+    groups: dict[tuple[str, ...], list[str]] = {}
+    for source_path in source_to_indices:
+        groups.setdefault(source_keys[source_path]["fine"], []).append(source_path)
+    for sources in groups.values():
         _assign_source_group(
             split_sources,
-            pending,
+            sources,
             val_fraction,
             test_fraction,
             rng,
-            source_event_counts=source_event_counts,
-            source_val_fraction=source_val_fraction,
-            source_test_fraction=source_test_fraction,
-        )
-
-    if not split_sources["val"] or not split_sources["test"]:
-        all_sources = list(source_to_indices)
-        split_sources = {"train": [], "val": [], "test": []}
-        _assign_source_group(
-            split_sources,
-            all_sources,
-            val_fraction,
-            test_fraction,
-            rng,
-            source_event_counts=source_event_counts,
             source_val_fraction=source_val_fraction,
             source_test_fraction=source_test_fraction,
         )
