@@ -48,6 +48,9 @@ OPEN_RETRIES="${OPEN_RETRIES:-3}"
 OPEN_RETRY_DELAY="${OPEN_RETRY_DELAY:-1.0}"
 ENERGY_BIN_WIDTH="${ENERGY_BIN_WIDTH:-0.1}"
 ENERGY_SAMPLE_STRATIFY_PARTICLE="${ENERGY_SAMPLE_STRATIFY_PARTICLE:-1}"
+REFILL_ATTEMPTS="${REFILL_ATTEMPTS:-2}"
+REFILL_SAFETY_FACTOR="${REFILL_SAFETY_FACTOR:-1.25}"
+REFILL_MIN_EFFICIENCY="${REFILL_MIN_EFFICIENCY:-0.01}"
 BALANCE_CELL_PRESELECT="${BALANCE_CELL_PRESELECT:-8}"
 BALANCE_ZENITH_BIN_WIDTH_DEG="${BALANCE_ZENITH_BIN_WIDTH_DEG:-10}"
 BALANCE_AZIMUTH_BIN_WIDTH_DEG="${BALANCE_AZIMUTH_BIN_WIDTH_DEG:-30}"
@@ -166,6 +169,9 @@ echo "slurm_log=${SLURM_LOG_DIR}/%x_%j.log"
 echo "run_name=${RUN_NAME}"
 echo "graph_output=${GRAPH_OUTPUT}"
 echo "energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}"
+echo "refill_attempts=${REFILL_ATTEMPTS}"
+echo "refill_safety_factor=${REFILL_SAFETY_FACTOR}"
+echo "refill_min_efficiency=${REFILL_MIN_EFFICIENCY}"
 echo "export_workers=${EXPORT_WORKERS}"
 echo "summary_workers=${SUMMARY_WORKERS}"
 echo "make_input_distributions=${MAKE_INPUT_DISTRIBUTIONS}"
@@ -187,6 +193,9 @@ env UV_CACHE_DIR="${UV_CACHE_DIR}" uv sync --frozen
   --energy-sample-per-bin "${ENERGY_SAMPLE_PER_BIN}" \\
 ${particle_line}\
   --energy-bin-width "${ENERGY_BIN_WIDTH}" \\
+  --refill-attempts "${REFILL_ATTEMPTS}" \\
+  --refill-safety-factor "${REFILL_SAFETY_FACTOR}" \\
+  --refill-min-efficiency "${REFILL_MIN_EFFICIENCY}" \\
   --seed "${SEED}" \\
   --output-order "${OUTPUT_ORDER}" \\
   --output-locality-run-size "${OUTPUT_LOCALITY_RUN_SIZE}" \\

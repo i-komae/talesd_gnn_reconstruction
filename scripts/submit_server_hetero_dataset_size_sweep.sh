@@ -17,6 +17,9 @@ SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION:-0.10}"
 SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION:-0.45}"
 EXPORT_POOL_OVERDRAW_NUM="${EXPORT_POOL_OVERDRAW_NUM:-6}"
 EXPORT_POOL_OVERDRAW_DEN="${EXPORT_POOL_OVERDRAW_DEN:-5}"
+REFILL_ATTEMPTS="${REFILL_ATTEMPTS:-2}"
+REFILL_SAFETY_FACTOR="${REFILL_SAFETY_FACTOR:-1.25}"
+REFILL_MIN_EFFICIENCY="${REFILL_MIN_EFFICIENCY:-0.01}"
 
 IFS="," read -r -a size_array <<< "${SIZES}"
 
@@ -53,6 +56,9 @@ if [[ "${SUBMIT_EXPORTS}" == "1" ]]; then
     ENERGY_SAMPLE_PER_BIN="${pool_sample_per_bin}" \
     RUN_ID="${RUN_ID}" \
     RUN_NAME="${pool_dataset_name}" \
+    REFILL_ATTEMPTS="${REFILL_ATTEMPTS}" \
+    REFILL_SAFETY_FACTOR="${REFILL_SAFETY_FACTOR}" \
+    REFILL_MIN_EFFICIENCY="${REFILL_MIN_EFFICIENCY}" \
     VAL_FRACTION="${VAL_FRACTION}" \
     TEST_FRACTION="${TEST_FRACTION}" \
     SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION}" \
@@ -64,6 +70,9 @@ if [[ "${SUBMIT_EXPORTS}" == "1" ]]; then
       ENERGY_SAMPLE_PER_BIN="${pool_sample_per_bin}" \
       RUN_ID="${RUN_ID}" \
       RUN_NAME="${pool_dataset_name}" \
+      REFILL_ATTEMPTS="${REFILL_ATTEMPTS}" \
+      REFILL_SAFETY_FACTOR="${REFILL_SAFETY_FACTOR}" \
+      REFILL_MIN_EFFICIENCY="${REFILL_MIN_EFFICIENCY}" \
       VAL_FRACTION="${VAL_FRACTION}" \
       TEST_FRACTION="${TEST_FRACTION}" \
       SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION}" \
@@ -154,5 +163,6 @@ done
 printf "sweep_name=%s\n" "${SWEEP_NAME}" >&2
 printf "export_strategy=overdraw-pool-plus-reshard max_size=%s sizes=%s\n" "${max_size}" "${SIZES}" >&2
 printf "export_pool_overdraw: numerator=%s denominator=%s\n" "${EXPORT_POOL_OVERDRAW_NUM}" "${EXPORT_POOL_OVERDRAW_DEN}" >&2
+printf "export_refill: attempts=%s safety_factor=%s min_efficiency=%s\n" "${REFILL_ATTEMPTS}" "${REFILL_SAFETY_FACTOR}" "${REFILL_MIN_EFFICIENCY}" >&2
 printf "split_event_fractions: train=1-val-test val=%s test=%s\n" "${VAL_FRACTION}" "${TEST_FRACTION}" >&2
 printf "split_source_fractions: train=1-val-test val=%s test=%s\n" "${SOURCE_VAL_FRACTION}" "${SOURCE_TEST_FRACTION}" >&2

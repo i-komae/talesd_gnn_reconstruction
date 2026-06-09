@@ -338,6 +338,54 @@ def _hetero_output_bin_key_from_path(source_path: str, *, stratify_particle: boo
     return energy_code
 
 
+def _hetero_bin_key_label(bin_key: int | tuple[str, int] | str) -> str:
+    if isinstance(bin_key, tuple):
+        return f"{bin_key[0]}:{int(bin_key[1])}"
+    return str(bin_key)
+
+
+def _merge_selected_indices(target: dict[str, set[int]], source: dict[str, set[int]]) -> None:
+    for path, indices in source.items():
+        target.setdefault(path, set()).update(int(index) for index in indices)
+
+
+def _merge_count_dict(target: dict[str, int], source: dict[Any, Any]) -> None:
+    for key, value in source.items():
+        label = _hetero_bin_key_label(key)
+        target[label] = target.get(label, 0) + int(value)
+
+
+def _hetero_missing_bin_counts(
+    desired_by_bin: dict[str, int],
+    written_by_bin: dict[str, int],
+) -> dict[str, int]:
+    return {
+        str(bin_key): int(target) - int(written_by_bin.get(str(bin_key), 0))
+        for bin_key, target in desired_by_bin.items()
+        if int(target) > int(written_by_bin.get(str(bin_key), 0))
+    }
+
+
+def _hetero_refill_bin_targets(
+    desired_by_bin: dict[str, int],
+    written_by_bin: dict[str, int],
+    selected_by_bin: dict[str, int],
+    *,
+    safety_factor: float,
+    min_efficiency: float,
+) -> dict[str, int]:
+    safety = max(float(safety_factor), 1.0)
+    min_eff = min(max(float(min_efficiency), 1.0e-9), 1.0)
+    refill_targets: dict[str, int] = {}
+    for bin_key, missing in _hetero_missing_bin_counts(desired_by_bin, written_by_bin).items():
+        selected = max(int(selected_by_bin.get(bin_key, 0)), 0)
+        written = max(int(written_by_bin.get(bin_key, 0)), 0)
+        efficiency = float(written) / float(selected) if selected > 0 else 0.0
+        effective_efficiency = max(efficiency, min_eff)
+        refill_targets[bin_key] = int(math.ceil(float(missing) * safety / effective_efficiency))
+    return refill_targets
+
+
 def _ordered_selected_entries(
     entries: list[SelectedEntry],
     *,
@@ -1565,6 +1613,7 @@ def _write_selected_hetero_graph_shard(
     handle = None
     written = 0
     skipped = 0
+    graph_seen_by_bin: dict[str, int] = {}
     processed_blocks = 0
     processed_files = 0
     selected_total = len(entries)
@@ -1620,6 +1669,8 @@ def _write_selected_hetero_graph_shard(
                     handle = create_hetero_graph_file(output_path, config=shard_config)
                 write_hetero_graph(handle, written, graph)
                 written += 1
+                bin_label = _hetero_bin_key_label(_bin_key)
+                graph_seen_by_bin[bin_label] = graph_seen_by_bin.get(bin_label, 0) + 1
             now = time.perf_counter()
             if now - last_report >= interval:
                 _progress_write(
@@ -1647,6 +1698,7 @@ def _write_selected_hetero_graph_shard(
         "path": str(output_path) if written > 0 else None,
         "written": written,
         "skipped": skipped,
+        "graph_seen_by_bin": graph_seen_by_bin,
     }
 
 
@@ -1703,6 +1755,8 @@ def _iter_selected_hetero_shard_write_results(
     mc_calib_dir: Path | None,
     selected_indices_by_path: dict[str, set[int]],
     config: dict[str, Any],
+    *,
+    shard_start_index: int = 0,
 ) -> Iterator[dict[str, Any]]:
     selected_entries = _selected_entries_from_path_indices(
         inputs,
@@ -1718,7 +1772,7 @@ def _iter_selected_hetero_shard_write_results(
     chunks = _selected_entry_chunks(selected_entries, int(args.shard_size))
     payloads = [
         (
-            shard_index,
+            int(shard_start_index) + shard_index,
             entries,
             args.kind,
             args.cleaning,
@@ -2654,6 +2708,7 @@ def _allocate_hetero_source_group_quotas(
     per_bin: int,
     seed: int,
     stratify_particle: bool,
+    bin_targets: dict[str, int] | None = None,
 ) -> tuple[dict[str, int], dict[str, Any]]:
     groups_by_bin: dict[str, list[HeteroSourceGroupManifest]] = {}
     for group in groups.values():
@@ -2666,8 +2721,13 @@ def _allocate_hetero_source_group_quotas(
 
     quotas: dict[str, int] = {}
     by_bin: dict[str, Any] = {}
-    target = max(int(per_bin), 1)
+    default_target = max(int(per_bin), 1)
     for bin_key, bin_groups in sorted(groups_by_bin.items()):
+        target = default_target
+        if bin_targets is not None:
+            target = max(int(bin_targets.get(str(bin_key), 0)), 0)
+            if target <= 0:
+                continue
         ordered = sorted(bin_groups, key=lambda item: item.source_group)
         base = target // max(len(ordered), 1)
         remainder = target % max(len(ordered), 1)
@@ -2752,6 +2812,7 @@ def _select_hetero_events_for_source_group(
     *,
     quota: int,
     args: argparse.Namespace,
+    excluded_by_path: dict[str, set[int]] | None = None,
 ) -> dict[str, Any]:
     import dstio
 
@@ -2801,10 +2862,13 @@ def _select_hetero_events_for_source_group(
             raise OSError(f"failed to open DST: {file_info.path}")
         with dst_handle as dst:
             raw_events = 0
+            excluded = excluded_by_path.get(file_info.path, set()) if excluded_by_path is not None else set()
             for source_index, event in enumerate(dst):
                 if args.max_events is not None and raw_events >= int(args.max_events):
                     break
                 raw_events += 1
+                if int(source_index) in excluded:
+                    continue
                 rusdraw = event.get("rusdraw") or {}
                 rusdmc = event.get("rusdmc") or {}
                 date = int(rusdraw.get("yymmdd", 0) or 0)
@@ -2859,6 +2923,10 @@ def _select_hetero_events_for_source_group(
 def _build_source_group_balanced_hetero_selection(
     inputs: list[str],
     args: argparse.Namespace,
+    *,
+    bin_targets: dict[str, int] | None = None,
+    excluded_by_path: dict[str, set[int]] | None = None,
+    seed_offset: int = 0,
 ) -> tuple[dict[str, set[int]], dict[str, Any]]:
     groups, scan_summary = _merge_hetero_source_file_manifests(
         _iter_hetero_source_file_manifest_results(inputs, args)
@@ -2866,8 +2934,9 @@ def _build_source_group_balanced_hetero_selection(
     quotas, quota_summary = _allocate_hetero_source_group_quotas(
         groups,
         per_bin=max(int(args.energy_sample_per_bin), 1),
-        seed=int(args.seed),
+        seed=int(args.seed) + int(seed_offset),
         stratify_particle=bool(args.energy_sample_stratify_particle),
+        bin_targets=bin_targets,
     )
     selected_by_path: dict[str, set[int]] = {}
     selected_event_dates: dict[str, int] = {}
@@ -2881,7 +2950,12 @@ def _build_source_group_balanced_hetero_selection(
         total=len(groups),
     )
     for group in iterator:
-        result = _select_hetero_events_for_source_group(group, quota=int(quotas.get(group.source_group, 0)), args=args)
+        result = _select_hetero_events_for_source_group(
+            group,
+            quota=int(quotas.get(group.source_group, 0)),
+            args=args,
+            excluded_by_path=excluded_by_path,
+        )
         for path, indices in result["selected_by_path"].items():
             selected_by_path.setdefault(path, set()).update(indices)
         _merge_counter(selected_event_dates, result["selected_event_dates"])
@@ -2908,6 +2982,9 @@ def _build_source_group_balanced_hetero_selection(
             "balance_core_bin_width_km": float(args.balance_core_bin_width_km),
             "balance_time_bin_width_sec": int(args.balance_time_bin_width_sec),
             "seed": int(args.seed),
+            "seed_offset": int(seed_offset),
+            "bin_targets": bin_targets,
+            "excluded_events": sum(len(indices) for indices in (excluded_by_path or {}).values()),
         },
         "scan": scan_summary,
         "quota": quota_summary,
@@ -3182,6 +3259,9 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
         "write_block_size": args.write_block_size,
         "workers": args.workers,
         "worker_max_files": args.worker_max_files,
+        "refill_attempts": args.refill_attempts,
+        "refill_safety_factor": args.refill_safety_factor,
+        "refill_min_efficiency": args.refill_min_efficiency,
         "shard_size": args.shard_size,
         "open_retries": args.open_retries,
         "open_retry_delay": args.open_retry_delay,
@@ -3192,6 +3272,10 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
         if args.kind not in {"mc", "auto"}:
             raise ValueError("balanced energy sampling for export-hetero currently requires MC rusdraw/rusdmc input")
         selected_by_path, selection_summary = _build_source_group_balanced_hetero_selection(inputs, args)
+        desired_by_bin = {
+            str(bin_key): int(row.get("target_events", int(args.energy_sample_per_bin)))
+            for bin_key, row in selection_summary["quota"]["by_bin"].items()
+        }
         selected_event_dates = selection_summary["selected"]["by_date"]
         if args.kind == "mc" and mc_calib_dir is not None:
             _validate_mc_calibration_dates(
@@ -3205,11 +3289,6 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
         config["scan_hit_events"] = int(scan_summary.get("eligible_events", 0))
         config["scan_missing_calibration_events"] = int(scan_summary.get("missing_calibration_events", 0))
         config["scan_selected_files"] = len(selected_by_path)
-        if args.selection_summary:
-            summary_path = Path(args.selection_summary).expanduser()
-            summary_path.parent.mkdir(parents=True, exist_ok=True)
-            summary_path.write_text(json.dumps(selection_summary, indent=2, sort_keys=True) + "\n")
-            _progress_write(f"hetero selection summary: {summary_path}")
         selected_event_count = sum(len(indices) for indices in selected_by_path.values())
         _progress_write(
             "hetero balanced preselection: "
@@ -3219,30 +3298,159 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
             f"missing_calibration_events={config['scan_missing_calibration_events']}"
         )
         if args.dry_run_selection:
+            if args.selection_summary:
+                summary_path = Path(args.selection_summary).expanduser()
+                summary_path.parent.mkdir(parents=True, exist_ok=True)
+                summary_path.write_text(json.dumps(selection_summary, indent=2, sort_keys=True) + "\n")
+                _progress_write(f"hetero selection summary: {summary_path}")
             print("dry-run selection complete; no hetero HDF5 was written")
             return
         if int(args.shard_size) > 0 and int(args.workers) > 1:
             config["balanced_selection_parallel_shard_write"] = True
             config["balanced_selection_output_ordered"] = True
+            config["balanced_refill_enabled"] = True
             written_total = 0
             skipped_total = 0
             written_path_items: list[tuple[int, Path]] = []
-            for result in _iter_selected_hetero_shard_write_results(
-                inputs,
-                args,
-                const_dst,
-                mc_calib_dir,
-                selected_by_path,
-                config,
-            ):
-                written_total += int(result["written"])
-                skipped_total += int(result["skipped"])
-                if result.get("path"):
-                    written_path_items.append((int(result["shard_index"]), Path(str(result["path"]))))
+            written_by_bin: dict[str, int] = {}
+            selected_by_bin_total: dict[str, int] = {}
+            selected_dates_total: dict[str, int] = {}
+            attempted_by_path: dict[str, set[int]] = {}
+            refill_history: list[dict[str, Any]] = []
+            selection_attempts: list[dict[str, Any]] = [selection_summary]
+            current_selected_by_path = selected_by_path
+            current_selection_summary = selection_summary
+            current_bin_targets: dict[str, int] | None = None
+            shard_start_index = 0
+
+            for attempt_index in range(max(int(args.refill_attempts), 0) + 1):
+                if attempt_index > 0:
+                    current_selection_summary = selection_attempts[-1]
+                _merge_selected_indices(attempted_by_path, current_selected_by_path)
+                _merge_count_dict(selected_by_bin_total, current_selection_summary["selected"]["by_filename_energy_bin"])
+                _merge_count_dict(selected_dates_total, current_selection_summary["selected"]["by_date"])
+
+                attempt_config = dict(config)
+                attempt_config["balanced_selection_attempt"] = int(attempt_index)
+                attempt_config["balanced_selection_summary"] = current_selection_summary
+                attempt_config["balanced_refill_bin_targets"] = current_bin_targets
+                attempt_written_by_bin: dict[str, int] = {}
+                attempt_written_total = 0
+                attempt_skipped_total = 0
+                last_shard_index = shard_start_index - 1
+                for result in _iter_selected_hetero_shard_write_results(
+                    inputs,
+                    args,
+                    const_dst,
+                    mc_calib_dir,
+                    current_selected_by_path,
+                    attempt_config,
+                    shard_start_index=shard_start_index,
+                ):
+                    result_written = int(result["written"])
+                    result_skipped = int(result["skipped"])
+                    attempt_written_total += result_written
+                    attempt_skipped_total += result_skipped
+                    written_total += result_written
+                    skipped_total += result_skipped
+                    last_shard_index = max(last_shard_index, int(result["shard_index"]))
+                    _merge_count_dict(attempt_written_by_bin, result.get("graph_seen_by_bin", {}))
+                    if result.get("path"):
+                        written_path_items.append((int(result["shard_index"]), Path(str(result["path"]))))
+                shard_start_index = max(shard_start_index, last_shard_index + 1)
+                _merge_count_dict(written_by_bin, attempt_written_by_bin)
+                missing_by_bin = _hetero_missing_bin_counts(desired_by_bin, written_by_bin)
+                refill_history.append(
+                    {
+                        "attempt": int(attempt_index),
+                        "bin_targets": current_bin_targets,
+                        "selected_events": sum(len(indices) for indices in current_selected_by_path.values()),
+                        "selected_by_bin": current_selection_summary["selected"]["by_filename_energy_bin"],
+                        "written_events": attempt_written_total,
+                        "skipped_events": attempt_skipped_total,
+                        "written_by_bin": dict(sorted(attempt_written_by_bin.items())),
+                        "cumulative_written_by_bin": dict(sorted(written_by_bin.items())),
+                        "missing_by_bin": dict(sorted(missing_by_bin.items())),
+                    }
+                )
+                _progress_write(
+                    "hetero balanced write attempt "
+                    f"{attempt_index}: written={attempt_written_total} skipped={attempt_skipped_total} "
+                    f"missing_bins={len(missing_by_bin)}"
+                )
+                if not missing_by_bin:
+                    break
+                if attempt_index >= max(int(args.refill_attempts), 0):
+                    break
+                current_bin_targets = _hetero_refill_bin_targets(
+                    desired_by_bin,
+                    written_by_bin,
+                    selected_by_bin_total,
+                    safety_factor=float(args.refill_safety_factor),
+                    min_efficiency=float(args.refill_min_efficiency),
+                )
+                _progress_write(
+                    "hetero balanced refill selection: "
+                    f"attempt={attempt_index + 1} bins={len(current_bin_targets)} "
+                    f"targets={dict(sorted(current_bin_targets.items()))}"
+                )
+                current_selected_by_path, next_selection_summary = _build_source_group_balanced_hetero_selection(
+                    inputs,
+                    args,
+                    bin_targets=current_bin_targets,
+                    excluded_by_path=attempted_by_path,
+                    seed_offset=attempt_index + 1,
+                )
+                if args.kind == "mc" and mc_calib_dir is not None:
+                    _validate_mc_calibration_dates(
+                        mc_calib_dir,
+                        {int(date): count for date, count in next_selection_summary["selected"]["by_date"].items()},
+                        context=f"hetero balanced refill attempt {attempt_index + 1}",
+                    )
+                selection_attempts.append(next_selection_summary)
+                if sum(len(indices) for indices in current_selected_by_path.values()) <= 0:
+                    _progress_write("hetero balanced refill selection returned no new events")
+                    break
+
+            final_missing_by_bin = _hetero_missing_bin_counts(desired_by_bin, written_by_bin)
+            final_selection_summary = dict(selection_summary)
+            final_selection_summary["combined_selected"] = {
+                "events": sum(len(indices) for indices in attempted_by_path.values()),
+                "files": len(attempted_by_path),
+                "by_filename_energy_bin": dict(sorted(selected_by_bin_total.items())),
+                "by_date": dict(sorted(selected_dates_total.items())),
+            }
+            final_selection_summary["write"] = {
+                "desired_by_bin": dict(sorted(desired_by_bin.items())),
+                "written_by_bin": dict(sorted(written_by_bin.items())),
+                "missing_by_bin": dict(sorted(final_missing_by_bin.items())),
+                "written_events": int(written_total),
+                "skipped_events": int(skipped_total),
+                "refill_history": refill_history,
+            }
+            final_selection_summary["selection_attempts"] = selection_attempts
+            config["balanced_selection_summary"] = final_selection_summary
+            config["balanced_graph_seen_by_bin"] = dict(sorted(written_by_bin.items()))
+            config["balanced_missing_by_bin"] = dict(sorted(final_missing_by_bin.items()))
+            if args.selection_summary:
+                summary_path = Path(args.selection_summary).expanduser()
+                summary_path.parent.mkdir(parents=True, exist_ok=True)
+                summary_path.write_text(json.dumps(final_selection_summary, indent=2, sort_keys=True) + "\n")
+                _progress_write(f"hetero selection summary: {summary_path}")
+            if final_missing_by_bin:
+                raise SystemExit(
+                    "hetero balanced export is short after refill attempts: "
+                    + json.dumps(dict(sorted(final_missing_by_bin.items())), sort_keys=True)
+                )
             written_paths = [path for _index, path in sorted(written_path_items, key=lambda item: item[0])]
             targets = ", ".join(str(path) for path in written_paths) if written_paths else str(args.output)
             print(f"wrote {written_total} hetero graphs to {targets} (skipped {skipped_total} selected events)")
             return
+        if max(int(args.refill_attempts), 0) > 0:
+            raise SystemExit(
+                "hetero balanced refill requires --shard-size > 0 and --workers > 1; "
+                "single-file export cannot verify written graph counts by bin before success"
+            )
         selected_entries = _selected_entries_from_path_indices(
             inputs,
             selected_by_path,
@@ -3807,6 +4015,9 @@ def build_parser() -> argparse.ArgumentParser:
     export_hetero.add_argument("--energy-sample-per-bin", type=int, default=None, help="DAT filename energy codeごとに残す最大hetero graph数。source group均等割りを使う")
     export_hetero.add_argument("--energy-sample-stratify-particle", action="store_true", help="energy samplingをproton/iron別のDAT filename energy codeで行う")
     export_hetero.add_argument("--energy-bin-width", type=float, default=0.1, help="旧event-level sampling用。source-group manifest方式ではselectionに使わない")
+    export_hetero.add_argument("--refill-attempts", type=int, default=2, help="balanced exportで実際に書けたgraph数が不足したbinを追加選択する回数")
+    export_hetero.add_argument("--refill-safety-factor", type=float, default=1.25, help="不足binの追加選択数に掛ける安全係数")
+    export_hetero.add_argument("--refill-min-efficiency", type=float, default=0.01, help="追加選択数を見積もる時の最小 graph 化効率")
     export_hetero.add_argument("--seed", type=int, default=12345, help="balanced selectionのdeterministic seed")
     export_hetero.add_argument("--workers", type=int, default=1, help="DST metadata scanに使うfile worker数")
     export_hetero.add_argument("--worker-max-files", type=int, default=DEFAULT_WORKER_MAX_FILES, help="scan workerをNファイル処理ごとに再起動する。0なら無効")

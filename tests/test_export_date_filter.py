@@ -12,6 +12,7 @@ from talesd_gnn_reconstruction.cli import (
     _allocate_hetero_source_group_quotas,
     _dat_tag_from_path,
     _energy_bin_code_from_dat_tag,
+    _hetero_refill_bin_targets,
     _hetero_selection_summary,
     _interleaved_selected_entries,
     _merge_candidate_reservoirs,
@@ -215,6 +216,28 @@ class ExportDateFilterTest(unittest.TestCase):
         self.assertEqual(sum(quotas.values()), 10)
         self.assertEqual(max(quotas.values()) - min(quotas.values()), 1)
         self.assertEqual(summary["by_bin"]["proton:16"]["source_groups"], 3)
+
+    def test_hetero_refill_targets_use_actual_write_efficiency(self) -> None:
+        targets = _hetero_refill_bin_targets(
+            {"proton:16": 100000},
+            {"proton:16": 1490},
+            {"proton:16": 100000},
+            safety_factor=1.25,
+            min_efficiency=0.01,
+        )
+
+        self.assertEqual(targets["proton:16"], 8264262)
+
+    def test_hetero_refill_targets_use_min_efficiency_when_no_graphs_written(self) -> None:
+        targets = _hetero_refill_bin_targets(
+            {"proton:16": 100000},
+            {"proton:16": 0},
+            {"proton:16": 100000},
+            safety_factor=1.0,
+            min_efficiency=0.01,
+        )
+
+        self.assertEqual(targets["proton:16"], 10000000)
 
     def test_hetero_cell_quotas_follow_cell_counts(self) -> None:
         quotas = _allocate_cell_quotas(
