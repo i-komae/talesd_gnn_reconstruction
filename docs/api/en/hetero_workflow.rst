@@ -63,6 +63,14 @@ and ``detector_ising_removed_pulse_count``. These distinguish a detector with
 at least one Ising-kept pulse from a detector that only has Ising-rejected
 candidate pulses. The rejected pulse nodes are still kept as ML input.
 
+In the same v3 schema, ``detector_trigger_usec_rel`` keeps its historical name
+for column compatibility, but its value is the detector node time: the first
+valid attached pulse rise time relative to the first valid pulse in the event.
+It is not the detector waveform start time. No-signal live detectors carry
+``detector_trigger_usec_rel = 0`` with ``detector_arrival_time_valid = 0``.
+When waveform timing is needed, use ``pulse_detector_index`` and
+``pulse_bounds`` to relate each pulse to the detector waveform.
+
 The core-relative pulse features are valid only when the Ising reference core exists.
 Training export should therefore use ``--require-reference-core`` unless a separate diagnostic dataset is being made.
 

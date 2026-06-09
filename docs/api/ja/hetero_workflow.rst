@@ -62,6 +62,15 @@ v3 では detector-level の Ising summary column として
 これにより、Ising-kept pulse を持つ detector と、Ising rejected candidate pulse だけを持つ detector を区別します。
 rejected pulse node は ML input から hard drop しません。
 
+同じ v3 schema の ``detector_trigger_usec_rel`` は、互換性のため名前を維持していますが、
+値の意味は detector node time です。その detector に属する最初の有効 pulse の立ち上がり時刻を、
+event 内の最初の有効 pulse からの相対時刻にした値です。
+detector waveform の開始時刻ではありません。
+no-signal live detector では ``detector_trigger_usec_rel = 0`` とし、
+``detector_arrival_time_valid = 0`` で無効を示します。
+waveform の時刻対応が必要な場合は、``pulse_detector_index`` と ``pulse_bounds`` で
+pulse と detector waveform を対応させます。
+
 core-relative pulse feature は Ising reference core がある時だけ有効です。
 そのため、学習用 export では通常 ``--require-reference-core`` を使います。
 

@@ -102,6 +102,13 @@ features. ``detector_context_features`` are readout and calibration context.
 Keeping them separate makes it possible to include, remove, or ablate context
 without silently mixing it with shower features.
 
+Within schema v3, ``detector_trigger_usec_rel`` is a compatibility name. The
+value is used as the detector node's representative arrival time: the first
+valid attached pulse rise time relative to the first valid pulse in the event.
+It is not used as the detector waveform start time. No-signal live detectors
+have ``detector_arrival_time_valid = 0`` and a zero value in this column, so the
+validity flag must be checked when interpreting detector timing.
+
 ``detector_waveforms`` are full detector-level calibrated VEM waveforms. They
 are not duplicated on pulse nodes. A pulse points back to its detector with
 ``pulse_detector_index`` and records the relevant time window through
