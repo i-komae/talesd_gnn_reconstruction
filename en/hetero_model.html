@@ -450,6 +450,12 @@ carry different fields because they represent different physical objects.</p>
 features. <code class="docutils literal notranslate"><span class="pre">detector_context_features</span></code> are readout and calibration context.
 Keeping them separate makes it possible to include, remove, or ablate context
 without silently mixing it with shower features.</p>
+<p>Within schema v3, <code class="docutils literal notranslate"><span class="pre">detector_trigger_usec_rel</span></code> is a compatibility name. The
+value is used as the detector node's representative arrival time: the first
+valid attached pulse rise time relative to the first valid pulse in the event.
+It is not used as the detector waveform start time. No-signal live detectors
+have <code class="docutils literal notranslate"><span class="pre">detector_arrival_time_valid</span> <span class="pre">=</span> <span class="pre">0</span></code> and a zero value in this column, so the
+validity flag must be checked when interpreting detector timing.</p>
 <p><code class="docutils literal notranslate"><span class="pre">detector_waveforms</span></code> are full detector-level calibrated VEM waveforms. They
 are not duplicated on pulse nodes. A pulse points back to its detector with
 <code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code> and records the relevant time window through

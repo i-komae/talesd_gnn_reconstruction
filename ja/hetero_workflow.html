@@ -409,6 +409,14 @@ relation 定義の ablation が必要な場合は、<code class="docutils litera
 <code class="docutils literal notranslate"><span class="pre">detector_ising_removed_pulse_count</span></code> が追加されています。
 これにより、Ising-kept pulse を持つ detector と、Ising rejected candidate pulse だけを持つ detector を区別します。
 rejected pulse node は ML input から hard drop しません。</p>
+<p>同じ v3 schema の <code class="docutils literal notranslate"><span class="pre">detector_trigger_usec_rel</span></code> は、互換性のため名前を維持していますが、
+値の意味は detector node time です。その detector に属する最初の有効 pulse の立ち上がり時刻を、
+event 内の最初の有効 pulse からの相対時刻にした値です。
+detector waveform の開始時刻ではありません。
+no-signal live detector では <code class="docutils literal notranslate"><span class="pre">detector_trigger_usec_rel</span> <span class="pre">=</span> <span class="pre">0</span></code> とし、
+<code class="docutils literal notranslate"><span class="pre">detector_arrival_time_valid</span> <span class="pre">=</span> <span class="pre">0</span></code> で無効を示します。
+waveform の時刻対応が必要な場合は、<code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code> と <code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code> で
+pulse と detector waveform を対応させます。</p>
 <p>core-relative pulse feature は Ising reference core がある時だけ有効です。
 そのため、学習用 export では通常 <code class="docutils literal notranslate"><span class="pre">--require-reference-core</span></code> を使います。</p>
 </section>
