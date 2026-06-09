@@ -46,8 +46,8 @@ One event as a heterogeneous data object
 ----------------------------------------
 
 PyG represents heterogeneous graphs with separate node stores and edge stores.
-The TALE-SD graph uses the same idea. One event has two node types and three
-relation types:
+The TALE-SD graph uses the same idea. One event has two node types and seven
+v2 relation types:
 
 .. code-block:: text
 
@@ -56,9 +56,13 @@ relation types:
      pulse
 
    edge types:
-     ("pulse", "interacts", "pulse")
+     ("pulse", "same_detector_next", "pulse")
+     ("pulse", "same_detector_prev", "pulse")
+     ("pulse", "near_space", "pulse")
+     ("pulse", "time_causal", "pulse")
      ("detector", "near", "detector")
      ("detector", "observes", "pulse")
+     ("pulse", "observed_by", "detector")
 
 The production training path uses PyG ``HeteroData`` for batching. The HDF5
 dataset returns one ``HeteroData`` object per event, and
@@ -83,12 +87,9 @@ tensor dictionary directly. This is the actual structure built by
    data["pulse"].detector_index = tensors["pulse"]["detector_index"]
    data["pulse"].pulse_bounds = tensors["pulse"]["pulse_bounds"]
 
-   data["pulse", "interacts", "pulse"].edge_index = ...
-   data["pulse", "interacts", "pulse"].edge_attr = ...
-   data["detector", "near", "detector"].edge_index = ...
-   data["detector", "near", "detector"].edge_attr = ...
-   data["detector", "observes", "pulse"].edge_index = ...
-   data["detector", "observes", "pulse"].edge_attr = ...
+   for relation, edge_type in EDGE_TYPE_BY_RELATION.items():
+       data[edge_type].edge_index = tensors["edge_index_by_type"][relation]
+       data[edge_type].edge_attr = tensors["edge_features_by_type"][relation]
 
 This is not a single homogeneous feature matrix. Detector nodes and pulse nodes
 carry different fields because they represent different physical objects.

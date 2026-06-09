@@ -361,5 +361,5 @@ uv run talesd-gnn visualize \
 - waveform処理は `JAIDATALESDAnalyzer.java` と既存 `coincidence_analysis/talecoin/reconstruction.py` を参考に、`SDPreAnalysis` 相当のpulse searchと上下層coincidenceをPythonで実装しています。
 - MCの `rusdraw` は `talesdcalibev` に似た擬似bankへ変換します。検出器位置は `talesdconst_pass2.dst` から補い、pedestal/MIP換算係数は `--mc-calib-dir` の外部校正から取得します。`rusdraw` 内の値は校正recordがない場合の旧式の補助経路であり、通常のMC exportでは使いません。
 - dataの `talesdcalibev` はbank内の `posX/posY/posZ`、pedestal、MIP変換係数をそのまま使います。
-- GNNは `torch-geometric` を使わず、PyTorchだけでpulse集合poolingとedge message passingを実装しています。依存関係を単純にし、TALE-SD固有のpulse/edge featureを直接扱うためです。
+- 旧 homogeneous GNN は `torch-geometric` を使わず、PyTorchだけでpulse集合poolingとedge message passingを実装しています。一方、現行 heterogeneous 経路では PyG `HeteroData` をbatch化に使い、model forward内で明示的なtensor dictへ戻します。
 - この初期版は教師あり回帰です。実データで性能評価するには、まずMCで十分に学習し、既存のTALE-SD再構成結果やハイブリッド再構成との比較が必要です。

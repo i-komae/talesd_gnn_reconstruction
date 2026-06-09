@@ -30,7 +30,7 @@ Ising-kept pulse candidate と Ising-rejected pulse candidate はどちらも ML
    detector-detector、pulse-pulse、detector-pulse relation は別 edge type です。Ising rejected pulse candidate は hard drop せず、annotation付きで入力に残します。
 
 ``dstio.tale.graph.iter_graphs`` は
-``tale_sd_hetero_ising_pulse_detector_graph_v1`` の ``GraphEvent`` を返します。
+``tale_sd_hetero_ising_pulse_detector_graph_v2`` の ``GraphEvent`` を返します。
 ML graph の標準は ``node_policy="all_candidates_with_ising"`` です。
 Ising で rejected になった pulse candidate も graph から消さず、Ising annotation feature を持たせます。
 ``node_policy="ising_kept"`` は reconstruction-cleaned subset が必要な時だけ使います。

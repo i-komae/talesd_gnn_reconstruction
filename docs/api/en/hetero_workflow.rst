@@ -30,7 +30,7 @@ Both Ising-kept and Ising-rejected pulse candidates remain present in the ML gra
    Detector-detector, pulse-pulse, and detector-pulse relations are separate edge types. Ising-rejected pulse candidates are annotated and kept as input rather than hard-dropped.
 
 ``dstio.tale.graph.iter_graphs`` emits ``GraphEvent`` objects using
-``tale_sd_hetero_ising_pulse_detector_graph_v1``.
+``tale_sd_hetero_ising_pulse_detector_graph_v2``.
 The default ML graph policy is ``node_policy="all_candidates_with_ising"``:
 Ising-rejected pulse candidates remain in the graph and carry Ising annotation features.
 Use ``node_policy="ising_kept"`` only for reconstruction-cleaned subsets.
