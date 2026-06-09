@@ -375,7 +375,7 @@ Both Ising-kept and Ising-rejected pulse candidates remain present in the ML gra
 </figcaption>
 </figure>
 <p><code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.iter_graphs</span></code> emits <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> objects using
-<code class="docutils literal notranslate"><span class="pre">tale_sd_hetero_ising_pulse_detector_graph_v2</span></code>.
+<code class="docutils literal notranslate"><span class="pre">tale_sd_hetero_ising_pulse_detector_graph_v3</span></code>.
 The default ML graph policy is <code class="docutils literal notranslate"><span class="pre">node_policy=&quot;all_candidates_with_ising&quot;</span></code>:
 Ising-rejected pulse candidates remain in the graph and carry Ising annotation features.
 Use <code class="docutils literal notranslate"><span class="pre">node_policy=&quot;ising_kept&quot;</span></code> only for reconstruction-cleaned subsets.</p>
@@ -398,13 +398,18 @@ Use <code class="docutils literal notranslate"><span class="pre">node_policy=&qu
 </tr>
 </tbody>
 </table>
-<p>In the v2 schema, <code class="docutils literal notranslate"><span class="pre">pulse__time_causal__pulse</span></code> is not a loose all-distance
+<p>In the v3 schema, <code class="docutils literal notranslate"><span class="pre">pulse__time_causal__pulse</span></code> is not a loose all-distance
 compatible-pair relation. It is the near-space subset with
 <code class="docutils literal notranslate"><span class="pre">distance</span> <span class="pre">&lt;=</span> <span class="pre">1.5</span> <span class="pre">km</span></code>, <code class="docutils literal notranslate"><span class="pre">abs(dt)</span> <span class="pre">&lt;=</span> <span class="pre">distance</span> <span class="pre">/</span> <span class="pre">c</span> <span class="pre">+</span> <span class="pre">2</span> <span class="pre">FADC</span> <span class="pre">bins</span></code>, and Ising
 <code class="docutils literal notranslate"><span class="pre">raw_weight</span> <span class="pre">&gt;=</span> <span class="pre">0.2</span></code>. This relation still needs a density check on each new
 dataset. The GNN code does not create, reconnect, or remove graph edges; any
 relation-definition ablation must be produced by <code class="docutils literal notranslate"><span class="pre">dstio</span></code> / <code class="docutils literal notranslate"><span class="pre">export-hetero</span></code>
 as a separate graph dataset.</p>
+<p>Schema v3 also adds detector-level Ising summary columns:
+<code class="docutils literal notranslate"><span class="pre">detector_has_ising_kept_pulse</span></code>, <code class="docutils literal notranslate"><span class="pre">detector_ising_kept_pulse_count</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">detector_ising_removed_pulse_count</span></code>. These distinguish a detector with
+at least one Ising-kept pulse from a detector that only has Ising-rejected
+candidate pulses. The rejected pulse nodes are still kept as ML input.</p>
 <p>The core-relative pulse features are valid only when the Ising reference core exists.
 Training export should therefore use <code class="docutils literal notranslate"><span class="pre">--require-reference-core</span></code> unless a separate diagnostic dataset is being made.</p>
 </section>

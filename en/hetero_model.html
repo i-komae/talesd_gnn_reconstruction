@@ -401,7 +401,7 @@ type-wise readout produces one event vector.</span><a class="headerlink" href="#
 <h2>One event as a heterogeneous data object<a class="headerlink" href="#one-event-as-a-heterogeneous-data-object" title="Link to this heading"></a></h2>
 <p>PyG represents heterogeneous graphs with separate node stores and edge stores.
 The TALE-SD graph uses the same idea. One event has two node types and seven
-v2 relation types:</p>
+v3 relation types:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>node types:
   detector
   pulse
@@ -453,10 +453,16 @@ without silently mixing it with shower features.</p>
 <p><code class="docutils literal notranslate"><span class="pre">detector_waveforms</span></code> are full detector-level calibrated VEM waveforms. They
 are not duplicated on pulse nodes. A pulse points back to its detector with
 <code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code> and records the relevant time window through
-<code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code>. In schema v2, no-signal live detectors have
+<code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code>. In schema v3, no-signal live detectors have
 <code class="docutils literal notranslate"><span class="pre">detector_waveform_valid</span> <span class="pre">=</span> <span class="pre">0</span></code>. Their waveform arrays are zero-filled by
 <code class="docutils literal notranslate"><span class="pre">dstio</span></code> and the model masks the waveform embedding to zero before it is
 concatenated with detector scalar/context embeddings.</p>
+<p>Schema v3 detector features also include
+<code class="docutils literal notranslate"><span class="pre">detector_has_ising_kept_pulse</span></code>, <code class="docutils literal notranslate"><span class="pre">detector_ising_kept_pulse_count</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">detector_ising_removed_pulse_count</span></code>. These values are detector-level
+summaries of the retained pulse nodes. They prevent an Ising-rejected-only
+detector from being treated the same as a detector with at least one
+Ising-kept pulse.</p>
 <p><code class="docutils literal notranslate"><span class="pre">pulse_features</span></code> contain pulse timing, charge, core-relative coordinates when
 the Ising reference core exists, and Ising annotations. Ising-rejected pulse
 candidates are kept as input because delayed pulses, waveform tails, and
@@ -465,7 +471,7 @@ multi-pulse structure are physically relevant for mass and energy.</p>
 example, pulse-pulse edges include timing differences, spatial separation, and
 Ising weights. These are not just labels; they are numerical inputs to the
 attention calculation.</p>
-<p>The v2 pulse-pulse relations are deliberately separated:</p>
+<p>The v3 pulse-pulse relations are deliberately separated:</p>
 <dl class="simple">
 <dt><code class="docutils literal notranslate"><span class="pre">pulse__same_detector_next__pulse</span></code> / <code class="docutils literal notranslate"><span class="pre">pulse__same_detector_prev__pulse</span></code></dt><dd><p>Consecutive pulses in the same detector, with explicit forward and reverse
 time-order relations.</p>

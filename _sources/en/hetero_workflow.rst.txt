@@ -30,7 +30,7 @@ Both Ising-kept and Ising-rejected pulse candidates remain present in the ML gra
    Detector-detector, pulse-pulse, and detector-pulse relations are separate edge types. Ising-rejected pulse candidates are annotated and kept as input rather than hard-dropped.
 
 ``dstio.tale.graph.iter_graphs`` emits ``GraphEvent`` objects using
-``tale_sd_hetero_ising_pulse_detector_graph_v2``.
+``tale_sd_hetero_ising_pulse_detector_graph_v3``.
 The default ML graph policy is ``node_policy="all_candidates_with_ising"``:
 Ising-rejected pulse candidates remain in the graph and carry Ising annotation features.
 Use ``node_policy="ising_kept"`` only for reconstruction-cleaned subsets.
@@ -49,13 +49,19 @@ The node and relation types are:
    * - Relations
      - ``pulse__same_detector_next__pulse``, ``pulse__same_detector_prev__pulse``, ``pulse__near_space__pulse``, ``pulse__time_causal__pulse``, ``detector__near__detector``, ``detector__observes__pulse``, ``pulse__observed_by__detector``
 
-In the v2 schema, ``pulse__time_causal__pulse`` is not a loose all-distance
+In the v3 schema, ``pulse__time_causal__pulse`` is not a loose all-distance
 compatible-pair relation. It is the near-space subset with
 ``distance <= 1.5 km``, ``abs(dt) <= distance / c + 2 FADC bins``, and Ising
 ``raw_weight >= 0.2``. This relation still needs a density check on each new
 dataset. The GNN code does not create, reconnect, or remove graph edges; any
 relation-definition ablation must be produced by ``dstio`` / ``export-hetero``
 as a separate graph dataset.
+
+Schema v3 also adds detector-level Ising summary columns:
+``detector_has_ising_kept_pulse``, ``detector_ising_kept_pulse_count``,
+and ``detector_ising_removed_pulse_count``. These distinguish a detector with
+at least one Ising-kept pulse from a detector that only has Ising-rejected
+candidate pulses. The rejected pulse nodes are still kept as ML input.
 
 The core-relative pulse features are valid only when the Ising reference core exists.
 Training export should therefore use ``--require-reference-core`` unless a separate diagnostic dataset is being made.
