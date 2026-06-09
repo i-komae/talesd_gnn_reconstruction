@@ -97,7 +97,7 @@
   <line x1="880" y1="165" x2="954" y2="165" class="legend-det"/>
   <text x="972" y="170" class="small">detector__near__detector</text>
   <line x1="880" y1="197" x2="954" y2="197" class="legend-pulse"/>
-  <text x="972" y="202" class="small">pulse__interacts__pulse</text>
+  <text x="972" y="202" class="small">v2 pulse-pulse relations</text>
   <line x1="880" y1="229" x2="954" y2="229" class="legend-observe"/>
   <text x="972" y="234" class="small">detector__observes__pulse</text>
 
