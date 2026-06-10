@@ -100,15 +100,15 @@ Balanced heterogeneous HDF5 size sweep
 
 Use ``scripts/submit_server_hetero_dataset_size_sweep.sh`` to make the next balanced datasets.
 The default final sizes are ``50000``, ``20000``, and ``10000`` selected events per true-energy/particle bin.
-The script first writes one overdrawn pool dataset, then derives the three final HDF5 datasets by resharding/subsampling that pool.
+The script writes the largest requested dataset directly, then derives only the smaller HDF5 datasets by resharding/subsampling that largest dataset.
 The balanced export preselects candidates by ``DAT??????`` source group, zenith bin, azimuth bin, core-position bin, and event-time bin, then writes a selection summary and a train/validation/test split distribution summary.
 
 The default split for this sweep is source-group based ``45/10/45`` for train/validation/test.
 The same ``DAT??????`` source group is not shared across splits.
 Validation is kept as an independent source-group holdout for early stopping and model selection; the test split is left for final comparison.
 
-First submit the HDF5 export stage.  With defaults this submits one pool export
-job and three dependent reshard jobs:
+First submit the HDF5 export stage.  With defaults this submits one ``50000``
+export job and dependent ``20000`` / ``10000`` reshard jobs:
 
 .. code-block:: bash
 

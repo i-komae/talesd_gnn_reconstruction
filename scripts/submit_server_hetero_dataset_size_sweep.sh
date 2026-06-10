@@ -15,11 +15,10 @@ VAL_FRACTION="${VAL_FRACTION:-0.10}"
 TEST_FRACTION="${TEST_FRACTION:-0.45}"
 SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION:-0.10}"
 SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION:-0.45}"
-EXPORT_POOL_OVERDRAW_NUM="${EXPORT_POOL_OVERDRAW_NUM:-6}"
-EXPORT_POOL_OVERDRAW_DEN="${EXPORT_POOL_OVERDRAW_DEN:-5}"
 REFILL_ATTEMPTS="${REFILL_ATTEMPTS:-2}"
 REFILL_SAFETY_FACTOR="${REFILL_SAFETY_FACTOR:-1.25}"
 REFILL_MIN_EFFICIENCY="${REFILL_MIN_EFFICIENCY:-0.01}"
+SERIAL_RESHARDS="${SERIAL_RESHARDS:-1}"
 
 IFS="," read -r -a size_array <<< "${SIZES}"
 
@@ -44,18 +43,13 @@ if (( ${#clean_sizes[@]} == 0 )); then
 fi
 
 if [[ "${SUBMIT_EXPORTS}" == "1" ]]; then
-  if (( EXPORT_POOL_OVERDRAW_DEN <= 0 )); then
-    echo "EXPORT_POOL_OVERDRAW_DEN must be positive" >&2
-    exit 2
-  fi
-  pool_sample_per_bin="${POOL_SAMPLE_PER_BIN:-$(( (max_size * EXPORT_POOL_OVERDRAW_NUM + EXPORT_POOL_OVERDRAW_DEN - 1) / EXPORT_POOL_OVERDRAW_DEN ))}"
-  pool_dataset_name="${POOL_RUN_NAME:-hetero_balanced_pool${pool_sample_per_bin}_for_flat${max_size}_${RUN_ID}}"
-  pool_graph_input="${GRAPH_ROOT}/${pool_dataset_name}/${pool_dataset_name}.h5"
-  pool_job_id=""
+  base_dataset_name="hetero_balanced_flat${max_size}_${RUN_ID}"
+  base_graph_input="${GRAPH_ROOT}/${base_dataset_name}/${base_dataset_name}.h5"
+  base_job_id=""
   if [[ "${DRY_RUN}" == "1" ]]; then
-    ENERGY_SAMPLE_PER_BIN="${pool_sample_per_bin}" \
+    ENERGY_SAMPLE_PER_BIN="${max_size}" \
     RUN_ID="${RUN_ID}" \
-    RUN_NAME="${pool_dataset_name}" \
+    RUN_NAME="${base_dataset_name}" \
     REFILL_ATTEMPTS="${REFILL_ATTEMPTS}" \
     REFILL_SAFETY_FACTOR="${REFILL_SAFETY_FACTOR}" \
     REFILL_MIN_EFFICIENCY="${REFILL_MIN_EFFICIENCY}" \
@@ -66,10 +60,10 @@ if [[ "${SUBMIT_EXPORTS}" == "1" ]]; then
     DRY_RUN="${DRY_RUN}" \
     "${SCRIPT_DIR}/submit_server_hetero_balanced_graph_export.sh"
   else
-    pool_job_id="$(
-      ENERGY_SAMPLE_PER_BIN="${pool_sample_per_bin}" \
+    base_job_id="$(
+      ENERGY_SAMPLE_PER_BIN="${max_size}" \
       RUN_ID="${RUN_ID}" \
-      RUN_NAME="${pool_dataset_name}" \
+      RUN_NAME="${base_dataset_name}" \
       REFILL_ATTEMPTS="${REFILL_ATTEMPTS}" \
       REFILL_SAFETY_FACTOR="${REFILL_SAFETY_FACTOR}" \
       REFILL_MIN_EFFICIENCY="${REFILL_MIN_EFFICIENCY}" \
@@ -80,18 +74,26 @@ if [[ "${SUBMIT_EXPORTS}" == "1" ]]; then
       SBATCH_PARSABLE=1 \
       "${SCRIPT_DIR}/submit_server_hetero_balanced_graph_export.sh"
     )"
-    printf "pool export job for sample_per_bin=%s: %s\n" "${pool_sample_per_bin}" "${pool_job_id}" >&2
+    printf "base export job for sample_per_bin=%s: %s\n" "${max_size}" "${base_job_id}" >&2
   fi
 
+  previous_reshard_job_id=""
   for size in "${clean_sizes[@]}"; do
+    if (( size == max_size )); then
+      printf "derive job for size=%s: skipped; base export writes %s\n" "${size}" "${base_graph_input}" >&2
+      continue
+    fi
     dataset_name="hetero_balanced_flat${size}_${RUN_ID}"
     graph_input="${GRAPH_ROOT}/${dataset_name}/${dataset_name}.h5"
     dependency=""
-    if [[ -n "${pool_job_id}" ]]; then
-      dependency="afterok:${pool_job_id}"
+    if [[ -n "${base_job_id}" ]]; then
+      dependency="afterok:${base_job_id}"
+    fi
+    if [[ "${SERIAL_RESHARDS}" == "1" && -n "${previous_reshard_job_id}" ]]; then
+      dependency="afterok:${previous_reshard_job_id}"
     fi
     if [[ "${DRY_RUN}" == "1" ]]; then
-      GRAPH_INPUT="${pool_graph_input}" \
+      GRAPH_INPUT="${base_graph_input}" \
       ENERGY_SAMPLE_PER_BIN="${size}" \
       RUN_ID="${RUN_ID}" \
       RUN_NAME="${dataset_name}" \
@@ -105,7 +107,7 @@ if [[ "${SUBMIT_EXPORTS}" == "1" ]]; then
       "${SCRIPT_DIR}/submit_server_hetero_reshard.sh"
     else
       reshard_job_id="$(
-        GRAPH_INPUT="${pool_graph_input}" \
+        GRAPH_INPUT="${base_graph_input}" \
         ENERGY_SAMPLE_PER_BIN="${size}" \
         RUN_ID="${RUN_ID}" \
         RUN_NAME="${dataset_name}" \
@@ -120,6 +122,9 @@ if [[ "${SUBMIT_EXPORTS}" == "1" ]]; then
         "${SCRIPT_DIR}/submit_server_hetero_reshard.sh"
       )"
       printf "derive job for size=%s: %s dependency=%s\n" "${size}" "${reshard_job_id}" "${dependency}" >&2
+      if [[ "${SERIAL_RESHARDS}" == "1" ]]; then
+        previous_reshard_job_id="${reshard_job_id}"
+      fi
     fi
   done
 fi
@@ -161,8 +166,8 @@ for size in "${clean_sizes[@]}"; do
 done
 
 printf "sweep_name=%s\n" "${SWEEP_NAME}" >&2
-printf "export_strategy=overdraw-pool-plus-reshard max_size=%s sizes=%s\n" "${max_size}" "${SIZES}" >&2
-printf "export_pool_overdraw: numerator=%s denominator=%s\n" "${EXPORT_POOL_OVERDRAW_NUM}" "${EXPORT_POOL_OVERDRAW_DEN}" >&2
+printf "export_strategy=base-max-size-plus-reshard max_size=%s sizes=%s\n" "${max_size}" "${SIZES}" >&2
 printf "export_refill: attempts=%s safety_factor=%s min_efficiency=%s\n" "${REFILL_ATTEMPTS}" "${REFILL_SAFETY_FACTOR}" "${REFILL_MIN_EFFICIENCY}" >&2
+printf "serial_reshards=%s\n" "${SERIAL_RESHARDS}" >&2
 printf "split_event_fractions: train=1-val-test val=%s test=%s\n" "${VAL_FRACTION}" "${TEST_FRACTION}" >&2
 printf "split_source_fractions: train=1-val-test val=%s test=%s\n" "${SOURCE_VAL_FRACTION}" "${SOURCE_TEST_FRACTION}" >&2

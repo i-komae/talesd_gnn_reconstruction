@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,6 +19,7 @@ from talesd_gnn_reconstruction.cli import (
     _merge_candidate_reservoirs,
     _select_balanced_hetero_candidates,
     _selected_path_chunks,
+    _source_group_selection_payloads,
     _source_group_key_for_path,
     _validate_mc_calibration_dates,
 )
@@ -277,6 +279,59 @@ class ExportDateFilterTest(unittest.TestCase):
 
         self.assertEqual(quotas[("az0", "x0", "y0", "t0")], 8)
         self.assertEqual(quotas[("az1", "x0", "y0", "t0")], 2)
+
+    def test_hetero_source_group_selection_payload_filters_excluded_indices(self) -> None:
+        group = HeteroSourceGroupManifest(
+            source_group="/mc/proton/DAT000116",
+            dat_tag="DAT000116",
+            energy_bin_code="16",
+            particle="proton",
+            source_zenith_deg=20.0,
+            eligible_event_count=10,
+            files=(
+                HeteroSourceFileManifest(
+                    path="/mc/proton/DAT000116_gea_trg_000.dst.gz",
+                    source_group="/mc/proton/DAT000116",
+                    dat_tag="DAT000116",
+                    energy_bin_code="16",
+                    particle="proton",
+                    gea_trg_index=0,
+                    source_zenith_deg=20.0,
+                    eligible_event_count=5,
+                    date_counts={"260606": 5},
+                    cell_counts={("0", "0", "0", "0"): 5},
+                ),
+                HeteroSourceFileManifest(
+                    path="/mc/proton/DAT000116_gea_trg_001.dst.gz",
+                    source_group="/mc/proton/DAT000116",
+                    dat_tag="DAT000116",
+                    energy_bin_code="16",
+                    particle="proton",
+                    gea_trg_index=1,
+                    source_zenith_deg=20.0,
+                    eligible_event_count=5,
+                    date_counts={"260606": 5},
+                    cell_counts={("0", "0", "0", "0"): 5},
+                ),
+            ),
+            date_counts={"260606": 10},
+            cell_counts={("0", "0", "0", "0"): 10},
+        )
+
+        payloads = _source_group_selection_payloads(
+            {group.source_group: group},
+            {group.source_group: 4},
+            argparse.Namespace(seed=123),
+            {
+                "/mc/proton/DAT000116_gea_trg_001.dst.gz": {2, 3},
+                "/mc/iron/DAT999918_gea_trg_000.dst.gz": {99},
+            },
+        )
+
+        self.assertEqual(len(payloads), 1)
+        _payload_group, quota, _args, excluded = payloads[0]
+        self.assertEqual(quota, 4)
+        self.assertEqual(excluded, {"/mc/proton/DAT000116_gea_trg_001.dst.gz": {2, 3}})
 
     def test_hetero_selection_summary_includes_time_and_dynamic_bins(self) -> None:
         candidates = [

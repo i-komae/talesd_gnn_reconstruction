@@ -2926,6 +2926,71 @@ def _select_hetero_events_for_source_group(
     }
 
 
+def _select_hetero_events_for_source_group_payload(
+    payload: tuple[HeteroSourceGroupManifest, int, argparse.Namespace, dict[str, set[int]] | None],
+) -> dict[str, Any]:
+    group, quota, args, excluded_by_path = payload
+    return _select_hetero_events_for_source_group(
+        group,
+        quota=int(quota),
+        args=args,
+        excluded_by_path=excluded_by_path,
+    )
+
+
+def _source_group_selection_payloads(
+    groups: dict[str, HeteroSourceGroupManifest],
+    quotas: dict[str, int],
+    args: argparse.Namespace,
+    excluded_by_path: dict[str, set[int]] | None,
+) -> list[tuple[HeteroSourceGroupManifest, int, argparse.Namespace, dict[str, set[int]] | None]]:
+    payloads: list[tuple[HeteroSourceGroupManifest, int, argparse.Namespace, dict[str, set[int]] | None]] = []
+    for group in sorted(groups.values(), key=lambda item: item.source_group):
+        quota = int(quotas.get(group.source_group, 0))
+        group_excluded = None
+        if excluded_by_path is not None:
+            group_excluded = {
+                file_info.path: set(excluded_by_path[file_info.path])
+                for file_info in group.files
+                if file_info.path in excluded_by_path
+            }
+        payloads.append((group, quota, args, group_excluded))
+    return payloads
+
+
+def _iter_hetero_source_group_selection_results(
+    groups: dict[str, HeteroSourceGroupManifest],
+    quotas: dict[str, int],
+    args: argparse.Namespace,
+    *,
+    excluded_by_path: dict[str, set[int]] | None = None,
+) -> Iterator[dict[str, Any]]:
+    payloads = _source_group_selection_payloads(groups, quotas, args, excluded_by_path)
+    workers = min(max(int(args.workers), 1), len(payloads)) if payloads else 1
+    _progress_write(
+        f"select hetero event indices: start source_groups={len(payloads)} workers={workers}"
+    )
+    if workers == 1:
+        for payload in _progress(payloads, desc="select hetero event indices", total=len(payloads)):
+            yield _select_hetero_events_for_source_group_payload(payload)
+        return
+    try:
+        yield from _iter_process_pool(
+            payloads,
+            _select_hetero_events_for_source_group_payload,
+            workers,
+            "select hetero event indices",
+            max_tasks_per_child=max(int(args.worker_max_files), 0),
+        )
+    except (OSError, PermissionError) as exc:
+        _progress_write(
+            f"warning: parallel hetero source-group selection failed ({exc}); "
+            "falling back to single-process selection"
+        )
+        for payload in _progress(payloads, desc="select hetero event indices", total=len(payloads)):
+            yield _select_hetero_events_for_source_group_payload(payload)
+
+
 def _build_source_group_balanced_hetero_selection(
     inputs: list[str],
     args: argparse.Namespace,
@@ -2950,28 +3015,25 @@ def _build_source_group_balanced_hetero_selection(
     selected_by_particle: dict[str, int] = {}
     selected_cell_counts: dict[str, int] = {}
     selected_source_groups: set[str] = set()
-    iterator = _progress(
-        sorted(groups.values(), key=lambda item: item.source_group),
-        desc="select hetero event indices",
-        total=len(groups),
+    group_by_name = {group.source_group: group for group in groups.values()}
+    iterator = _iter_hetero_source_group_selection_results(
+        groups,
+        quotas,
+        args,
+        excluded_by_path=excluded_by_path,
     )
-    for group in iterator:
-        result = _select_hetero_events_for_source_group(
-            group,
-            quota=int(quotas.get(group.source_group, 0)),
-            args=args,
-            excluded_by_path=excluded_by_path,
-        )
+    for result in iterator:
         for path, indices in result["selected_by_path"].items():
             selected_by_path.setdefault(path, set()).update(indices)
         _merge_counter(selected_event_dates, result["selected_event_dates"])
         _merge_counter(selected_cell_counts, result["selected_cell_counts"])
         selected_count = int(result["selected_events"])
         if selected_count > 0:
-            selected_source_groups.add(group.source_group)
-        bin_key = _source_group_bin_key(group, stratify_particle=bool(args.energy_sample_stratify_particle))
+            selected_source_groups.add(str(result["source_group"]))
+        source_group = group_by_name[str(result["source_group"])]
+        bin_key = _source_group_bin_key(source_group, stratify_particle=bool(args.energy_sample_stratify_particle))
         selected_by_bin[bin_key] = selected_by_bin.get(bin_key, 0) + selected_count
-        selected_by_particle[group.particle] = selected_by_particle.get(group.particle, 0) + selected_count
+        selected_by_particle[source_group.particle] = selected_by_particle.get(source_group.particle, 0) + selected_count
 
     selected_events = sum(len(indices) for indices in selected_by_path.values())
     source_counts_by_bin: dict[str, int] = {}
@@ -4026,7 +4088,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_hetero.add_argument("--refill-safety-factor", type=float, default=1.25, help="不足binの追加選択数に掛ける安全係数")
     export_hetero.add_argument("--refill-min-efficiency", type=float, default=0.01, help="追加選択数を見積もる時の最小 graph 化効率")
     export_hetero.add_argument("--seed", type=int, default=12345, help="balanced selectionのdeterministic seed")
-    export_hetero.add_argument("--workers", type=int, default=1, help="DST metadata scanに使うfile worker数")
+    export_hetero.add_argument("--workers", type=int, default=1, help="DST manifest scan、source-group event selection、HDF5 shard writeに使うworker数")
     export_hetero.add_argument("--worker-max-files", type=int, default=DEFAULT_WORKER_MAX_FILES, help="scan workerをNファイル処理ごとに再起動する。0なら無効")
     export_hetero.add_argument("--balance-cell-preselect", type=int, default=8, help="旧event-level candidate scan用。source-group manifest方式ではselectionに使わない")
     export_hetero.add_argument("--balance-zenith-bin-width-deg", type=float, default=10.0, help="旧event-level selection用。source-group manifest方式ではselectionに使わない")
