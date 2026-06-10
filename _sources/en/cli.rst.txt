@@ -45,7 +45,8 @@ The output is a training/cache format, not a mandatory step for one-pass reconst
 The graph contains detector nodes, pulse nodes, detector-level waveforms, and typed relations.
 For MC training, ``--require-reference-core`` is the normal setting because core-relative pulse features are valid only when the Ising reference core exists.
 For balanced large MC datasets, add ``--energy-sample-per-bin`` with ``--energy-sample-stratify-particle``.
-The balanced selector keeps candidates spread across ``DAT??????`` source groups, zenith, azimuth, core-position, and event-time bins, and can write ``--selection-summary`` before or during HDF5 export.
+In that mode, the command delegates source manifest scans, ``DAT??????`` source-group management, zenith-stratified source allocation, deterministic random event-index selection, graphable-event refill, graph construction, and HDF5 writing to ``dstio.tale.graph.write_balanced_graph_h5``.
+The GNN repository does not add, remove, or redefine graph edges during export.
 
 .. code-block:: bash
 
@@ -60,8 +61,13 @@ The balanced selector keeps candidates spread across ``DAT??????`` source groups
      --energy-sample-per-bin 50000 \
      --energy-sample-stratify-particle \
      --selection-summary /path/to/graphs/hetero/summaries/hetero_selection_summary.json \
-     --shard-size 50000 \
-     -o /path/to/graphs/hetero/hetero.h5
+     --workers 32 \
+     --scan-workers 32 \
+     --selection-workers 1 \
+     --h5-backend auto \
+     --write-block-size 2048 \
+     --shard-size 100000 \
+     -o /path/to/graphs/hetero
 
 Implementation path:
 
@@ -69,8 +75,9 @@ Implementation path:
 
    talesd-gnn export-hetero
      -> cli._cmd_export_hetero()
-       -> dstio.tale.graph.iter_graphs()
-       -> hetero_graph_io.py
+       -> dstio.tale.graph.write_balanced_graph_h5()  # with --energy-sample-per-bin
+          or dstio.tale.graph.write_graph_h5()        # without balanced selection
+       -> dstio-owned GraphEvent build and HDF5 shard write
 
 Training
 --------

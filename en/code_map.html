@@ -22,7 +22,7 @@
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="検索" href="../search.html" />
     <link rel="next" title="Code walkthrough" href="code_walkthrough.html" />
-    <link rel="prev" title="CLI API" href="cli.html" /> 
+    <link rel="prev" title="Heterogeneous model explained" href="hetero_model.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -56,7 +56,39 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#attention-maps">Attention maps</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../ja/hetero_workflow.html">Heterogeneous DST 再構成 workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../ja/hetero_model.html">Heterogeneous model の詳しい説明</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#forward-pass">Forward pass の全体図</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#event-heterogeneous-data-object">1 event を heterogeneous data object として見る</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#field">入力 field</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#scaling">変換と scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#tensor-shape">tensor shape と行列計算</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#query-destination">Query はなぜ destination から作るのか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#key-value-source-edge-attr">Key と Value はなぜ source + edge_attr から作るのか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#multi-head-shape">multi-head の shape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#id1">小さい数値例</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#relation">relation ごとの情報の流れ</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id2">方向出力の正規化</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id3">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#dst">DST 直接再構成</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../ja/code_map.html">コード読解マップ</a><ul>
@@ -162,6 +194,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#quality-only">再構成quality-onlyの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#mass-focal">mass focalの例</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#heterogeneous-reco-mass">heterogeneous reco+mass比較</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#balanced-heterogeneous-hdf5">balanced heterogeneous HDF5 サイズ比較</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/server_workflow.html#id2">注意点</a></li>
 </ul>
 </li>
@@ -180,7 +213,39 @@
 <li class="toctree-l3"><a class="reference internal" href="cli.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#input-distributions">Input distributions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#feature-importance">Feature importance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cli.html#attention-maps">Attention maps</a></li>
 <li class="toctree-l3"><a class="reference internal" href="cli.html#visualization">Visualization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_workflow.html">Heterogeneous DST Reconstruction Workflow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#graph-schema">Graph schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#training-cache-path">Training cache path</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_workflow.html#direct-reconstruction-path">Direct reconstruction path</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="hetero_model.html">Heterogeneous model explained</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#forward-pass-overview">Forward-pass overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#one-event-as-a-heterogeneous-data-object">One event as a heterogeneous data object</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#input-fields">Input fields</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#conversion-and-scaling">Conversion and scaling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#tensor-shapes-and-matrix-operations">Tensor shapes and matrix operations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#where-attention-appears">Where attention appears</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#why-the-query-comes-from-the-destination">Why the query comes from the destination</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#why-key-and-value-include-edge-attributes">Why key and value include edge attributes</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#multi-head-shape">Multi-head shape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#small-numerical-example">Small numerical example</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#relation-specific-information-flow">Relation-specific information flow</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#direction-output-normalization">Direction output normalization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#training">Training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#server-command-for-the-first-transformer-sweep">Server command for the first transformer sweep</a></li>
 </ul>
 </li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Code Reading Map</a><ul>
@@ -245,6 +310,7 @@
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#reconstruction-quality-only-example">Reconstruction quality-only example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#mass-focal-example">Mass focal example</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#heterogeneous-reco-mass-comparison">Heterogeneous reco+mass comparison</a></li>
+<li class="toctree-l3"><a class="reference internal" href="server_workflow.html#balanced-heterogeneous-hdf5-size-sweep">Balanced heterogeneous HDF5 size sweep</a></li>
 <li class="toctree-l3"><a class="reference internal" href="server_workflow.html#rules">Rules</a></li>
 </ul>
 </li>
@@ -362,8 +428,8 @@ DST
 <td><p>Writes input distributions and post-hoc group-ablation importance.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Heterogeneous HDF5 writing</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/hetero_graph_io.py</span></code></p></td>
-<td><p>Writes detector/pulse node stores, typed edges, detector waveforms, and schema attributes.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.write_balanced_graph_h5</span></code> / <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.write_graph_h5</span></code>; <code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/hetero_graph_io.py</span></code> for reading.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dstio</span></code> builds <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> objects, owns graph relations/cuts/refill, and writes detector/pulse node stores, typed edges, detector waveforms, summaries, and schema attributes.</p></td>
 </tr>
 <tr class="row-even"><td><p>Heterogeneous conversion</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">src/talesd_gnn_reconstruction/hetero_data.py</span></code></p></td>
@@ -401,7 +467,7 @@ DST
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">export-hetero</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">_cmd_export_hetero</span></code></p></td>
-<td><p>Calls <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.iter_graphs</span></code> and writes the heterogeneous HDF5 cache.</p></td>
+<td><p>Calls <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.write_balanced_graph_h5</span></code> for balanced MC export, or <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.write_graph_h5</span></code> for unbalanced export. The GNN CLI only orchestrates arguments and summaries; it does not edit graph connectivity.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">train-hetero</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">_cmd_train_hetero</span></code></p></td>
@@ -600,7 +666,7 @@ For split CORSIKA DST files named like <code class="docutils literal notranslate
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="cli.html" class="btn btn-neutral float-left" title="CLI API" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="hetero_model.html" class="btn btn-neutral float-left" title="Heterogeneous model explained" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="code_walkthrough.html" class="btn btn-neutral float-right" title="Code walkthrough" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

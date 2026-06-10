@@ -74,12 +74,19 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#tensor-shape">tensor shape と行列計算</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">方向出力の正規化</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#query-destination">Query はなぜ destination から作るのか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#key-value-source-edge-attr">Key と Value はなぜ source + edge_attr から作るのか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#multi-head-shape">multi-head の shape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#id1">小さい数値例</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#relation">relation ごとの情報の流れ</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id2">方向出力の正規化</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id2">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id3">学習</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#dst">DST 直接再構成</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
@@ -224,7 +231,14 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#tensor-shapes-and-matrix-operations">Tensor shapes and matrix operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#where-attention-appears">Where attention appears</a></li>
-<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#why-the-query-comes-from-the-destination">Why the query comes from the destination</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#why-key-and-value-include-edge-attributes">Why key and value include edge attributes</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#multi-head-shape">Multi-head shape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#small-numerical-example">Small numerical example</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#relation-specific-information-flow">Relation-specific information flow</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#direction-output-normalization">Direction output normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
@@ -452,14 +466,23 @@ full-dataset attention dump.</p>
 <h2>Balanced heterogeneous HDF5 size sweep<a class="headerlink" href="#balanced-heterogeneous-hdf5-size-sweep" title="Link to this heading"></a></h2>
 <p>Use <code class="docutils literal notranslate"><span class="pre">scripts/submit_server_hetero_dataset_size_sweep.sh</span></code> to make the next balanced datasets.
 The default final sizes are <code class="docutils literal notranslate"><span class="pre">50000</span></code>, <code class="docutils literal notranslate"><span class="pre">20000</span></code>, and <code class="docutils literal notranslate"><span class="pre">10000</span></code> selected events per true-energy/particle bin.
-The script first writes one overdrawn pool dataset, then derives the three final HDF5 datasets by resharding/subsampling that pool.
-The balanced export preselects candidates by <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source group, zenith bin, azimuth bin, core-position bin, and event-time bin, then writes a selection summary and a train/validation/test split distribution summary.</p>
+Each size is exported directly from DST through <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.write_balanced_graph_h5</span></code>.
+The <code class="docutils literal notranslate"><span class="pre">20000</span></code> and <code class="docutils literal notranslate"><span class="pre">10000</span></code> datasets are not resharded or subsampled from the <code class="docutils literal notranslate"><span class="pre">50000</span></code> dataset.
+The balanced export keeps independent <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source groups separated, stratifies source groups by zenith for train/validation/test assignment, selects event indices with deterministic random scores inside each source group, and refills missing graphable events inside <code class="docutils literal notranslate"><span class="pre">dstio</span></code>.
+It writes a selection summary, HDF5 shard summaries, and train/validation/test split distribution diagnostics.</p>
 <p>The default split for this sweep is source-group based <code class="docutils literal notranslate"><span class="pre">45/10/45</span></code> for train/validation/test.
 The same <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source group is not shared across splits.
 Validation is kept as an independent source-group holdout for early stopping and model selection; the test split is left for final comparison.</p>
-<p>First submit the HDF5 export stage.  With defaults this submits one pool export
-job and three dependent reshard jobs:</p>
+<p>First submit the HDF5 export stage only.  With defaults this submits the
+<code class="docutils literal notranslate"><span class="pre">50000</span></code>, <code class="docutils literal notranslate"><span class="pre">20000</span></code>, and <code class="docutils literal notranslate"><span class="pre">10000</span></code> direct export jobs. <code class="docutils literal notranslate"><span class="pre">SERIAL_EXPORTS=1</span></code> is
+the default, so the three full DST scans are chained by Slurm dependency rather
+than run at the same time. Each export job still uses internal parallelism
+(<code class="docutils literal notranslate"><span class="pre">EXPORT_WORKERS=32</span></code>, <code class="docutils literal notranslate"><span class="pre">SCAN_WORKERS=32</span></code>, <code class="docutils literal notranslate"><span class="pre">SELECTION_WORKERS=1</span></code> by default)
+and writes worker-owned HDF5 shards with <code class="docutils literal notranslate"><span class="pre">H5_BACKEND=auto</span></code> and
+<code class="docutils literal notranslate"><span class="pre">WRITE_BLOCK_SIZE=2048</span></code>.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">RUN_ID</span><span class="o">=</span>hetero_balance_<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d_%H%M%S<span class="k">)</span><span class="w"> </span><span class="se">\</span>
+<span class="nv">SUBMIT_EXPORTS</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="nv">SUBMIT_TRAINING</span><span class="o">=</span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
 scripts/submit_server_hetero_dataset_size_sweep.sh
 </pre></div>
 </div>

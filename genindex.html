@@ -71,12 +71,37 @@
 <li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#tensor-shape">tensor shape と行列計算</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
-<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#relation-attention">Relation attention</a></li>
-<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#id1">方向出力の正規化</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#relation-attention">Relation attention</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#query-destination">Query はなぜ destination から作るのか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#key-value-source-edge-attr">Key と Value はなぜ source + edge_attr から作るのか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#multi-head-shape">multi-head の shape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#id1">小さい数値例</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#relation">relation ごとの情報の流れ</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#id2">方向出力の正規化</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#readout">Readout</a></li>
-<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#output-heads">Output heads</a></li>
-<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#id2">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#output-heads">Output heads</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#reconstruction-head">reconstruction head</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#mass-head">mass head</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#quality-head">quality head</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#predicted-error-head">predicted-error head</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#id3">forward pass全体を数式で見る</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#id4">学習時に変わるもの</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#id5">出力ごとの物理的な効き方</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#energy">Energy</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#core">Core</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#direction">Direction</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#mass">Mass</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ja/hetero_model.html#quality-predicted-error">Quality / predicted error</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#id6">短い説明</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#id7">最重要ポイント</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#id8">学習</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#dst">DST 直接再構成</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ja/hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
@@ -221,11 +246,36 @@
 <li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#tensor-shapes-and-matrix-operations">Tensor shapes and matrix operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
 <li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#where-attention-appears">Where attention appears</a></li>
-<li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#relation-attention">Relation attention</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#why-the-query-comes-from-the-destination">Why the query comes from the destination</a></li>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#why-key-and-value-include-edge-attributes">Why key and value include edge attributes</a></li>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#multi-head-shape">Multi-head shape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#small-numerical-example">Small numerical example</a></li>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#relation-specific-information-flow">Relation-specific information flow</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#direction-output-normalization">Direction output normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#readout">Readout</a></li>
-<li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#output-heads">Output heads</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#reconstruction-head">Reconstruction head</a></li>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#mass-head">Mass head</a></li>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#quality-head">Quality head</a></li>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#predicted-error-head">Predicted-error head</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#whole-forward-pass-as-equations">Whole forward pass as equations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#what-changes-during-training">What changes during training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#physical-interpretation-by-output">Physical interpretation by output</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#energy">Energy</a></li>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#core-position">Core position</a></li>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#direction">Direction</a></li>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#mass">Mass</a></li>
+<li class="toctree-l4"><a class="reference internal" href="en/hetero_model.html#quality-and-predicted-error">Quality and predicted error</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#short-explanation">Short explanation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#key-points">Key points</a></li>
 <li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#training">Training</a></li>
 <li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="en/hetero_model.html#server-command-for-the-first-transformer-sweep">Server command for the first transformer sweep</a></li>

@@ -59,8 +59,8 @@ For production runs, read the code in this order:
      - ``src/talesd_gnn_reconstruction/feature_analysis.py``
      - Writes input distributions and post-hoc group-ablation importance.
    * - Heterogeneous HDF5 writing
-     - ``src/talesd_gnn_reconstruction/hetero_graph_io.py``
-     - Writes detector/pulse node stores, typed edges, detector waveforms, and schema attributes.
+     - ``dstio.tale.graph.write_balanced_graph_h5`` / ``dstio.tale.graph.write_graph_h5``; ``src/talesd_gnn_reconstruction/hetero_graph_io.py`` for reading.
+     - ``dstio`` builds ``GraphEvent`` objects, owns graph relations/cuts/refill, and writes detector/pulse node stores, typed edges, detector waveforms, summaries, and schema attributes.
    * - Heterogeneous conversion
      - ``src/talesd_gnn_reconstruction/hetero_data.py``
      - Converts stored ``GraphEvent`` samples into tensors or PyG ``HeteroData``.
@@ -90,7 +90,7 @@ The ``talesd-gnn`` commands are mostly wrappers. ``cli.py`` parses arguments and
      - Calls ``train.train_model``.
    * - ``export-hetero``
      - ``_cmd_export_hetero``
-     - Calls ``dstio.tale.graph.iter_graphs`` and writes the heterogeneous HDF5 cache.
+     - Calls ``dstio.tale.graph.write_balanced_graph_h5`` for balanced MC export, or ``dstio.tale.graph.write_graph_h5`` for unbalanced export. The GNN CLI only orchestrates arguments and summaries; it does not edit graph connectivity.
    * - ``train-hetero``
      - ``_cmd_train_hetero``
      - Calls ``hetero_training.train_hetero_model``.

@@ -74,12 +74,19 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#tensor-shape">tensor shape と行列計算</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
-<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
-<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#id1">方向出力の正規化</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#query-destination">Query はなぜ destination から作るのか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#key-value-source-edge-attr">Key と Value はなぜ source + edge_attr から作るのか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#multi-head-shape">multi-head の shape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#id1">小さい数値例</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#relation">relation ごとの情報の流れ</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#id2">方向出力の正規化</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
-<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#id2">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#id3">学習</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#dst">DST 直接再構成</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
@@ -224,7 +231,14 @@
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#tensor-shapes-and-matrix-operations">Tensor shapes and matrix operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#where-attention-appears">Where attention appears</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#relation-attention">Relation attention</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../en/hetero_model.html#why-the-query-comes-from-the-destination">Why the query comes from the destination</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/hetero_model.html#why-key-and-value-include-edge-attributes">Why key and value include edge attributes</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/hetero_model.html#multi-head-shape">Multi-head shape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/hetero_model.html#small-numerical-example">Small numerical example</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../en/hetero_model.html#relation-specific-information-flow">Relation-specific information flow</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#direction-output-normalization">Direction output normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../en/hetero_model.html#readout">Readout</a></li>
@@ -350,7 +364,8 @@
   <section id="heterogeneous-dst-workflow">
 <h1>Heterogeneous DST 再構成 workflow<a class="headerlink" href="#heterogeneous-dst-workflow" title="Link to this heading"></a></h1>
 <p>heterogeneous path は、学習後に DST を直接再構成するための現行経路です。
-graph の物理的な定義は <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph</span></code> に寄せ、この repository では HDF5 学習 cache、model input 変換、学習、診断、直接推論を扱います。</p>
+graph の物理的な定義と HDF5 export は <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph</span></code> に寄せます。
+この repository では CLI orchestration、HDF5 読み込み、model input 変換、学習、診断、直接推論を扱います。</p>
 <p>モデル内部の詳しい説明は <a class="reference internal" href="hetero_model.html"><span class="doc">Heterogeneous model の詳しい説明</span></a> にあります。
 そのページでは、PyTorch / PyG 公式ドキュメントの書き方に合わせて、この repository で実際に使う tensor、encoder、relation attention、readout、loss head、直接推論の流れを説明しています。</p>
 <p>最初の図は workflow 図です。HDF5 学習 cache 経路と DST 直接再構成経路を分けて示します。</p>
@@ -428,12 +443,16 @@ pulse と detector waveform を対応させます。</p>
 <section id="training-cache-path">
 <h2>Training cache path<a class="headerlink" href="#training-cache-path" title="Link to this heading"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">export-hetero</span></code> は繰り返し学習で読むための HDF5 graph shard を書きます。
-この HDF5 は cache であり、最終的な再構成 interface ではありません。</p>
+この HDF5 は cache であり、最終的な再構成 interface ではありません。
+balanced MC export では、source selection、graphable event の refill、
+graph 作成、HDF5 書き込みはすべて
+<code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.write_balanced_graph_h5</span></code> が担当します。
+GNN repository 側では edge のつなぎ替えや refill logic の再実装をしません。</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>DST
   -&gt; talesd-gnn export-hetero
-    -&gt; dstio.tale.graph.iter_graphs
-      -&gt; hetero_graph_io.py
-        -&gt; heterogeneous HDF5 shards
+    -&gt; dstio.tale.graph.write_balanced_graph_h5
+       or dstio.tale.graph.write_graph_h5
+      -&gt; heterogeneous HDF5 shards
 </pre></div>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">train-hetero</span></code> はこの shard を読み、train split で scaler を fit し、heterogeneous model を学習して checkpoint を保存します。

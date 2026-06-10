@@ -100,19 +100,28 @@ Balanced heterogeneous HDF5 size sweep
 
 Use ``scripts/submit_server_hetero_dataset_size_sweep.sh`` to make the next balanced datasets.
 The default final sizes are ``50000``, ``20000``, and ``10000`` selected events per true-energy/particle bin.
-The script first writes one overdrawn pool dataset, then derives the three final HDF5 datasets by resharding/subsampling that pool.
-The balanced export preselects candidates by ``DAT??????`` source group, zenith bin, azimuth bin, core-position bin, and event-time bin, then writes a selection summary and a train/validation/test split distribution summary.
+Each size is exported directly from DST through ``dstio.tale.graph.write_balanced_graph_h5``.
+The ``20000`` and ``10000`` datasets are not resharded or subsampled from the ``50000`` dataset.
+The balanced export keeps independent ``DAT??????`` source groups separated, stratifies source groups by zenith for train/validation/test assignment, selects event indices with deterministic random scores inside each source group, and refills missing graphable events inside ``dstio``.
+It writes a selection summary, HDF5 shard summaries, and train/validation/test split distribution diagnostics.
 
 The default split for this sweep is source-group based ``45/10/45`` for train/validation/test.
 The same ``DAT??????`` source group is not shared across splits.
 Validation is kept as an independent source-group holdout for early stopping and model selection; the test split is left for final comparison.
 
-First submit the HDF5 export stage.  With defaults this submits one pool export
-job and three dependent reshard jobs:
+First submit the HDF5 export stage only.  With defaults this submits the
+``50000``, ``20000``, and ``10000`` direct export jobs. ``SERIAL_EXPORTS=1`` is
+the default, so the three full DST scans are chained by Slurm dependency rather
+than run at the same time. Each export job still uses internal parallelism
+(``EXPORT_WORKERS=32``, ``SCAN_WORKERS=32``, ``SELECTION_WORKERS=1`` by default)
+and writes worker-owned HDF5 shards with ``H5_BACKEND=auto`` and
+``WRITE_BLOCK_SIZE=2048``.
 
 .. code-block:: bash
 
    RUN_ID=hetero_balance_$(date +%Y%m%d_%H%M%S) \
+   SUBMIT_EXPORTS=1 \
+   SUBMIT_TRAINING=0 \
    scripts/submit_server_hetero_dataset_size_sweep.sh
 
 After the three final HDF5 datasets and their summaries are complete, inspect:

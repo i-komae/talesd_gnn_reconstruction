@@ -74,12 +74,19 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#tensor-shape">tensor shape と行列計算</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">方向出力の正規化</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#query-destination">Query はなぜ destination から作るのか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#key-value-source-edge-attr">Key と Value はなぜ source + edge_attr から作るのか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#multi-head-shape">multi-head の shape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#id1">小さい数値例</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#relation">relation ごとの情報の流れ</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id2">方向出力の正規化</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id2">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id3">学習</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#dst">DST 直接再構成</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
@@ -224,7 +231,14 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#tensor-shapes-and-matrix-operations">Tensor shapes and matrix operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#where-attention-appears">Where attention appears</a></li>
-<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#why-the-query-comes-from-the-destination">Why the query comes from the destination</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#why-key-and-value-include-edge-attributes">Why key and value include edge attributes</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#multi-head-shape">Multi-head shape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#small-numerical-example">Small numerical example</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#relation-specific-information-flow">Relation-specific information flow</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#direction-output-normalization">Direction output normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
@@ -350,7 +364,8 @@
   <section id="heterogeneous-dst-reconstruction-workflow">
 <h1>Heterogeneous DST Reconstruction Workflow<a class="headerlink" href="#heterogeneous-dst-reconstruction-workflow" title="Link to this heading"></a></h1>
 <p>The heterogeneous path is the current path for training a model that can later reconstruct DST files directly.
-It uses <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph</span></code> for graph semantics and keeps the GNN repository responsible for HDF5 training cache, model input conversion, training, diagnostics, and direct inference.</p>
+It uses <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph</span></code> for graph semantics and HDF5 export.
+The GNN repository is responsible for CLI orchestration, HDF5 reading, model input conversion, training, diagnostics, and direct inference.</p>
 <p>For the model internals, read <a class="reference internal" href="hetero_model.html"><span class="doc">Heterogeneous model explained</span></a>.
 That page follows the PyTorch and PyG documentation style and explains the actual tensors, encoders, relation attention, readout, loss heads, and direct inference path used in this repository.</p>
 <p>The first figure is the workflow diagram. It separates the HDF5 training-cache path from the direct DST reconstruction path.</p>
@@ -430,12 +445,15 @@ Training export should therefore use <code class="docutils literal notranslate">
 <section id="training-cache-path">
 <h2>Training cache path<a class="headerlink" href="#training-cache-path" title="Link to this heading"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">export-hetero</span></code> writes HDF5 graph shards for repeated training reads.
-This HDF5 is a cache, not the final reconstruction interface.</p>
+This HDF5 is a cache, not the final reconstruction interface.
+For balanced MC export, source selection, graphable-event refill, graph construction,
+and HDF5 writing are all owned by <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.write_balanced_graph_h5</span></code>.
+The GNN repository does not reconnect edges or repeat the refill logic.</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>DST
   -&gt; talesd-gnn export-hetero
-    -&gt; dstio.tale.graph.iter_graphs
-      -&gt; hetero_graph_io.py
-        -&gt; heterogeneous HDF5 shards
+    -&gt; dstio.tale.graph.write_balanced_graph_h5
+       or dstio.tale.graph.write_graph_h5
+      -&gt; heterogeneous HDF5 shards
 </pre></div>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">train-hetero</span></code> then reads those shards, fits scalers on the training split, trains the heterogeneous model, and saves a checkpoint.

@@ -74,12 +74,19 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#tensor-shape">tensor shape と行列計算</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#detector-encoder-pulse-encoder">detector encoder と pulse encoder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#attention">attention という言葉が出てくる場所</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id1">方向出力の正規化</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#relation-attention">Relation attention</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#query-destination">Query はなぜ destination から作るのか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#key-value-source-edge-attr">Key と Value はなぜ source + edge_attr から作るのか</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#multi-head-shape">multi-head の shape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#id1">小さい数値例</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#relation">relation ごとの情報の流れ</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id2">方向出力の正規化</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id2">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id3">学習</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#dst">DST 直接再構成</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
@@ -224,7 +231,14 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#tensor-shapes-and-matrix-operations">Tensor shapes and matrix operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#detector-and-pulse-encoders">Detector and pulse encoders</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#where-attention-appears">Where attention appears</a></li>
-<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-attention">Relation attention</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#why-the-query-comes-from-the-destination">Why the query comes from the destination</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#why-key-and-value-include-edge-attributes">Why key and value include edge attributes</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#multi-head-shape">Multi-head shape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#small-numerical-example">Small numerical example</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#relation-specific-information-flow">Relation-specific information flow</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#direction-output-normalization">Direction output normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
@@ -387,7 +401,8 @@ The output is a training/cache format, not a mandatory step for one-pass reconst
 The graph contains detector nodes, pulse nodes, detector-level waveforms, and typed relations.
 For MC training, <code class="docutils literal notranslate"><span class="pre">--require-reference-core</span></code> is the normal setting because core-relative pulse features are valid only when the Ising reference core exists.
 For balanced large MC datasets, add <code class="docutils literal notranslate"><span class="pre">--energy-sample-per-bin</span></code> with <code class="docutils literal notranslate"><span class="pre">--energy-sample-stratify-particle</span></code>.
-The balanced selector keeps candidates spread across <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source groups, zenith, azimuth, core-position, and event-time bins, and can write <code class="docutils literal notranslate"><span class="pre">--selection-summary</span></code> before or during HDF5 export.</p>
+In that mode, the command delegates source manifest scans, <code class="docutils literal notranslate"><span class="pre">DAT??????</span></code> source-group management, zenith-stratified source allocation, deterministic random event-index selection, graphable-event refill, graph construction, and HDF5 writing to <code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.write_balanced_graph_h5</span></code>.
+The GNN repository does not add, remove, or redefine graph edges during export.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>.venv/bin/talesd-gnn<span class="w"> </span>export-hetero<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--input-dir<span class="w"> </span>/path/to/mc_dst<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--kind<span class="w"> </span>mc<span class="w"> </span><span class="se">\</span>
@@ -399,15 +414,21 @@ The balanced selector keeps candidates spread across <code class="docutils liter
 <span class="w">  </span>--energy-sample-per-bin<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--energy-sample-stratify-particle<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--selection-summary<span class="w"> </span>/path/to/graphs/hetero/summaries/hetero_selection_summary.json<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--shard-size<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-o<span class="w"> </span>/path/to/graphs/hetero/hetero.h5
+<span class="w">  </span>--workers<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--scan-workers<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--selection-workers<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--h5-backend<span class="w"> </span>auto<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--write-block-size<span class="w"> </span><span class="m">2048</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--shard-size<span class="w"> </span><span class="m">100000</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-o<span class="w"> </span>/path/to/graphs/hetero
 </pre></div>
 </div>
 <p>Implementation path:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>talesd-gnn export-hetero
   -&gt; cli._cmd_export_hetero()
-    -&gt; dstio.tale.graph.iter_graphs()
-    -&gt; hetero_graph_io.py
+    -&gt; dstio.tale.graph.write_balanced_graph_h5()  # with --energy-sample-per-bin
+       or dstio.tale.graph.write_graph_h5()        # without balanced selection
+    -&gt; dstio-owned GraphEvent build and HDF5 shard write
 </pre></div>
 </div>
 </section>

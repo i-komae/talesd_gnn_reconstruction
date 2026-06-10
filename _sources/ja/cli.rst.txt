@@ -46,7 +46,10 @@ graph は detector node、pulse node、detector-level waveform、型付き relat
 MC 学習用では、Ising reference core がある graph だけを使うため
 ``--require-reference-core`` を付けるのが標準です。
 大規模MCを偏りにくく作る場合は ``--energy-sample-per-bin`` と ``--energy-sample-stratify-particle`` を付けます。
-balanced selector は ``DAT??????`` source group、zenith、azimuth、core位置、event時刻binに候補を分散させ、``--selection-summary`` で選択分布を書き出せます。
+この mode では、source manifest scan、``DAT??????`` source group 管理、zenith-stratified source allocation、
+deterministic random event-index selection、graphable event の refill、graph 作成、HDF5 書き込みを
+``dstio.tale.graph.write_balanced_graph_h5`` に委譲します。
+GNN repository 側は export 時に graph edge を追加・削除・再定義しません。
 
 .. code-block:: bash
 
@@ -61,8 +64,13 @@ balanced selector は ``DAT??????`` source group、zenith、azimuth、core位置
      --energy-sample-per-bin 50000 \
      --energy-sample-stratify-particle \
      --selection-summary /path/to/graphs/hetero/summaries/hetero_selection_summary.json \
-     --shard-size 50000 \
-     -o /path/to/graphs/hetero/hetero.h5
+     --workers 32 \
+     --scan-workers 32 \
+     --selection-workers 1 \
+     --h5-backend auto \
+     --write-block-size 2048 \
+     --shard-size 100000 \
+     -o /path/to/graphs/hetero
 
 実装の流れ:
 
@@ -70,8 +78,9 @@ balanced selector は ``DAT??????`` source group、zenith、azimuth、core位置
 
    talesd-gnn export-hetero
      -> cli._cmd_export_hetero()
-       -> dstio.tale.graph.iter_graphs()
-       -> hetero_graph_io.py
+       -> dstio.tale.graph.write_balanced_graph_h5()  # --energy-sample-per-bin あり
+          or dstio.tale.graph.write_graph_h5()        # balanced selection なし
+       -> dstio 側の GraphEvent build と HDF5 shard write
 
 Training
 --------

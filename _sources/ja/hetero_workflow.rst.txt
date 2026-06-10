@@ -2,7 +2,8 @@ Heterogeneous DST 再構成 workflow
 =================================
 
 heterogeneous path は、学習後に DST を直接再構成するための現行経路です。
-graph の物理的な定義は ``dstio.tale.graph`` に寄せ、この repository では HDF5 学習 cache、model input 変換、学習、診断、直接推論を扱います。
+graph の物理的な定義と HDF5 export は ``dstio.tale.graph`` に寄せます。
+この repository では CLI orchestration、HDF5 読み込み、model input 変換、学習、診断、直接推論を扱います。
 
 モデル内部の詳しい説明は :doc:`hetero_model` にあります。
 そのページでは、PyTorch / PyG 公式ドキュメントの書き方に合わせて、この repository で実際に使う tensor、encoder、relation attention、readout、loss head、直接推論の流れを説明しています。
@@ -85,14 +86,18 @@ Training cache path
 
 ``export-hetero`` は繰り返し学習で読むための HDF5 graph shard を書きます。
 この HDF5 は cache であり、最終的な再構成 interface ではありません。
+balanced MC export では、source selection、graphable event の refill、
+graph 作成、HDF5 書き込みはすべて
+``dstio.tale.graph.write_balanced_graph_h5`` が担当します。
+GNN repository 側では edge のつなぎ替えや refill logic の再実装をしません。
 
 .. code-block:: text
 
    DST
      -> talesd-gnn export-hetero
-       -> dstio.tale.graph.iter_graphs
-         -> hetero_graph_io.py
-           -> heterogeneous HDF5 shards
+       -> dstio.tale.graph.write_balanced_graph_h5
+          or dstio.tale.graph.write_graph_h5
+         -> heterogeneous HDF5 shards
 
 ``train-hetero`` はこの shard を読み、train split で scaler を fit し、heterogeneous model を学習して checkpoint を保存します。
 既定 architecture は ``hetero_attention`` です。detector / pulse relation ごとの multi-head attention と、detector / pulse type 別 attention readout を使います。
