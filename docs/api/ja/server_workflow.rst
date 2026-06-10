@@ -98,18 +98,27 @@ balanced heterogeneous HDF5 サイズ比較
 
 次の balanced dataset 作成には ``scripts/submit_server_hetero_dataset_size_sweep.sh`` を使います。
 最終的な既定サイズは true energy / particle bin ごとに ``50000``, ``20000``, ``10000`` event を選ぶ3種類のHDF5です。
-この script は最大サイズの ``50000`` dataset を直接作り、そこから小さい ``20000`` / ``10000`` HDF5 だけを reshard/subsample で作ります。
-balanced export は ``DAT??????`` source group、zenith bin、azimuth bin、core位置bin、event時刻binで候補を分散させ、selection summary と train/validation/test split distribution summary を出します。
+各サイズは ``dstio.tale.graph.write_balanced_graph_h5`` で DST から直接 export します。
+``20000`` と ``10000`` は ``50000`` からの reshard/subsample ではありません。
+balanced export は、独立 shower である ``DAT??????`` source group を単位として管理し、source group の zenith で train/validation/test を層化し、各 source group 内の event index を deterministic random score で選びます。
+graph 化後に不足した event の refill も ``dstio`` 側で行います。
+出力には selection summary、HDF5 shard summary、train/validation/test split distribution diagnostics が含まれます。
 
 この sweep の既定 split は、train/validation/test の source group が約 ``45/10/45`` です。
 同じ ``DAT??????`` source group は split 間で共有しません。
 validation は early stopping と model selection 用の独立 source-group holdout とし、test は最終比較用として触らない split にします。
 
-まず HDF5 export stage を投げます。既定では ``50000`` export 1本と、それに依存する ``20000`` / ``10000`` reshard job が投入されます。
+まず HDF5 export stage だけを投げます。既定では ``50000``, ``20000``, ``10000`` の3本がすべて直接 export job です。
+``SERIAL_EXPORTS=1`` が既定なので、3本の full DST scan は同時実行ではなく Slurm dependency で直列化されます。
+ただし各 export job の内部では ``EXPORT_WORKERS=32``、``SCAN_WORKERS=32``、
+``SELECTION_WORKERS=1`` を既定値として使い、worker ごとに HDF5 shard を書きます。
+HDF5 backend は ``H5_BACKEND=auto``、write block は ``WRITE_BLOCK_SIZE=2048`` が既定です。
 
 .. code-block:: bash
 
    RUN_ID=hetero_balance_$(date +%Y%m%d_%H%M%S) \
+   SUBMIT_EXPORTS=1 \
+   SUBMIT_TRAINING=0 \
    scripts/submit_server_hetero_dataset_size_sweep.sh
 
 3種類の最終HDF5とsummaryが完了したら、以下を確認します。

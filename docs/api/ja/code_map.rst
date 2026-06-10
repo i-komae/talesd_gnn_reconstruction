@@ -62,8 +62,8 @@
      - ``src/talesd_gnn_reconstruction/feature_analysis.py``
      - 入力特徴量分布と post-hoc group ablation を作る。
    * - heterogeneous HDF5 書き込み
-     - ``src/talesd_gnn_reconstruction/hetero_graph_io.py``
-     - detector/pulse node、型付き edge、detector waveform、schema attrs を書く。
+     - ``dstio.tale.graph.write_balanced_graph_h5`` / ``dstio.tale.graph.write_graph_h5``。読み込み側は ``src/talesd_gnn_reconstruction/hetero_graph_io.py``。
+     - ``dstio`` が ``GraphEvent`` 作成、graph relation/cut/refill、detector/pulse node、型付き edge、detector waveform、summary、schema attrs の書き込みを担当する。
    * - heterogeneous 変換
      - ``src/talesd_gnn_reconstruction/hetero_data.py``
      - 保存済み ``GraphEvent`` sample を tensor または PyG ``HeteroData`` に変換する。
@@ -94,7 +94,7 @@ CLI は薄い wrapper
      - ``train.train_model`` を呼び、学習と評価を行う。
    * - ``export-hetero``
      - ``_cmd_export_hetero``
-     - ``dstio.tale.graph.iter_graphs`` を呼び、heterogeneous HDF5 cacheを書く。
+     - balanced MC export では ``dstio.tale.graph.write_balanced_graph_h5``、それ以外では ``dstio.tale.graph.write_graph_h5`` を呼ぶ。GNN 側 CLI は引数とsummaryの取り回しだけを行い、graph connectivity は編集しない。
    * - ``train-hetero``
      - ``_cmd_train_hetero``
      - ``hetero_training.train_hetero_model`` を呼ぶ。

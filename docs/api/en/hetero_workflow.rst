@@ -2,7 +2,8 @@ Heterogeneous DST Reconstruction Workflow
 =========================================
 
 The heterogeneous path is the current path for training a model that can later reconstruct DST files directly.
-It uses ``dstio.tale.graph`` for graph semantics and keeps the GNN repository responsible for HDF5 training cache, model input conversion, training, diagnostics, and direct inference.
+It uses ``dstio.tale.graph`` for graph semantics and HDF5 export.
+The GNN repository is responsible for CLI orchestration, HDF5 reading, model input conversion, training, diagnostics, and direct inference.
 
 For the model internals, read :doc:`hetero_model`.
 That page follows the PyTorch and PyG documentation style and explains the actual tensors, encoders, relation attention, readout, loss heads, and direct inference path used in this repository.
@@ -87,14 +88,17 @@ Training cache path
 
 ``export-hetero`` writes HDF5 graph shards for repeated training reads.
 This HDF5 is a cache, not the final reconstruction interface.
+For balanced MC export, source selection, graphable-event refill, graph construction,
+and HDF5 writing are all owned by ``dstio.tale.graph.write_balanced_graph_h5``.
+The GNN repository does not reconnect edges or repeat the refill logic.
 
 .. code-block:: text
 
    DST
      -> talesd-gnn export-hetero
-       -> dstio.tale.graph.iter_graphs
-         -> hetero_graph_io.py
-           -> heterogeneous HDF5 shards
+       -> dstio.tale.graph.write_balanced_graph_h5
+          or dstio.tale.graph.write_graph_h5
+         -> heterogeneous HDF5 shards
 
 ``train-hetero`` then reads those shards, fits scalers on the training split, trains the heterogeneous model, and saves a checkpoint.
 The default model architecture is ``hetero_attention``: relation-specific multi-head attention over detector/pulse relations plus detector/pulse type-wise attention readout.
