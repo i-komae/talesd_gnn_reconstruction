@@ -4,6 +4,7 @@ import csv
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -38,13 +39,17 @@ from talesd_gnn_reconstruction.hetero_predict import reconstruct_dst
 from talesd_gnn_reconstruction.hetero_training import (
     _estimate_graph_bytes,
     _resolve_loader_settings,
+    _split_dataset,
     train_hetero_model,
 )
 from talesd_gnn_reconstruction.cli import (
+    _cmd_export_hetero,
     _cmd_reshard_hetero,
+    _expand_h5_graph_paths,
     _ordered_selected_entries,
     _selected_entries_from_path_indices,
 )
+import talesd_gnn_reconstruction.hetero_training as hetero_training
 from scripts.summarize_split_distributions import summarize
 
 
@@ -246,6 +251,171 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
         self.assertEqual(high_budget["resolved_workers"], 2)
         self.assertEqual(low_budget["resolved_workers"], 0)
         self.assertGreater(high_budget["estimated_loader_bytes"], low_budget["estimated_loader_bytes"])
+
+    def test_h5_path_expansion_finds_nested_dstio_worker_shards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            top = root / "top.h5"
+            nested = root / "worker_0000" / "graphs_0000.h5"
+            nested.parent.mkdir(parents=True)
+            top.touch()
+            nested.touch()
+
+            expanded = [Path(path) for path in _expand_h5_graph_paths([str(root)])]
+
+        self.assertEqual(expanded, [top, nested])
+
+    def test_source_stratified_split_passes_worker_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "synthetic_hetero.h5"
+            with create_hetero_graph_file(output) as handle:
+                for index in range(4):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            dataset = H5HeteroGraphDataset(output, require_target=True, require_particle_label=True)
+            try:
+                with mock.patch.object(
+                    hetero_training,
+                    "split_indices_by_stratified_source_path",
+                    return_value={"train": [0, 1], "val": [2], "test": [3]},
+                ) as patched:
+                    split = _split_dataset(
+                        dataset,
+                        split_mode="source-stratified",
+                        val_fraction=0.25,
+                        test_fraction=0.25,
+                        seed=123,
+                        source_val_fraction=0.25,
+                        source_test_fraction=0.25,
+                        show_progress=False,
+                        split_workers=3,
+                    )
+            finally:
+                dataset.close()
+
+        self.assertEqual(split["train"], [0, 1])
+        self.assertEqual(patched.call_args.kwargs["workers"], 3)
+
+    def test_export_hetero_balanced_delegates_refill_to_dstio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "balanced.h5"
+            summary = Path(tmpdir) / "summary.json"
+            args = SimpleNamespace(
+                input=["/mc/proton/sel/DAT000016_gea_trg_000.dst.gz"],
+                input_list=[],
+                input_dir=[],
+                output=str(output),
+                kind="mc",
+                const_dst="/calib/talesdconst_pass2.dst",
+                mc_calib_dir="/calib",
+                max_events=None,
+                min_event_date=191002,
+                energy_sample_per_bin=2,
+                energy_sample_stratify_particle=True,
+                energy_bin_width=0.1,
+                refill_attempts=2,
+                refill_safety_factor=1.25,
+                refill_min_efficiency=0.01,
+                seed=12345,
+                workers=4,
+                scan_workers=3,
+                selection_workers=1,
+                worker_max_files=0,
+                balance_cell_preselect=8,
+                balance_zenith_bin_width_deg=10.0,
+                balance_azimuth_bin_width_deg=30.0,
+                balance_core_bin_width_km=0.5,
+                balance_time_bin_width_sec=3600,
+                selection_summary=str(summary),
+                dry_run_selection=False,
+                output_order="interleaved",
+                output_locality_run_size=32,
+                write_block_size=2048,
+                h5_backend="auto",
+                h5_progress_interval_sec=30.0,
+                source_scan_progress_interval_events=1000,
+                cleaning="ising",
+                node_policy="all_candidates_with_ising",
+                require_reference_core=True,
+                shard_size=100000,
+                open_retries=3,
+                open_retry_delay=1.0,
+                keep_non_mode0=False,
+                skip_errors=True,
+                skip_missing_mc_calibration=True,
+            )
+            fake_result = {
+                "complete": True,
+                "output_paths": [str(Path(tmpdir) / "worker_0000" / "graphs_0000.h5")],
+                "splits": {"all": {"written_counts_by_stratum": {"16|proton": 2, "16|iron": 2}}},
+            }
+
+            with mock.patch.object(tale_graph, "write_balanced_graph_h5", return_value=fake_result) as patched:
+                _cmd_export_hetero(args)
+
+            self.assertTrue(summary.exists())
+            self.assertEqual(patched.call_args.args[1], output.parent)
+            self.assertEqual(patched.call_args.kwargs["workers"], 4)
+            self.assertEqual(patched.call_args.kwargs["scan_workers"], 3)
+            self.assertEqual(patched.call_args.kwargs["selection_workers"], 1)
+            self.assertEqual(patched.call_args.kwargs["h5_backend"], "auto")
+            self.assertEqual(patched.call_args.kwargs["progress_interval_events"], 1000)
+
+    def test_export_hetero_unbalanced_uses_dstio_h5_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "graphs.h5"
+            args = SimpleNamespace(
+                input=["/data/event.dst.gz"],
+                input_list=[],
+                input_dir=[],
+                output=str(output),
+                kind="data",
+                const_dst=None,
+                mc_calib_dir=None,
+                max_events=1,
+                min_event_date=None,
+                energy_sample_per_bin=None,
+                energy_sample_stratify_particle=False,
+                energy_bin_width=0.1,
+                refill_attempts=0,
+                refill_safety_factor=1.25,
+                refill_min_efficiency=0.01,
+                seed=12345,
+                workers=1,
+                scan_workers=None,
+                selection_workers=1,
+                worker_max_files=0,
+                balance_cell_preselect=8,
+                balance_zenith_bin_width_deg=10.0,
+                balance_azimuth_bin_width_deg=30.0,
+                balance_core_bin_width_km=0.5,
+                balance_time_bin_width_sec=3600,
+                selection_summary=None,
+                dry_run_selection=False,
+                output_order="interleaved",
+                output_locality_run_size=32,
+                write_block_size=2048,
+                h5_backend="python",
+                h5_progress_interval_sec=10.0,
+                source_scan_progress_interval_events=0,
+                cleaning="ising",
+                node_policy="all_candidates_with_ising",
+                require_reference_core=False,
+                shard_size=0,
+                open_retries=1,
+                open_retry_delay=0.0,
+                keep_non_mode0=False,
+                skip_errors=False,
+                skip_missing_mc_calibration=False,
+            )
+            fake_result = {"graphs_written": 1, "output_paths": [str(output)]}
+
+            with mock.patch.object(tale_graph, "write_graph_h5", return_value=fake_result) as patched:
+                _cmd_export_hetero(args)
+
+            self.assertEqual(patched.call_args.args[1], output)
+            self.assertEqual(patched.call_args.kwargs["h5_backend"], "python")
+            self.assertEqual(patched.call_args.kwargs["write_block_size"], 2048)
 
 
 @unittest.skipUnless(DATA_SAMPLE.exists(), "dstio TALE data sample is not available")

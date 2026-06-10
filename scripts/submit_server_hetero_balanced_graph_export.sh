@@ -15,7 +15,7 @@ ENERGY_SAMPLE_PER_BIN="${ENERGY_SAMPLE_PER_BIN:-50000}"
 RUN_NAME="${RUN_NAME:-hetero_balanced_flat${ENERGY_SAMPLE_PER_BIN}_${RUN_ID}}"
 RUN_DIR="${RUN_DIR:-${OUTPUT_ROOT}/runs/${RUN_NAME}}"
 GRAPH_RUN_DIR="${GRAPH_RUN_DIR:-${GRAPH_ROOT}/${RUN_NAME}}"
-GRAPH_OUTPUT="${GRAPH_OUTPUT:-${GRAPH_RUN_DIR}/${RUN_NAME}.h5}"
+GRAPH_OUTPUT="${GRAPH_OUTPUT:-${GRAPH_RUN_DIR}}"
 SELECTION_SUMMARY="${SELECTION_SUMMARY:-${GRAPH_RUN_DIR}/summaries/hetero_selection_summary.json}"
 
 DEFAULT_INPUT_DIRS="/dicos_ui_home/ikomae/work/taleMC/proton/sel/tale_proton5.5yr_16-16.9_v260313:/dicos_ui_home/ikomae/work/taleMC/proton/sel/tale_proton5.5yr_17-17.9_v260313:/dicos_ui_home/ikomae/work/taleMC/proton/sel/tale_proton5.5yr_18-18.9_v260313:/dicos_ui_home/ikomae/work/taleMC/iron/sel/tale_iron4yr_16-16.9_v260316:/dicos_ui_home/ikomae/work/taleMC/iron/sel/tale_iron4yr_17-17.9_v260316:/dicos_ui_home/ikomae/work/taleMC/iron/sel/tale_iron4yr_18-18.9_v260316"
@@ -42,16 +42,14 @@ CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
 MEM="${MEM:-192G}"
 TIME_LIMIT="${TIME_LIMIT:-2-00:00:00}"
 EXPORT_WORKERS="${EXPORT_WORKERS:-32}"
+SCAN_WORKERS="${SCAN_WORKERS:-${EXPORT_WORKERS}}"
+SELECTION_WORKERS="${SELECTION_WORKERS:-1}"
 SHARD_SIZE="${SHARD_SIZE:-100000}"
 MIN_EVENT_DATE="${MIN_EVENT_DATE:-191002}"
 OPEN_RETRIES="${OPEN_RETRIES:-3}"
 OPEN_RETRY_DELAY="${OPEN_RETRY_DELAY:-1.0}"
-ENERGY_BIN_WIDTH="${ENERGY_BIN_WIDTH:-0.1}"
 ENERGY_SAMPLE_STRATIFY_PARTICLE="${ENERGY_SAMPLE_STRATIFY_PARTICLE:-1}"
 REFILL_ATTEMPTS="${REFILL_ATTEMPTS:-2}"
-REFILL_SAFETY_FACTOR="${REFILL_SAFETY_FACTOR:-1.25}"
-REFILL_MIN_EFFICIENCY="${REFILL_MIN_EFFICIENCY:-0.01}"
-BALANCE_CELL_PRESELECT="${BALANCE_CELL_PRESELECT:-8}"
 BALANCE_ZENITH_BIN_WIDTH_DEG="${BALANCE_ZENITH_BIN_WIDTH_DEG:-10}"
 BALANCE_AZIMUTH_BIN_WIDTH_DEG="${BALANCE_AZIMUTH_BIN_WIDTH_DEG:-30}"
 BALANCE_CORE_BIN_WIDTH_KM="${BALANCE_CORE_BIN_WIDTH_KM:-0.5}"
@@ -67,9 +65,10 @@ MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS:-1}"
 INPUT_DISTRIBUTION_MAX_GRAPHS="${INPUT_DISTRIBUTION_MAX_GRAPHS:-100000}"
 INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE="${INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE:-200000}"
 SEED="${SEED:-12345}"
-OUTPUT_ORDER="${OUTPUT_ORDER:-interleaved}"
-OUTPUT_LOCALITY_RUN_SIZE="${OUTPUT_LOCALITY_RUN_SIZE:-32}"
 WRITE_BLOCK_SIZE="${WRITE_BLOCK_SIZE:-2048}"
+H5_BACKEND="${H5_BACKEND:-auto}"
+H5_PROGRESS_INTERVAL_SEC="${H5_PROGRESS_INTERVAL_SEC:-30}"
+SOURCE_SCAN_PROGRESS_INTERVAL_EVENTS="${SOURCE_SCAN_PROGRESS_INTERVAL_EVENTS:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 DRY_RUN_SELECTION="${DRY_RUN_SELECTION:-0}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-/dicos_ui_home/ikomae/work/uv-cache}"
@@ -170,9 +169,11 @@ echo "run_name=${RUN_NAME}"
 echo "graph_output=${GRAPH_OUTPUT}"
 echo "energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}"
 echo "refill_attempts=${REFILL_ATTEMPTS}"
-echo "refill_safety_factor=${REFILL_SAFETY_FACTOR}"
-echo "refill_min_efficiency=${REFILL_MIN_EFFICIENCY}"
 echo "export_workers=${EXPORT_WORKERS}"
+echo "scan_workers=${SCAN_WORKERS}"
+echo "selection_workers=${SELECTION_WORKERS}"
+echo "h5_backend=${H5_BACKEND}"
+echo "write_block_size=${WRITE_BLOCK_SIZE}"
 echo "summary_workers=${SUMMARY_WORKERS}"
 echo "make_input_distributions=${MAKE_INPUT_DISTRIBUTIONS}"
 echo "selection_strategy=source_group_manifest_filename_energy_v1"
@@ -192,16 +193,15 @@ env UV_CACHE_DIR="${UV_CACHE_DIR}" uv sync --frozen
   --mc-calib-dir "${MC_CALIB_DIR}" \\
   --energy-sample-per-bin "${ENERGY_SAMPLE_PER_BIN}" \\
 ${particle_line}\
-  --energy-bin-width "${ENERGY_BIN_WIDTH}" \\
   --refill-attempts "${REFILL_ATTEMPTS}" \\
-  --refill-safety-factor "${REFILL_SAFETY_FACTOR}" \\
-  --refill-min-efficiency "${REFILL_MIN_EFFICIENCY}" \\
   --seed "${SEED}" \\
-  --output-order "${OUTPUT_ORDER}" \\
-  --output-locality-run-size "${OUTPUT_LOCALITY_RUN_SIZE}" \\
   --write-block-size "${WRITE_BLOCK_SIZE}" \\
+  --h5-backend "${H5_BACKEND}" \\
+  --h5-progress-interval-sec "${H5_PROGRESS_INTERVAL_SEC}" \\
+  --source-scan-progress-interval-events "${SOURCE_SCAN_PROGRESS_INTERVAL_EVENTS}" \\
   --workers "${EXPORT_WORKERS}" \\
-  --balance-cell-preselect "${BALANCE_CELL_PRESELECT}" \\
+  --scan-workers "${SCAN_WORKERS}" \\
+  --selection-workers "${SELECTION_WORKERS}" \\
   --balance-zenith-bin-width-deg "${BALANCE_ZENITH_BIN_WIDTH_DEG}" \\
   --balance-azimuth-bin-width-deg "${BALANCE_AZIMUTH_BIN_WIDTH_DEG}" \\
   --balance-core-bin-width-km "${BALANCE_CORE_BIN_WIDTH_KM}" \\
@@ -250,7 +250,11 @@ graph_output: ${GRAPH_OUTPUT}
 selection_summary: ${SELECTION_SUMMARY}
 energy_sample_per_bin: ${ENERGY_SAMPLE_PER_BIN}
 seed: ${SEED}
-output_order: ${OUTPUT_ORDER}
+export_workers: ${EXPORT_WORKERS}
+scan_workers: ${SCAN_WORKERS}
+selection_workers: ${SELECTION_WORKERS}
+h5_backend: ${H5_BACKEND}
+write_block_size: ${WRITE_BLOCK_SIZE}
 split_event_fractions: train=1-val-test, val=${VAL_FRACTION}, test=${TEST_FRACTION}
 split_source_fractions: train=1-val-test, val=${SOURCE_VAL_FRACTION}, test=${SOURCE_TEST_FRACTION}
 sbatch_file: ${SBATCH_FILE}

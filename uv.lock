@@ -328,14 +328,16 @@ wheels = [
 
 [[package]]
 name = "dstio"
-version = "0.7.1"
+version = "0.7.3"
 source = { editable = "../dstio" }
 dependencies = [
+    { name = "h5py" },
     { name = "numpy" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "h5py", specifier = ">=3.14.0" },
     { name = "jupyter", marker = "extra == 'examples'" },
     { name = "matplotlib", marker = "extra == 'docs'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'examples'", specifier = ">=3.8" },
@@ -1454,7 +1456,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dstio", editable = "../dstio", specifier = ">=0.7.1" },
+    { name = "dstio", editable = "../dstio" },
     { name = "h5py", specifier = ">=3.10" },
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "numpy", specifier = ">=2.0" },

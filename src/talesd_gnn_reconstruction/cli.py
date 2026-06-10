@@ -2201,7 +2201,7 @@ def _expand_h5_graph_paths(paths: list[str]) -> list[str]:
     for raw_path in paths:
         path = Path(raw_path).expanduser()
         if path.is_dir():
-            matches = sorted(path.glob("*.h5"))
+            matches = sorted(path.rglob("*.h5"))
             expanded.extend(str(match) for match in matches)
             continue
         if path.exists():
@@ -3293,6 +3293,23 @@ def _cmd_export(args: argparse.Namespace) -> None:
         print(f"energy-flat bins: {len(config.get('energy_graph_seen_by_bin', config.get('energy_seen_by_bin', {})))}")
 
 
+def _dstio_h5_output_path(output: str | Path, *, require_directory: bool, workers: int) -> Path:
+    output_path = Path(output).expanduser()
+    if require_directory and output_path.suffix.lower() in {".h5", ".hdf5"}:
+        return output_path.parent
+    if int(workers) > 1 and output_path.suffix.lower() in {".h5", ".hdf5"}:
+        return output_path.parent
+    return output_path
+
+
+def _dstio_balanced_written_total(result: dict[str, Any]) -> int:
+    total = 0
+    for split in (result.get("splits") or {}).values():
+        for count in (split.get("written_counts_by_stratum") or {}).values():
+            total += int(count)
+    return int(total)
+
+
 def _cmd_export_hetero(args: argparse.Namespace) -> None:
     import dstio.tale.graph as tale_graph
 
@@ -3314,23 +3331,22 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
         "require_reference_core": bool(args.require_reference_core),
         "energy_sample_per_bin": args.energy_sample_per_bin,
         "energy_sample_stratify_particle": bool(args.energy_sample_stratify_particle),
-        "energy_bin_width": args.energy_bin_width,
         "balanced_selection": bool(args.energy_sample_per_bin is not None),
-        "balance_cell_preselect": args.balance_cell_preselect,
         "balance_zenith_bin_width_deg": args.balance_zenith_bin_width_deg,
         "balance_azimuth_bin_width_deg": args.balance_azimuth_bin_width_deg,
         "balance_core_bin_width_km": args.balance_core_bin_width_km,
         "balance_time_bin_width_sec": args.balance_time_bin_width_sec,
         "seed": args.seed,
-        "output_order": args.output_order,
-        "output_locality_run_size": args.output_locality_run_size,
         "write_block_size": args.write_block_size,
         "workers": args.workers,
         "worker_max_files": args.worker_max_files,
         "refill_attempts": args.refill_attempts,
-        "refill_safety_factor": args.refill_safety_factor,
-        "refill_min_efficiency": args.refill_min_efficiency,
         "shard_size": args.shard_size,
+        "h5_backend": args.h5_backend,
+        "scan_workers": args.scan_workers,
+        "selection_workers": args.selection_workers,
+        "h5_progress_interval_sec": args.h5_progress_interval_sec,
+        "source_scan_progress_interval_events": args.source_scan_progress_interval_events,
         "open_retries": args.open_retries,
         "open_retry_delay": args.open_retry_delay,
         "min_event_date": min_event_date,
@@ -3339,208 +3355,30 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
     if args.energy_sample_per_bin is not None:
         if args.kind not in {"mc", "auto"}:
             raise ValueError("balanced energy sampling for export-hetero currently requires MC rusdraw/rusdmc input")
-        selected_by_path, selection_summary = _build_source_group_balanced_hetero_selection(inputs, args)
-        desired_by_bin = {
-            str(bin_key): int(row.get("target_events", int(args.energy_sample_per_bin)))
-            for bin_key, row in selection_summary["quota"]["by_bin"].items()
-        }
-        selected_event_dates = selection_summary["selected"]["by_date"]
-        if args.kind == "mc" and mc_calib_dir is not None:
-            _validate_mc_calibration_dates(
-                mc_calib_dir,
-                {int(date): count for date, count in selected_event_dates.items()},
-                context="hetero balanced preselection",
-            )
-        scan_summary = selection_summary["scan"]
-        config["balanced_selection_summary"] = selection_summary
-        config["scan_raw_events"] = int(scan_summary.get("raw_events", 0))
-        config["scan_hit_events"] = int(scan_summary.get("eligible_events", 0))
-        config["scan_missing_calibration_events"] = int(scan_summary.get("missing_calibration_events", 0))
-        config["scan_selected_files"] = len(selected_by_path)
-        selected_event_count = sum(len(indices) for indices in selected_by_path.values())
-        _progress_write(
-            "hetero balanced preselection: "
-            f"selected_events={selected_event_count} selected_files={len(selected_by_path)} "
-            f"source_groups={selection_summary['selected']['source_groups']} "
-            f"raw_events={config['scan_raw_events']} eligible_events={config['scan_hit_events']} "
-            f"missing_calibration_events={config['scan_missing_calibration_events']}"
-        )
         if args.dry_run_selection:
-            if args.selection_summary:
-                summary_path = Path(args.selection_summary).expanduser()
-                summary_path.parent.mkdir(parents=True, exist_ok=True)
-                summary_path.write_text(json.dumps(selection_summary, indent=2, sort_keys=True) + "\n")
-                _progress_write(f"hetero selection summary: {summary_path}")
-            print("dry-run selection complete; no hetero HDF5 was written")
-            return
-        if int(args.shard_size) > 0 and int(args.workers) > 1:
-            config["balanced_selection_parallel_shard_write"] = True
-            config["balanced_selection_output_ordered"] = True
-            config["balanced_refill_enabled"] = True
-            written_total = 0
-            skipped_total = 0
-            written_path_items: list[tuple[int, Path]] = []
-            written_by_bin: dict[str, int] = {}
-            selected_by_bin_total: dict[str, int] = {}
-            selected_dates_total: dict[str, int] = {}
-            attempted_by_path: dict[str, set[int]] = {}
-            refill_history: list[dict[str, Any]] = []
-            selection_attempts: list[dict[str, Any]] = [selection_summary]
-            current_selected_by_path = selected_by_path
-            current_selection_summary = selection_summary
-            current_bin_targets: dict[str, int] | None = None
-            shard_start_index = 0
-
-            for attempt_index in range(max(int(args.refill_attempts), 0) + 1):
-                if attempt_index > 0:
-                    current_selection_summary = selection_attempts[-1]
-                _merge_selected_indices(attempted_by_path, current_selected_by_path)
-                _merge_count_dict(selected_by_bin_total, current_selection_summary["selected"]["by_filename_energy_bin"])
-                _merge_count_dict(selected_dates_total, current_selection_summary["selected"]["by_date"])
-
-                attempt_config = dict(config)
-                attempt_config["balanced_selection_attempt"] = int(attempt_index)
-                attempt_config["balanced_selection_summary"] = current_selection_summary
-                attempt_config["balanced_refill_bin_targets"] = current_bin_targets
-                attempt_written_by_bin: dict[str, int] = {}
-                attempt_written_total = 0
-                attempt_skipped_total = 0
-                last_shard_index = shard_start_index - 1
-                for result in _iter_selected_hetero_shard_write_results(
-                    inputs,
-                    args,
-                    const_dst,
-                    mc_calib_dir,
-                    current_selected_by_path,
-                    attempt_config,
-                    shard_start_index=shard_start_index,
-                ):
-                    result_written = int(result["written"])
-                    result_skipped = int(result["skipped"])
-                    attempt_written_total += result_written
-                    attempt_skipped_total += result_skipped
-                    written_total += result_written
-                    skipped_total += result_skipped
-                    last_shard_index = max(last_shard_index, int(result["shard_index"]))
-                    _merge_count_dict(attempt_written_by_bin, result.get("graph_seen_by_bin", {}))
-                    if result.get("path"):
-                        written_path_items.append((int(result["shard_index"]), Path(str(result["path"]))))
-                shard_start_index = max(shard_start_index, last_shard_index + 1)
-                _merge_count_dict(written_by_bin, attempt_written_by_bin)
-                missing_by_bin = _hetero_missing_bin_counts(desired_by_bin, written_by_bin)
-                refill_history.append(
-                    {
-                        "attempt": int(attempt_index),
-                        "bin_targets": current_bin_targets,
-                        "selected_events": sum(len(indices) for indices in current_selected_by_path.values()),
-                        "selected_by_bin": current_selection_summary["selected"]["by_filename_energy_bin"],
-                        "written_events": attempt_written_total,
-                        "skipped_events": attempt_skipped_total,
-                        "written_by_bin": dict(sorted(attempt_written_by_bin.items())),
-                        "cumulative_written_by_bin": dict(sorted(written_by_bin.items())),
-                        "missing_by_bin": dict(sorted(missing_by_bin.items())),
-                    }
-                )
-                _progress_write(
-                    "hetero balanced write attempt "
-                    f"{attempt_index}: written={attempt_written_total} skipped={attempt_skipped_total} "
-                    f"missing_bins={len(missing_by_bin)}"
-                )
-                if not missing_by_bin:
-                    break
-                if attempt_index >= max(int(args.refill_attempts), 0):
-                    break
-                current_bin_targets = _hetero_refill_bin_targets(
-                    desired_by_bin,
-                    written_by_bin,
-                    selected_by_bin_total,
-                    safety_factor=float(args.refill_safety_factor),
-                    min_efficiency=float(args.refill_min_efficiency),
-                )
-                _progress_write(
-                    "hetero balanced refill selection: "
-                    f"attempt={attempt_index + 1} bins={len(current_bin_targets)} "
-                    f"targets={dict(sorted(current_bin_targets.items()))}"
-                )
-                current_selected_by_path, next_selection_summary = _build_source_group_balanced_hetero_selection(
-                    inputs,
-                    args,
-                    bin_targets=current_bin_targets,
-                    excluded_by_path=attempted_by_path,
-                    seed_offset=attempt_index + 1,
-                )
-                if args.kind == "mc" and mc_calib_dir is not None:
-                    _validate_mc_calibration_dates(
-                        mc_calib_dir,
-                        {int(date): count for date, count in next_selection_summary["selected"]["by_date"].items()},
-                        context=f"hetero balanced refill attempt {attempt_index + 1}",
-                    )
-                selection_attempts.append(next_selection_summary)
-                if sum(len(indices) for indices in current_selected_by_path.values()) <= 0:
-                    _progress_write("hetero balanced refill selection returned no new events")
-                    break
-
-            final_missing_by_bin = _hetero_missing_bin_counts(desired_by_bin, written_by_bin)
-            final_selection_summary = dict(selection_summary)
-            final_selection_summary["combined_selected"] = {
-                "events": sum(len(indices) for indices in attempted_by_path.values()),
-                "files": len(attempted_by_path),
-                "by_filename_energy_bin": dict(sorted(selected_by_bin_total.items())),
-                "by_date": dict(sorted(selected_dates_total.items())),
-            }
-            final_selection_summary["write"] = {
-                "desired_by_bin": dict(sorted(desired_by_bin.items())),
-                "written_by_bin": dict(sorted(written_by_bin.items())),
-                "missing_by_bin": dict(sorted(final_missing_by_bin.items())),
-                "written_events": int(written_total),
-                "skipped_events": int(skipped_total),
-                "refill_history": refill_history,
-            }
-            final_selection_summary["selection_attempts"] = selection_attempts
-            config["balanced_selection_summary"] = final_selection_summary
-            config["balanced_graph_seen_by_bin"] = dict(sorted(written_by_bin.items()))
-            config["balanced_missing_by_bin"] = dict(sorted(final_missing_by_bin.items()))
-            if args.selection_summary:
-                summary_path = Path(args.selection_summary).expanduser()
-                summary_path.parent.mkdir(parents=True, exist_ok=True)
-                summary_path.write_text(json.dumps(final_selection_summary, indent=2, sort_keys=True) + "\n")
-                _progress_write(f"hetero selection summary: {summary_path}")
-            if final_missing_by_bin:
-                raise SystemExit(
-                    "hetero balanced export is short after refill attempts: "
-                    + json.dumps(dict(sorted(final_missing_by_bin.items())), sort_keys=True)
-                )
-            written_paths = [path for _index, path in sorted(written_path_items, key=lambda item: item[0])]
-            targets = ", ".join(str(path) for path in written_paths) if written_paths else str(args.output)
-            print(f"wrote {written_total} hetero graphs to {targets} (skipped {skipped_total} selected events)")
-            return
-        if max(int(args.refill_attempts), 0) > 0:
-            raise SystemExit(
-                "hetero balanced refill requires --shard-size > 0 and --workers > 1; "
-                "single-file export cannot verify written graph counts by bin before success"
-            )
-        selected_entries = _selected_entries_from_path_indices(
-            inputs,
-            selected_by_path,
-            stratify_particle=bool(args.energy_sample_stratify_particle),
+            raise SystemExit("dry-run selection is not available through dstio.write_balanced_graph_h5")
+        output_path = _dstio_h5_output_path(args.output, require_directory=True, workers=max(int(args.workers), 1))
+        _progress_write(
+            "hetero balanced export: "
+            f"backend=dstio.write_balanced_graph_h5 output={output_path} workers={args.workers} "
+            f"scan_workers={args.scan_workers} selection_workers={args.selection_workers} "
+            f"h5_backend={args.h5_backend}"
         )
-        selected_entries = _ordered_selected_entries(
-            selected_entries,
-            output_order=str(args.output_order),
-            seed=int(args.seed),
-            locality_run_size=int(args.output_locality_run_size),
-        )
-        config["balanced_selection_output_ordered"] = True
-        graphs = _iter_ordered_selected_hetero_graphs(selected_entries, args, const_dst, mc_calib_dir)
-    else:
-        graphs = tale_graph.iter_graphs(
+        result = tale_graph.write_balanced_graph_h5(
             inputs,
-            kind=args.kind,
-            cleaning=args.cleaning,
-            node_policy=args.node_policy,
+            output_path,
+            kind="mc",
             const_dst=const_dst,
             mc_calib_dir=mc_calib_dir,
-            max_events=args.max_events,
+            energy_sample_per_bin=max(int(args.energy_sample_per_bin), 1),
+            seed=int(args.seed),
+            split_fractions=None,
+            balance_zenith_bin_width_deg=float(args.balance_zenith_bin_width_deg),
+            balance_azimuth_bin_width_deg=float(args.balance_azimuth_bin_width_deg),
+            balance_core_bin_width_km=float(args.balance_core_bin_width_km),
+            balance_time_bin_width_sec=int(args.balance_time_bin_width_sec),
+            cleaning=args.cleaning,
+            node_policy=args.node_policy,
             require_trigger_mode0=not args.keep_non_mode0,
             require_reference_core=bool(args.require_reference_core),
             skip_errors=bool(args.skip_errors),
@@ -3548,9 +3386,58 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
             min_event_date=min_event_date,
             open_retries=args.open_retries,
             open_retry_delay=args.open_retry_delay,
+            recursive=False,
+            workers=args.workers,
+            scan_workers=args.scan_workers,
+            selection_workers=args.selection_workers,
+            shard_size=args.shard_size if int(args.shard_size) > 0 else 100_000,
+            write_block_size=args.write_block_size,
+            max_tasks_per_child=args.worker_max_files if int(args.worker_max_files) > 0 else None,
+            refill_attempts=args.refill_attempts,
+            progress_interval_sec=args.h5_progress_interval_sec,
+            progress_interval_events=args.source_scan_progress_interval_events,
+            h5_backend=args.h5_backend,
+            config=config,
         )
-    written_total, written_paths = _write_hetero_graph_iterable(graphs, args, config)
-    targets = ", ".join(str(path) for path in written_paths) if written_paths else str(args.output)
+        if args.selection_summary:
+            summary_path = Path(args.selection_summary).expanduser()
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+            _progress_write(f"hetero selection summary: {summary_path}")
+        if not bool(result.get("complete", False)):
+            raise SystemExit("dstio balanced export is incomplete: " + json.dumps(result.get("splits", {}), sort_keys=True))
+        written_total = _dstio_balanced_written_total(result)
+        targets = ", ".join(str(path) for path in result.get("output_paths", [])) if result.get("output_paths") else str(output_path)
+        print(f"wrote {written_total} hetero graphs to {targets}")
+        return
+
+    output_path = _dstio_h5_output_path(args.output, require_directory=False, workers=max(int(args.workers), 1))
+    result = tale_graph.write_graph_h5(
+        inputs,
+        output_path,
+        kind=args.kind,
+        cleaning=args.cleaning,
+        node_policy=args.node_policy,
+        const_dst=const_dst,
+        mc_calib_dir=mc_calib_dir,
+        max_events=args.max_events,
+        require_trigger_mode0=not args.keep_non_mode0,
+        require_reference_core=bool(args.require_reference_core),
+        skip_errors=bool(args.skip_errors),
+        skip_missing_mc_calibration=bool(args.skip_missing_mc_calibration),
+        min_event_date=min_event_date,
+        open_retries=args.open_retries,
+        open_retry_delay=args.open_retry_delay,
+        workers=args.workers,
+        shard_size=args.shard_size if int(args.shard_size) > 0 else 100_000,
+        write_block_size=args.write_block_size,
+        max_tasks_per_child=args.worker_max_files if int(args.worker_max_files) > 0 else None,
+        progress_interval_sec=args.h5_progress_interval_sec,
+        config=config,
+        h5_backend=args.h5_backend,
+    )
+    written_total = int(result.get("graphs_written", 0))
+    targets = ", ".join(str(path) for path in result.get("output_paths", [])) if result.get("output_paths") else str(output_path)
     print(f"wrote {written_total} hetero graphs to {targets}")
 
 
@@ -3842,6 +3729,7 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         pin_memory=None if not args.no_pin_memory else False,
         loader_memory_budget_gib=args.loader_memory_budget_gib,
         loader_memory_estimate_samples=args.loader_memory_estimate_samples,
+        split_workers=args.split_workers,
         show_progress=not args.no_progress,
     )
     print(f"checkpoint: {result['checkpoint']}")
@@ -4083,14 +3971,16 @@ def build_parser() -> argparse.ArgumentParser:
     export_hetero.add_argument("--min-event-date", type=int, default=None, help="YYMMDD形式。この日付より前のeventをDST読み込み時に除外する")
     export_hetero.add_argument("--energy-sample-per-bin", type=int, default=None, help="DAT filename energy codeごとに残す最大hetero graph数。source group均等割りを使う")
     export_hetero.add_argument("--energy-sample-stratify-particle", action="store_true", help="energy samplingをproton/iron別のDAT filename energy codeで行う")
-    export_hetero.add_argument("--energy-bin-width", type=float, default=0.1, help="旧event-level sampling用。source-group manifest方式ではselectionに使わない")
+    export_hetero.add_argument("--energy-bin-width", type=float, default=0.1, help="互換用。dstio balanced exportではDAT filename energy codeを使うためselectionには使わない")
     export_hetero.add_argument("--refill-attempts", type=int, default=2, help="balanced exportで実際に書けたgraph数が不足したbinを追加選択する回数")
-    export_hetero.add_argument("--refill-safety-factor", type=float, default=1.25, help="不足binの追加選択数に掛ける安全係数")
-    export_hetero.add_argument("--refill-min-efficiency", type=float, default=0.01, help="追加選択数を見積もる時の最小 graph 化効率")
+    export_hetero.add_argument("--refill-safety-factor", type=float, default=1.25, help="互換用。dstio balanced exportでは使わない")
+    export_hetero.add_argument("--refill-min-efficiency", type=float, default=0.01, help="互換用。dstio balanced exportでは使わない")
     export_hetero.add_argument("--seed", type=int, default=12345, help="balanced selectionのdeterministic seed")
     export_hetero.add_argument("--workers", type=int, default=1, help="DST manifest scan、source-group event selection、HDF5 shard writeに使うworker数")
+    export_hetero.add_argument("--scan-workers", type=int, default=None, help="dstio balanced exportのmanifest scan worker数。未指定ならdstio既定")
+    export_hetero.add_argument("--selection-workers", type=int, default=1, help="dstio balanced exportのsource-group event selection worker数")
     export_hetero.add_argument("--worker-max-files", type=int, default=DEFAULT_WORKER_MAX_FILES, help="scan workerをNファイル処理ごとに再起動する。0なら無効")
-    export_hetero.add_argument("--balance-cell-preselect", type=int, default=8, help="旧event-level candidate scan用。source-group manifest方式ではselectionに使わない")
+    export_hetero.add_argument("--balance-cell-preselect", type=int, default=8, help="互換用。dstio balanced exportでは使わない")
     export_hetero.add_argument("--balance-zenith-bin-width-deg", type=float, default=10.0, help="旧event-level selection用。source-group manifest方式ではselectionに使わない")
     export_hetero.add_argument("--balance-azimuth-bin-width-deg", type=float, default=30.0, help="balanced selection用azimuth bin幅")
     export_hetero.add_argument("--balance-core-bin-width-km", type=float, default=0.5, help="balanced selection用core x/y bin幅")
@@ -4101,19 +3991,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-order",
         choices=["source", "random", "interleaved"],
         default="interleaved",
-        help="balanced export のHDF5内event順。interleavedはparticle/energy/sourceが連続しないように混ぜる",
+        help="互換用。dstio balanced exportではshard/event orderもdstioが決める",
     )
     export_hetero.add_argument(
         "--output-locality-run-size",
         type=int,
         default=32,
-        help="--output-order=interleavedで同一source/binから連続して書く最大event数",
+        help="互換用。dstio balanced exportでは使わない",
     )
     export_hetero.add_argument(
         "--write-block-size",
         type=int,
         default=2048,
         help="ordered hetero shard書き出しで一度にgraph化して並べ替えるevent数",
+    )
+    export_hetero.add_argument("--h5-backend", choices=["auto", "native", "python"], default="auto", help="dstio HDF5 writer backend")
+    export_hetero.add_argument("--h5-progress-interval-sec", type=float, default=30.0, help="dstio HDF5 export progress出力間隔")
+    export_hetero.add_argument(
+        "--source-scan-progress-interval-events",
+        type=int,
+        default=0,
+        help="dstio C source scan/selection loopのprogressをN raw eventsごとに出す。0で無効",
     )
     export_hetero.add_argument("--cleaning", choices=["ising", "none"], default="ising", help="dstio.tale.graph cleaning mode")
     export_hetero.add_argument(
@@ -4363,6 +4261,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="DataLoader prefetchに使うCPU memory上限GiB。省略時はSlurmの割当memoryから読む",
     )
     train_hetero.add_argument("--loader-memory-estimate-samples", type=int, default=512)
+    train_hetero.add_argument("--split-workers", type=int, default=0, help="source-stratified split のHDF5 metadata scan worker数。0なら単一process")
     train_hetero.add_argument("--no-progress", action="store_true")
     train_hetero.set_defaults(func=_cmd_train_hetero)
 

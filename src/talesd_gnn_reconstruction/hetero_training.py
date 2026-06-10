@@ -140,6 +140,7 @@ def _split_dataset(
     source_val_fraction: float,
     source_test_fraction: float,
     show_progress: bool,
+    split_workers: int,
 ) -> dict[str, list[int]]:
     if split_mode == "event":
         return split_indices(len(dataset), val_fraction=val_fraction, test_fraction=test_fraction, seed=seed)
@@ -158,7 +159,7 @@ def _split_dataset(
             test_fraction=test_fraction,
             seed=seed,
             show_progress=show_progress,
-            workers=0,
+            workers=max(int(split_workers), 0),
             source_val_fraction=source_val_fraction,
             source_test_fraction=source_test_fraction,
         )
@@ -554,6 +555,7 @@ def train_hetero_model(
     pin_memory: bool | None = None,
     loader_memory_budget_gib: float | None = None,
     loader_memory_estimate_samples: int = 512,
+    split_workers: int = 0,
     show_progress: bool = True,
 ) -> dict[str, Any]:
     import torch
@@ -595,6 +597,7 @@ def train_hetero_model(
         source_val_fraction=source_val_fraction,
         source_test_fraction=source_test_fraction,
         show_progress=show_progress,
+        split_workers=split_workers,
     )
     train_indices = split["train"]
     val_indices = split["val"]
@@ -950,6 +953,7 @@ def train_hetero_model(
                 if loader_memory_budget_gib is None
                 else float(loader_memory_budget_gib),
                 "loader_memory_estimate_samples": int(loader_memory_estimate_samples),
+                "split_workers": int(split_workers),
             },
         },
     }

@@ -16,9 +16,7 @@ TEST_FRACTION="${TEST_FRACTION:-0.45}"
 SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION:-0.10}"
 SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION:-0.45}"
 REFILL_ATTEMPTS="${REFILL_ATTEMPTS:-2}"
-REFILL_SAFETY_FACTOR="${REFILL_SAFETY_FACTOR:-1.25}"
-REFILL_MIN_EFFICIENCY="${REFILL_MIN_EFFICIENCY:-0.01}"
-SERIAL_RESHARDS="${SERIAL_RESHARDS:-1}"
+SERIAL_EXPORTS="${SERIAL_EXPORTS:-1}"
 
 IFS="," read -r -a size_array <<< "${SIZES}"
 
@@ -43,87 +41,41 @@ if (( ${#clean_sizes[@]} == 0 )); then
 fi
 
 if [[ "${SUBMIT_EXPORTS}" == "1" ]]; then
-  base_dataset_name="hetero_balanced_flat${max_size}_${RUN_ID}"
-  base_graph_input="${GRAPH_ROOT}/${base_dataset_name}/${base_dataset_name}.h5"
-  base_job_id=""
-  if [[ "${DRY_RUN}" == "1" ]]; then
-    ENERGY_SAMPLE_PER_BIN="${max_size}" \
-    RUN_ID="${RUN_ID}" \
-    RUN_NAME="${base_dataset_name}" \
-    REFILL_ATTEMPTS="${REFILL_ATTEMPTS}" \
-    REFILL_SAFETY_FACTOR="${REFILL_SAFETY_FACTOR}" \
-    REFILL_MIN_EFFICIENCY="${REFILL_MIN_EFFICIENCY}" \
-    VAL_FRACTION="${VAL_FRACTION}" \
-    TEST_FRACTION="${TEST_FRACTION}" \
-    SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION}" \
-    SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION}" \
-    DRY_RUN="${DRY_RUN}" \
-    "${SCRIPT_DIR}/submit_server_hetero_balanced_graph_export.sh"
-  else
-    base_job_id="$(
-      ENERGY_SAMPLE_PER_BIN="${max_size}" \
-      RUN_ID="${RUN_ID}" \
-      RUN_NAME="${base_dataset_name}" \
-      REFILL_ATTEMPTS="${REFILL_ATTEMPTS}" \
-      REFILL_SAFETY_FACTOR="${REFILL_SAFETY_FACTOR}" \
-      REFILL_MIN_EFFICIENCY="${REFILL_MIN_EFFICIENCY}" \
-      VAL_FRACTION="${VAL_FRACTION}" \
-      TEST_FRACTION="${TEST_FRACTION}" \
-      SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION}" \
-      SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION}" \
-      SBATCH_PARSABLE=1 \
-      "${SCRIPT_DIR}/submit_server_hetero_balanced_graph_export.sh"
-    )"
-    printf "base export job for sample_per_bin=%s: %s\n" "${max_size}" "${base_job_id}" >&2
-  fi
-
-  previous_reshard_job_id=""
+  previous_export_job_id=""
   for size in "${clean_sizes[@]}"; do
-    if (( size == max_size )); then
-      printf "derive job for size=%s: skipped; base export writes %s\n" "${size}" "${base_graph_input}" >&2
-      continue
-    fi
     dataset_name="hetero_balanced_flat${size}_${RUN_ID}"
-    graph_input="${GRAPH_ROOT}/${dataset_name}/${dataset_name}.h5"
     dependency=""
-    if [[ -n "${base_job_id}" ]]; then
-      dependency="afterok:${base_job_id}"
-    fi
-    if [[ "${SERIAL_RESHARDS}" == "1" && -n "${previous_reshard_job_id}" ]]; then
-      dependency="afterok:${previous_reshard_job_id}"
+    if [[ "${SERIAL_EXPORTS}" == "1" && -n "${previous_export_job_id}" ]]; then
+      dependency="afterok:${previous_export_job_id}"
     fi
     if [[ "${DRY_RUN}" == "1" ]]; then
-      GRAPH_INPUT="${base_graph_input}" \
       ENERGY_SAMPLE_PER_BIN="${size}" \
       RUN_ID="${RUN_ID}" \
       RUN_NAME="${dataset_name}" \
-      GRAPH_RUN_DIR="${GRAPH_ROOT}/${dataset_name}" \
-      GRAPH_OUTPUT="${graph_input}" \
+      REFILL_ATTEMPTS="${REFILL_ATTEMPTS}" \
       VAL_FRACTION="${VAL_FRACTION}" \
       TEST_FRACTION="${TEST_FRACTION}" \
       SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION}" \
       SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION}" \
       DRY_RUN="${DRY_RUN}" \
-      "${SCRIPT_DIR}/submit_server_hetero_reshard.sh"
+      "${SCRIPT_DIR}/submit_server_hetero_balanced_graph_export.sh"
     else
-      reshard_job_id="$(
-        GRAPH_INPUT="${base_graph_input}" \
+      export_job_id="$(
         ENERGY_SAMPLE_PER_BIN="${size}" \
         RUN_ID="${RUN_ID}" \
         RUN_NAME="${dataset_name}" \
-        GRAPH_RUN_DIR="${GRAPH_ROOT}/${dataset_name}" \
-        GRAPH_OUTPUT="${graph_input}" \
+        REFILL_ATTEMPTS="${REFILL_ATTEMPTS}" \
         VAL_FRACTION="${VAL_FRACTION}" \
         TEST_FRACTION="${TEST_FRACTION}" \
         SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION}" \
         SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION}" \
         SBATCH_DEPENDENCY="${dependency}" \
         SBATCH_PARSABLE=1 \
-        "${SCRIPT_DIR}/submit_server_hetero_reshard.sh"
+        "${SCRIPT_DIR}/submit_server_hetero_balanced_graph_export.sh"
       )"
-      printf "derive job for size=%s: %s dependency=%s\n" "${size}" "${reshard_job_id}" "${dependency}" >&2
-      if [[ "${SERIAL_RESHARDS}" == "1" ]]; then
-        previous_reshard_job_id="${reshard_job_id}"
+      printf "export job for sample_per_bin=%s: %s dependency=%s\n" "${size}" "${export_job_id}" "${dependency}" >&2
+      if [[ "${SERIAL_EXPORTS}" == "1" ]]; then
+        previous_export_job_id="${export_job_id}"
       fi
     fi
   done
@@ -133,10 +85,13 @@ for size in "${clean_sizes[@]}"; do
   size="${size// /}"
   [[ -n "${size}" ]] || continue
   dataset_name="hetero_balanced_flat${size}_${RUN_ID}"
-  graph_input="${GRAPH_ROOT}/${dataset_name}/${dataset_name}.h5"
+  graph_input="${GRAPH_ROOT}/${dataset_name}"
   if [[ "${SUBMIT_TRAINING}" == "1" ]]; then
-    first_shard="${graph_input%.h5}_0000.h5"
-    if [[ "${DRY_RUN}" != "1" && "${ALLOW_MISSING_GRAPH}" != "1" && ! -s "${graph_input}" && ! -s "${first_shard}" ]]; then
+    first_shard=""
+    if [[ -d "${graph_input}" ]]; then
+      first_shard="$(find "${graph_input}" -type f -name '*.h5' -size +0c -print -quit)"
+    fi
+    if [[ "${DRY_RUN}" != "1" && "${ALLOW_MISSING_GRAPH}" != "1" && -z "${first_shard}" ]]; then
       echo "graph input is not ready for training: ${graph_input}" >&2
       echo "Run exports first, confirm H5/shards and summaries, then rerun with SUBMIT_EXPORTS=0 SUBMIT_TRAINING=1." >&2
       exit 2
@@ -166,8 +121,8 @@ for size in "${clean_sizes[@]}"; do
 done
 
 printf "sweep_name=%s\n" "${SWEEP_NAME}" >&2
-printf "export_strategy=base-max-size-plus-reshard max_size=%s sizes=%s\n" "${max_size}" "${SIZES}" >&2
-printf "export_refill: attempts=%s safety_factor=%s min_efficiency=%s\n" "${REFILL_ATTEMPTS}" "${REFILL_SAFETY_FACTOR}" "${REFILL_MIN_EFFICIENCY}" >&2
-printf "serial_reshards=%s\n" "${SERIAL_RESHARDS}" >&2
+printf "export_strategy=dstio-balanced-per-size sizes=%s\n" "${SIZES}" >&2
+printf "export_refill: attempts=%s owner=dstio.write_balanced_graph_h5\n" "${REFILL_ATTEMPTS}" >&2
+printf "serial_exports=%s\n" "${SERIAL_EXPORTS}" >&2
 printf "split_event_fractions: train=1-val-test val=%s test=%s\n" "${VAL_FRACTION}" "${TEST_FRACTION}" >&2
 printf "split_source_fractions: train=1-val-test val=%s test=%s\n" "${SOURCE_VAL_FRACTION}" "${SOURCE_TEST_FRACTION}" >&2
