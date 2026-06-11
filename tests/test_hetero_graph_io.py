@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -180,6 +182,50 @@ def _synthetic_graph(index: int) -> SimpleNamespace:
 
 
 class SyntheticHeteroGraphIoTest(unittest.TestCase):
+    def test_hetero_transformer_training_defaults_are_v100_safe(self) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            graph_dir = tmp / "graphs"
+            graph_dir.mkdir()
+            env = os.environ.copy()
+            env.update(
+                {
+                    "REPO": str(repo),
+                    "GRAPH_INPUT": str(graph_dir),
+                    "OUTPUT_ROOT": str(tmp / "output"),
+                    "RUN_ID": "dry",
+                    "PARTITION": "v100-al9_long",
+                    "WAVEFORM_ENCODER": "transformer",
+                    "DRY_RUN": "1",
+                }
+            )
+            submit_result = subprocess.run(
+                ["bash", "scripts/submit_server_hetero_reco_mass_quality_training.sh"],
+                cwd=repo,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertIn("batch_size=8", submit_result.stdout)
+            self.assertIn("gradient_accumulation_steps=16", submit_result.stdout)
+            self.assertIn("pin_memory=0", submit_result.stdout)
+
+            direct_env = env.copy()
+            direct_env["OUTPUT_ROOT"] = str(tmp / "runner_output")
+            direct_result = subprocess.run(
+                ["bash", "scripts/train_hetero_existing_graphs.sh"],
+                cwd=repo,
+                env=direct_env,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertIn("--batch-size 8", direct_result.stdout)
+            self.assertIn("--gradient-accumulation-steps 16", direct_result.stdout)
+            self.assertIn("--no-pin-memory", direct_result.stdout)
+
     def test_dstio_v3_columns_are_used(self) -> None:
         self.assertEqual(GRAPH_DEFINITION, tale_graph.GRAPH_DEFINITION)
         self.assertEqual(GRAPH_DEFINITION, "tale_sd_hetero_ising_pulse_detector_graph_v3")

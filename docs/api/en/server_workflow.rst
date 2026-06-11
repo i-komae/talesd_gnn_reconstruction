@@ -65,9 +65,11 @@ It uses full event graphs and does not use HGSampling.
 The first waveform-encoder sweep should use ``WAVEFORM_ENCODER=transformer``.
 Do not launch the matching ``cnn-gru`` sweep until the transformer results determine the dataset size and auxiliary-head condition.
 For transformer waveform runs, the submitter defaults to GPU micro-batch
-``BATCH_SIZE=32`` with ``GRADIENT_ACCUMULATION_STEPS=4``. This keeps the
+``BATCH_SIZE=8`` with ``GRADIENT_ACCUMULATION_STEPS=16``. This keeps the
 effective batch size at 128 while avoiding the larger activation memory of
-``BATCH_SIZE=128`` inside the waveform Transformer. The printed
+``BATCH_SIZE=128`` inside the waveform Transformer. ``PIN_MEMORY=0`` is the
+default for this Transformer hetero path because the V100 light-dataset test
+failed in the pinned-memory thread before a stable epoch could run. The printed
 ``hetero_loader_memory`` line is a CPU/DataLoader prefetch estimate; it is not a
 GPU activation-memory guarantee.
 

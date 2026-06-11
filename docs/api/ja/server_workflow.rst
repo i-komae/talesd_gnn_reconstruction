@@ -65,9 +65,11 @@ event graph は丸ごと使い、HGSampling は使いません。
 最初の waveform encoder 比較では ``WAVEFORM_ENCODER=transformer`` を使います。
 transformer の結果で dataset size と auxiliary head 条件を決めるまで、対応する ``cnn-gru`` sweep は投げません。
 transformer waveform run では、submitter の既定を GPU micro-batch
-``BATCH_SIZE=32``、``GRADIENT_ACCUMULATION_STEPS=4`` にします。
+``BATCH_SIZE=8``、``GRADIENT_ACCUMULATION_STEPS=16`` にします。
 effective batch size は 128 のまま保ち、``BATCH_SIZE=128`` をそのまま
 waveform Transformer に入れた時の大きな activation memory を避けます。
+この Transformer hetero 経路では、V100 の light dataset test が pinned-memory
+thread で落ちたため、既定では ``PIN_MEMORY=0`` にします。
 log に出る ``hetero_loader_memory`` は CPU/DataLoader prefetch の見積もりであり、
 GPU activation memory の保証ではありません。
 

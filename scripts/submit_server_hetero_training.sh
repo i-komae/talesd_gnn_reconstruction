@@ -57,7 +57,7 @@ export WAVEFORM_LENGTH="${WAVEFORM_LENGTH:-}"
 export TRAIN_EPOCHS
 if [[ -z "${BATCH_SIZE:-}" ]]; then
   if [[ "${WAVEFORM_ENCODER}" == "transformer" ]]; then
-    export BATCH_SIZE=32
+    export BATCH_SIZE=8
   else
     export BATCH_SIZE=128
   fi
@@ -66,12 +66,15 @@ else
 fi
 if [[ -z "${GRADIENT_ACCUMULATION_STEPS:-}" ]]; then
   if [[ "${WAVEFORM_ENCODER}" == "transformer" ]]; then
-    export GRADIENT_ACCUMULATION_STEPS=4
+    export GRADIENT_ACCUMULATION_STEPS=16
   else
     export GRADIENT_ACCUMULATION_STEPS=1
   fi
 else
   export GRADIENT_ACCUMULATION_STEPS
+fi
+if [[ -z "${PIN_MEMORY:-}" && "${WAVEFORM_ENCODER}" == "transformer" ]]; then
+  export PIN_MEMORY=0
 fi
 export LR="${LR:-5e-4}"
 export WEIGHT_DECAY="${WEIGHT_DECAY:-3e-4}"
