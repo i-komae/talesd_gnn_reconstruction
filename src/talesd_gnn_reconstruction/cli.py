@@ -2537,6 +2537,9 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
     started_at = time.monotonic()
     last_progress = started_at
 
+    def log(message: str) -> None:
+        print(f"hetero light export: worker={worker_index} {message}", flush=True)
+
     def rotate_shard() -> None:
         nonlocal shard_index, shard_path, handle, written_in_shard
         handle.close()
@@ -2544,10 +2547,21 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
         shard_path, handle = _open_light_hetero_shard(output_base, shard_index, config)
         output_paths.append(str(shard_path))
         written_in_shard = 0
+        log(f"open_shard index={shard_index} path={shard_path}")
 
+    log(
+        f"start source_groups={len(groups)} graphs_per_source_group={graphs_per_source_group} "
+        f"shard_size={shard_size} output_base={output_base}"
+    )
+    log(f"open_shard index={shard_index} path={shard_path}")
     try:
-        for group in groups:
+        for group_index, group in enumerate(groups, start=1):
             group_written = 0
+            group_started_at = time.monotonic()
+            log(
+                f"start_group index={group_index}/{len(groups)} stratum={group.stratum} "
+                f"source_group={group.source_group} files={len(group.paths)}"
+            )
             iterator = tale_graph.iter_graphs(
                 group.paths,
                 kind="mc",
@@ -2575,12 +2589,10 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                     now = time.monotonic()
                     if progress_interval_sec > 0 and now - last_progress >= progress_interval_sec:
                         elapsed = max(now - started_at, 1.0e-9)
-                        print(
-                            "hetero light export: "
-                            f"worker={worker_index} written={written_total} "
-                            f"groups_done={len(group_rows)}/{len(groups)} "
-                            f"rate={written_total / elapsed:.2f}/s current={group.source_group}",
-                            flush=True,
+                        log(
+                            f"written={written_total} groups_done={len(group_rows)}/{len(groups)} "
+                            f"group_graphs={group_written}/{graphs_per_source_group} "
+                            f"rate={written_total / elapsed:.2f}/s current={group.source_group}"
                         )
                         last_progress = now
                     if group_written >= graphs_per_source_group:
@@ -2597,8 +2609,20 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                 }
             )
             handle.flush()
+            group_elapsed = max(time.monotonic() - group_started_at, 1.0e-9)
+            log(
+                f"done_group index={group_index}/{len(groups)} stratum={group.stratum} "
+                f"source_group={group.source_group} graphs={group_written}/{graphs_per_source_group} "
+                f"complete={int(group_written) >= graphs_per_source_group} "
+                f"elapsed={group_elapsed:.1f}s total_written={written_total}"
+            )
     finally:
         handle.close()
+        elapsed = max(time.monotonic() - started_at, 1.0e-9)
+        log(
+            f"done source_groups={len(groups)} graphs_written={written_total} "
+            f"elapsed={elapsed:.1f}s rate={written_total / elapsed:.2f}/s shards={len(output_paths)}"
+        )
 
     return {
         "worker_index": worker_index,
