@@ -12,6 +12,7 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-/dicos_ui_home/ikomae/work/gnn/outputs/talesd_gnn_re
 GRAPH_ROOT="${GRAPH_ROOT:-/dicos_ui_home/ikomae/work/gnn/graphs}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 GRAPHS_PER_SOURCE_GROUP="${GRAPHS_PER_SOURCE_GROUP:-10}"
+SOURCE_GROUP_OVERDRAW_FACTOR="${SOURCE_GROUP_OVERDRAW_FACTOR:-10}"
 RUN_NAME="${RUN_NAME:-hetero_light_${GRAPHS_PER_SOURCE_GROUP}per_shower_${RUN_ID}}"
 RUN_DIR="${RUN_DIR:-${OUTPUT_ROOT}/runs/${RUN_NAME}}"
 GRAPH_RUN_DIR="${GRAPH_RUN_DIR:-${GRAPH_ROOT}/${RUN_NAME}}"
@@ -49,7 +50,7 @@ OPEN_RETRY_DELAY="${OPEN_RETRY_DELAY:-1.0}"
 REQUIRE_REFERENCE_CORE="${REQUIRE_REFERENCE_CORE:-1}"
 SPLIT_WORKERS="${SPLIT_WORKERS:-8}"
 SUMMARY_WORKERS="${SUMMARY_WORKERS:-${SPLIT_WORKERS}}"
-MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS:-1}"
+MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS:-0}"
 INPUT_DISTRIBUTION_MAX_GRAPHS="${INPUT_DISTRIBUTION_MAX_GRAPHS:-100000}"
 INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE="${INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE:-200000}"
 SEED="${SEED:-12345}"
@@ -148,9 +149,11 @@ echo "slurm_log=${SLURM_LOG_DIR}/%x_%j.log"
 echo "run_name=${RUN_NAME}"
 echo "graph_output=${GRAPH_OUTPUT}"
 echo "graphs_per_source_group=${GRAPHS_PER_SOURCE_GROUP}"
+echo "source_group_overdraw_factor=${SOURCE_GROUP_OVERDRAW_FACTOR}"
 echo "max_source_groups_per_stratum=${MAX_SOURCE_GROUPS_PER_STRATUM}"
 echo "export_workers=${EXPORT_WORKERS}"
 echo "run_uv_sync=${RUN_UV_SYNC}"
+echo "make_input_distributions=${MAKE_INPUT_DISTRIBUTIONS}"
 echo "selection_strategy=filename_source_group_light_v1"
 echo "======================================================================"
 
@@ -169,6 +172,7 @@ fi
   --const-dst "${CONST_DST}" \\
   --mc-calib-dir "${MC_CALIB_DIR}" \\
   --graphs-per-source-group "${GRAPHS_PER_SOURCE_GROUP}" \\
+  --source-group-overdraw-factor "${SOURCE_GROUP_OVERDRAW_FACTOR}" \\
 ${max_groups_line}\
   --seed "${SEED}" \\
   --workers "${EXPORT_WORKERS}" \\
@@ -209,10 +213,12 @@ run_name: ${RUN_NAME}
 graph_output: ${GRAPH_OUTPUT}
 selection_summary: ${SELECTION_SUMMARY}
 graphs_per_source_group: ${GRAPHS_PER_SOURCE_GROUP}
+source_group_overdraw_factor: ${SOURCE_GROUP_OVERDRAW_FACTOR}
 max_source_groups_per_stratum: ${MAX_SOURCE_GROUPS_PER_STRATUM}
 seed: ${SEED}
 export_workers: ${EXPORT_WORKERS}
 run_uv_sync: ${RUN_UV_SYNC}
+make_input_distributions: ${MAKE_INPUT_DISTRIBUTIONS}
 sbatch_file: ${SBATCH_FILE}
 EOF
 

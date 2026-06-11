@@ -46,12 +46,13 @@ from talesd_gnn_reconstruction.cli import (
     _cmd_export_hetero,
     _cmd_reshard_hetero,
     _expand_h5_graph_paths,
+    _export_light_hetero_worker,
     _ordered_selected_entries,
     _select_light_hetero_source_groups,
     _selected_entries_from_path_indices,
 )
 import talesd_gnn_reconstruction.hetero_training as hetero_training
-from scripts.summarize_split_distributions import summarize
+from scripts.summarize_split_distributions import _energy_bin, summarize
 
 
 DATA_SAMPLE = Path("/Users/ikomae/TALE/dstio/test/data/tale_data_talesdcalibev_single_event.dst")
@@ -392,6 +393,163 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 [Path(path).name for path in proton16[0].paths],
                 ["DAT000116_gea_trg_000.dst.gz", "DAT000116_gea_trg_001.dst.gz"],
             )
+
+    def test_light_hetero_worker_refills_short_source_groups(self) -> None:
+        class FakeHandle:
+            def flush(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        path_counts = {
+            "short.dst.gz": 5,
+            "full_a.dst.gz": 10,
+            "full_b.dst.gz": 10,
+        }
+        written: list[tuple[int, str]] = []
+
+        def fake_iter_graphs(paths: list[str], **_: object) -> list[str]:
+            path = Path(paths[0]).name
+            return [path] * path_counts[path]
+
+        def fake_write(_handle: FakeHandle, index: int, graph: str) -> None:
+            written.append((index, graph))
+
+        payload = {
+            "worker_index": 0,
+            "strata": [
+                {
+                    "stratum": "proton:16",
+                    "target_graphs": 20,
+                    "groups": [
+                        {
+                            "source_group": "/mc/proton/DAT000116",
+                            "dat_tag": "DAT000116",
+                            "energy_bin_code": "16",
+                            "particle": "proton",
+                            "stratum": "proton:16",
+                            "paths": ["/mc/proton/short.dst.gz"],
+                        },
+                        {
+                            "source_group": "/mc/proton/DAT000216",
+                            "dat_tag": "DAT000216",
+                            "energy_bin_code": "16",
+                            "particle": "proton",
+                            "stratum": "proton:16",
+                            "paths": ["/mc/proton/full_a.dst.gz"],
+                        },
+                        {
+                            "source_group": "/mc/proton/DAT000316",
+                            "dat_tag": "DAT000316",
+                            "energy_bin_code": "16",
+                            "particle": "proton",
+                            "stratum": "proton:16",
+                            "paths": ["/mc/proton/full_b.dst.gz"],
+                        },
+                    ],
+                }
+            ],
+            "output_base": tempfile.mkdtemp(),
+            "graphs_per_source_group": 10,
+            "source_group_overdraw_factor": 10.0,
+            "seed": 12345,
+            "cleaning": "ising",
+            "node_policy": "all_candidates_with_ising",
+            "const_dst": None,
+            "mc_calib_dir": None,
+            "require_trigger_mode0": True,
+            "require_reference_core": True,
+            "skip_errors": True,
+            "skip_missing_mc_calibration": True,
+            "min_event_date": None,
+            "open_retries": 0,
+            "open_retry_delay": 0.0,
+            "shard_size": 1000,
+            "progress_interval_sec": 0.0,
+            "config": {},
+        }
+        with mock.patch.object(tale_graph, "create_graph_h5_file", return_value=FakeHandle()):
+            with mock.patch.object(tale_graph, "iter_graphs", side_effect=fake_iter_graphs):
+                with mock.patch.object(tale_graph, "write_graph_h5_event", side_effect=fake_write):
+                    result = _export_light_hetero_worker(payload)
+
+        self.assertEqual(result["graphs_written"], 20)
+        self.assertEqual([row["graphs_written"] for row in result["source_groups"]], [0, 10, 10])
+        self.assertEqual([row["complete"] for row in result["source_groups"]], [False, True, True])
+        self.assertEqual(result["strata"][0]["target_met"], True)
+        self.assertEqual(result["strata"][0]["attempted_source_groups"], 3)
+        self.assertEqual([graph for _index, graph in written], ["full_a.dst.gz"] * 10 + ["full_b.dst.gz"] * 10)
+
+    def test_light_hetero_worker_discards_overdrawn_graphs_by_seeded_score(self) -> None:
+        class FakeHandle:
+            def flush(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        written: list[str] = []
+        graphs = [SimpleNamespace(event_id=f"event_{index:02d}") for index in range(20)]
+
+        def fake_iter_graphs(paths: list[str], **_: object) -> list[SimpleNamespace]:
+            self.assertEqual(Path(paths[0]).name, "full.dst.gz")
+            return graphs
+
+        def fake_write(_handle: FakeHandle, _index: int, graph: SimpleNamespace) -> None:
+            written.append(str(graph.event_id))
+
+        payload = {
+            "worker_index": 0,
+            "strata": [
+                {
+                    "stratum": "proton:16",
+                    "target_graphs": 10,
+                    "groups": [
+                        {
+                            "source_group": "/mc/proton/DAT000116",
+                            "dat_tag": "DAT000116",
+                            "energy_bin_code": "16",
+                            "particle": "proton",
+                            "stratum": "proton:16",
+                            "paths": ["/mc/proton/full.dst.gz"],
+                        },
+                    ],
+                }
+            ],
+            "output_base": tempfile.mkdtemp(),
+            "graphs_per_source_group": 10,
+            "source_group_overdraw_factor": 2.0,
+            "seed": 12345,
+            "cleaning": "ising",
+            "node_policy": "all_candidates_with_ising",
+            "const_dst": None,
+            "mc_calib_dir": None,
+            "require_trigger_mode0": True,
+            "require_reference_core": True,
+            "skip_errors": True,
+            "skip_missing_mc_calibration": True,
+            "min_event_date": None,
+            "open_retries": 0,
+            "open_retry_delay": 0.0,
+            "shard_size": 1000,
+            "progress_interval_sec": 0.0,
+            "config": {},
+        }
+        with mock.patch.object(tale_graph, "create_graph_h5_file", return_value=FakeHandle()):
+            with mock.patch.object(tale_graph, "iter_graphs", side_effect=fake_iter_graphs):
+                with mock.patch.object(tale_graph, "write_graph_h5_event", side_effect=fake_write):
+                    result = _export_light_hetero_worker(payload)
+
+        self.assertEqual(result["graphs_written"], 10)
+        self.assertEqual(result["source_groups"][0]["graphs_found"], 20)
+        self.assertEqual(result["source_groups"][0]["discarded_graphs"], 10)
+        self.assertTrue(result["source_groups"][0]["overdraw_cap_reached"])
+        self.assertNotEqual(written, [f"event_{index:02d}" for index in range(10)])
+
+    def test_split_distribution_energy_bins_are_centered(self) -> None:
+        self.assertEqual(_energy_bin(17.99, 0.1), "17.95-18.05")
+        self.assertEqual(_energy_bin(18.90, 0.1), "18.85-18.95")
 
     def test_export_hetero_unbalanced_uses_dstio_h5_writer(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -49,9 +49,11 @@ def _stats(values: list[float]) -> dict[str, Any]:
 
 
 def _energy_bin(log10_energy: float, width: float) -> str:
-    bin_index = math.floor(float(log10_energy) / float(width))
-    low = bin_index * float(width)
-    high = low + float(width)
+    bin_width = float(width)
+    center_index = math.floor(float(log10_energy) / bin_width + 0.5 + 1.0e-9)
+    center = center_index * bin_width
+    low = center - 0.5 * bin_width
+    high = center + 0.5 * bin_width
     return f"{low:.2f}-{high:.2f}"
 
 
@@ -265,7 +267,7 @@ def _plot_split_distributions(
     fig.tight_layout()
     pdf_files.append(_save_pdf(fig, output_dir / "split_parameter_distributions.pdf"))
 
-    energy_bins = sorted(by_energy)
+    energy_bins = sorted(by_energy, key=lambda item: float(item.split("-", maxsplit=1)[0]))
     if energy_bins:
         x = []
         labels = []
