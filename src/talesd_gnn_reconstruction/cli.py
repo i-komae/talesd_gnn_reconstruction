@@ -76,6 +76,16 @@ class HeteroSourceGroupManifest:
 
 
 @dataclass(frozen=True, slots=True)
+class LightHeteroSourceGroup:
+    source_group: str
+    dat_tag: str
+    energy_bin_code: str
+    particle: str
+    stratum: str
+    paths: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class HeteroH5EventEntry:
     bin_key: int | tuple[str, int]
     unique_id: str
@@ -2367,6 +2377,323 @@ def _paths_for_config(paths: list[str]) -> dict[str, Any]:
     }
 
 
+def _light_hetero_stratum(particle: str, energy_bin_code: str) -> str:
+    return f"{str(particle) or 'unknown'}:{str(energy_bin_code) or 'unknown'}"
+
+
+def _light_hetero_source_groups_from_paths(paths: list[str]) -> list[LightHeteroSourceGroup]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for raw_path in paths:
+        path = str(Path(raw_path).expanduser())
+        dat_tag = _dat_tag_from_path(path)
+        energy_bin_code = _energy_bin_code_from_dat_tag(dat_tag)
+        particle = _particle_stratum_from_path(path)
+        source_group = _source_group_key_for_path(path)
+        stratum = _light_hetero_stratum(particle, energy_bin_code)
+        row = grouped.setdefault(
+            source_group,
+            {
+                "source_group": source_group,
+                "dat_tag": dat_tag,
+                "energy_bin_code": energy_bin_code,
+                "particle": particle,
+                "stratum": stratum,
+                "paths": [],
+            },
+        )
+        if row["dat_tag"] != dat_tag:
+            raise ValueError(f"source group {source_group} mixes DAT tags: {row['dat_tag']} and {dat_tag}")
+        if row["stratum"] != stratum:
+            raise ValueError(f"source group {source_group} mixes strata: {row['stratum']} and {stratum}")
+        row["paths"].append(path)
+
+    groups: list[LightHeteroSourceGroup] = []
+    for row in grouped.values():
+        ordered_paths = tuple(
+            sorted(
+                row["paths"],
+                key=lambda item: (_gea_trg_index_from_path(item), Path(item).name, item),
+            )
+        )
+        groups.append(
+            LightHeteroSourceGroup(
+                source_group=str(row["source_group"]),
+                dat_tag=str(row["dat_tag"]),
+                energy_bin_code=str(row["energy_bin_code"]),
+                particle=str(row["particle"]),
+                stratum=str(row["stratum"]),
+                paths=ordered_paths,
+            )
+        )
+    return groups
+
+
+def _select_light_hetero_source_groups(
+    paths: list[str],
+    *,
+    seed: int,
+    max_source_groups_per_stratum: int | None = None,
+) -> tuple[list[LightHeteroSourceGroup], dict[str, Any]]:
+    groups = _light_hetero_source_groups_from_paths(paths)
+    by_stratum: dict[str, list[LightHeteroSourceGroup]] = {}
+    for group in groups:
+        by_stratum.setdefault(group.stratum, []).append(group)
+    if not by_stratum:
+        raise SystemExit("no source groups were found from input DST filenames")
+
+    counts_by_stratum = {stratum: len(values) for stratum, values in sorted(by_stratum.items())}
+    target = min(counts_by_stratum.values())
+    if max_source_groups_per_stratum is not None and int(max_source_groups_per_stratum) > 0:
+        target = min(target, int(max_source_groups_per_stratum))
+    if target <= 0:
+        raise SystemExit(f"no source groups available in at least one stratum: {counts_by_stratum}")
+
+    selected: list[LightHeteroSourceGroup] = []
+    selected_by_stratum: dict[str, list[str]] = {}
+    for stratum, values in sorted(by_stratum.items()):
+        ordered = sorted(
+            values,
+            key=lambda group: _sample_key_from_parts(int(seed), group.source_group, "light-source-group", 0),
+        )
+        chosen = ordered[:target]
+        selected.extend(chosen)
+        selected_by_stratum[stratum] = [group.source_group for group in chosen]
+
+    selected.sort(
+        key=lambda group: (
+            group.stratum,
+            _sample_key_from_parts(int(seed), group.source_group, "light-output-order", 0),
+        )
+    )
+    return selected, {
+        "selection_strategy": "filename_source_group_light_v1",
+        "source_group_unit": "DAT?????? source group",
+        "stratum": "particle:DAT filename energy code",
+        "seed": int(seed),
+        "input_files": len(paths),
+        "all_source_groups": len(groups),
+        "source_groups_by_stratum": counts_by_stratum,
+        "selected_source_groups_per_stratum": int(target),
+        "selected_source_groups": len(selected),
+        "selected_by_stratum": selected_by_stratum,
+        "does_not_prescan_events": True,
+    }
+
+
+def _light_group_to_dict(group: LightHeteroSourceGroup) -> dict[str, Any]:
+    return {
+        "source_group": group.source_group,
+        "dat_tag": group.dat_tag,
+        "energy_bin_code": group.energy_bin_code,
+        "particle": group.particle,
+        "stratum": group.stratum,
+        "paths": list(group.paths),
+    }
+
+
+def _open_light_hetero_shard(
+    output_base: Path,
+    shard_index: int,
+    config: dict[str, Any],
+) -> tuple[Path, Any]:
+    from dstio.tale import graph as tale_graph
+
+    shard_path = _shard_path(output_base, shard_index)
+    handle = tale_graph.create_graph_h5_file(shard_path, config=config)
+    return shard_path, handle
+
+
+def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
+    from dstio.tale import graph as tale_graph
+
+    worker_index = int(payload["worker_index"])
+    groups = [
+        LightHeteroSourceGroup(
+            source_group=str(item["source_group"]),
+            dat_tag=str(item["dat_tag"]),
+            energy_bin_code=str(item["energy_bin_code"]),
+            particle=str(item["particle"]),
+            stratum=str(item["stratum"]),
+            paths=tuple(str(path) for path in item["paths"]),
+        )
+        for item in payload["groups"]
+    ]
+    output_base = Path(payload["output_base"]).expanduser() / f"worker_{worker_index:04d}"
+    output_base.parent.mkdir(parents=True, exist_ok=True)
+    shard_size = int(payload["shard_size"])
+    graphs_per_source_group = int(payload["graphs_per_source_group"])
+    progress_interval_sec = float(payload["progress_interval_sec"])
+    config = dict(payload["config"])
+    config["worker_index"] = worker_index
+    config["worker_source_groups"] = len(groups)
+
+    shard_index = 0
+    shard_path, handle = _open_light_hetero_shard(output_base, shard_index, config)
+    output_paths = [str(shard_path)]
+    written_total = 0
+    written_in_shard = 0
+    written_counts_by_stratum: dict[str, int] = {}
+    group_rows: list[dict[str, Any]] = []
+    started_at = time.monotonic()
+    last_progress = started_at
+
+    def rotate_shard() -> None:
+        nonlocal shard_index, shard_path, handle, written_in_shard
+        handle.close()
+        shard_index += 1
+        shard_path, handle = _open_light_hetero_shard(output_base, shard_index, config)
+        output_paths.append(str(shard_path))
+        written_in_shard = 0
+
+    try:
+        for group in groups:
+            group_written = 0
+            iterator = tale_graph.iter_graphs(
+                group.paths,
+                kind="mc",
+                cleaning=str(payload["cleaning"]),
+                node_policy=str(payload["node_policy"]),
+                const_dst=payload["const_dst"],
+                mc_calib_dir=payload["mc_calib_dir"],
+                require_trigger_mode0=bool(payload["require_trigger_mode0"]),
+                require_reference_core=bool(payload["require_reference_core"]),
+                skip_errors=bool(payload["skip_errors"]),
+                skip_missing_mc_calibration=bool(payload["skip_missing_mc_calibration"]),
+                min_event_date=payload["min_event_date"],
+                open_retries=int(payload["open_retries"]),
+                open_retry_delay=float(payload["open_retry_delay"]),
+            )
+            try:
+                for graph in iterator:
+                    if shard_size > 0 and written_in_shard >= shard_size:
+                        rotate_shard()
+                    tale_graph.write_graph_h5_event(handle, written_in_shard, graph)
+                    written_total += 1
+                    written_in_shard += 1
+                    group_written += 1
+                    written_counts_by_stratum[group.stratum] = written_counts_by_stratum.get(group.stratum, 0) + 1
+                    now = time.monotonic()
+                    if progress_interval_sec > 0 and now - last_progress >= progress_interval_sec:
+                        elapsed = max(now - started_at, 1.0e-9)
+                        print(
+                            "hetero light export: "
+                            f"worker={worker_index} written={written_total} "
+                            f"groups_done={len(group_rows)}/{len(groups)} "
+                            f"rate={written_total / elapsed:.2f}/s current={group.source_group}",
+                            flush=True,
+                        )
+                        last_progress = now
+                    if group_written >= graphs_per_source_group:
+                        break
+            finally:
+                close = getattr(iterator, "close", None)
+                if callable(close):
+                    close()
+            group_rows.append(
+                {
+                    **_light_group_to_dict(group),
+                    "graphs_written": int(group_written),
+                    "complete": int(group_written) >= graphs_per_source_group,
+                }
+            )
+            handle.flush()
+    finally:
+        handle.close()
+
+    return {
+        "worker_index": worker_index,
+        "graphs_written": int(written_total),
+        "output_paths": output_paths,
+        "written_counts_by_stratum": dict(sorted(written_counts_by_stratum.items())),
+        "source_groups": group_rows,
+    }
+
+
+def _write_light_hetero_graph_h5(
+    selected_groups: list[LightHeteroSourceGroup],
+    output: str | Path,
+    *,
+    args: argparse.Namespace,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    output_path = Path(output).expanduser()
+    output_path.mkdir(parents=True, exist_ok=True)
+    worker_count = min(max(int(args.workers), 1), max(len(selected_groups), 1))
+    group_chunks = [[] for _ in range(worker_count)]
+    ordered = sorted(
+        selected_groups,
+        key=lambda group: _sample_key_from_parts(int(args.seed), group.source_group, "light-worker", 0),
+    )
+    for index, group in enumerate(ordered):
+        group_chunks[index % worker_count].append(group)
+
+    payloads = [
+        {
+            "worker_index": worker_index,
+            "groups": [_light_group_to_dict(group) for group in groups],
+            "output_base": str(output_path),
+            "graphs_per_source_group": int(args.graphs_per_source_group),
+            "kind": "mc",
+            "cleaning": args.cleaning,
+            "node_policy": args.node_policy,
+            "const_dst": args.const_dst,
+            "mc_calib_dir": args.mc_calib_dir,
+            "require_trigger_mode0": not bool(args.keep_non_mode0),
+            "require_reference_core": bool(args.require_reference_core),
+            "skip_errors": bool(args.skip_errors),
+            "skip_missing_mc_calibration": bool(args.skip_missing_mc_calibration),
+            "min_event_date": args.min_event_date,
+            "open_retries": int(args.open_retries),
+            "open_retry_delay": float(args.open_retry_delay),
+            "shard_size": int(args.shard_size),
+            "progress_interval_sec": float(args.h5_progress_interval_sec),
+            "config": config,
+        }
+        for worker_index, groups in enumerate(group_chunks)
+        if groups
+    ]
+    _progress_write(
+        "hetero light export: "
+        f"source_groups={len(selected_groups)} graphs_per_source_group={args.graphs_per_source_group} "
+        f"workers={len(payloads)} output={output_path}"
+    )
+    if len(payloads) <= 1:
+        results = [_export_light_hetero_worker(payloads[0])] if payloads else []
+    else:
+        results = list(
+            _iter_process_pool(
+                payloads,
+                _export_light_hetero_worker,
+                len(payloads),
+                "export hetero light source groups",
+                max_tasks_per_child=args.worker_max_files if int(args.worker_max_files) > 0 else None,
+            )
+        )
+
+    output_paths: list[str] = []
+    written_counts_by_stratum: dict[str, int] = {}
+    group_rows: list[dict[str, Any]] = []
+    for result in sorted(results, key=lambda item: int(item["worker_index"])):
+        output_paths.extend(str(path) for path in result.get("output_paths", []))
+        group_rows.extend(result.get("source_groups", []))
+        for key, value in result.get("written_counts_by_stratum", {}).items():
+            written_counts_by_stratum[str(key)] = written_counts_by_stratum.get(str(key), 0) + int(value)
+
+    short_groups = [row for row in group_rows if int(row.get("graphs_written", 0)) < int(args.graphs_per_source_group)]
+    return {
+        "format": "talesd_gnn_hetero_light_export_v1",
+        "output": str(output_path),
+        "output_paths": output_paths,
+        "graphs_written": sum(int(result.get("graphs_written", 0)) for result in results),
+        "workers": len(payloads),
+        "graphs_per_source_group": int(args.graphs_per_source_group),
+        "written_counts_by_stratum": dict(sorted(written_counts_by_stratum.items())),
+        "source_groups": sorted(group_rows, key=lambda row: (str(row["stratum"]), str(row["source_group"]))),
+        "short_source_groups": short_groups,
+        "complete_source_groups": len(group_rows) - len(short_groups),
+    }
+
+
 def _write_graph_iterable(
     graphs: Iterable[Any],
     args: argparse.Namespace,
@@ -3441,6 +3768,75 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
     print(f"wrote {written_total} hetero graphs to {targets}")
 
 
+def _cmd_export_hetero_light(args: argparse.Namespace) -> None:
+    import dstio.tale.graph as tale_graph
+
+    if args.kind not in {"mc", "auto"}:
+        raise ValueError("export-hetero-light currently supports MC rusdraw/rusdmc input only")
+    inputs = _resolve_input_args(args.input, args.input_list, args.input_dir)
+    const_dst = Path(args.const_dst).expanduser() if args.const_dst else None
+    mc_calib_dir = Path(args.mc_calib_dir).expanduser() if args.mc_calib_dir else None
+    if const_dst is None:
+        raise SystemExit("--const-dst is required for export-hetero-light")
+    if mc_calib_dir is None:
+        raise SystemExit("--mc-calib-dir is required for export-hetero-light")
+    min_event_date = None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date)
+    args.const_dst = str(const_dst)
+    args.mc_calib_dir = str(mc_calib_dir)
+    args.min_event_date = min_event_date
+
+    selected_groups, selection_summary = _select_light_hetero_source_groups(
+        inputs,
+        seed=int(args.seed),
+        max_source_groups_per_stratum=args.max_source_groups_per_stratum,
+    )
+    config = {
+        **_paths_for_config(inputs),
+        "input_list": [str(Path(path).expanduser()) for path in args.input_list],
+        "input_dir": [str(Path(path).expanduser()) for path in args.input_dir],
+        "kind": "mc",
+        "const_dst": str(const_dst),
+        "mc_calib_dir": str(mc_calib_dir),
+        "graph_definition": str(getattr(tale_graph, "GRAPH_DEFINITION", "tale_sd_hetero_ising_pulse_detector_graph_v3")),
+        "cleaning": args.cleaning,
+        "node_policy": args.node_policy,
+        "require_reference_core": bool(args.require_reference_core),
+        "seed": int(args.seed),
+        "shard_size": int(args.shard_size),
+        "workers": int(args.workers),
+        "worker_max_files": int(args.worker_max_files),
+        "graphs_per_source_group": int(args.graphs_per_source_group),
+        "max_source_groups_per_stratum": args.max_source_groups_per_stratum,
+        "selection_summary": selection_summary,
+        "min_event_date": min_event_date,
+        "skip_missing_mc_calibration": bool(args.skip_missing_mc_calibration),
+        "export_mode": "hetero-light",
+    }
+    output_path = _dstio_h5_output_path(args.output, require_directory=True, workers=max(int(args.workers), 1))
+    _progress_write(
+        "hetero light selection: "
+        f"strata={selection_summary['source_groups_by_stratum']} "
+        f"selected_per_stratum={selection_summary['selected_source_groups_per_stratum']} "
+        f"graphs_per_source_group={args.graphs_per_source_group}"
+    )
+    result = _write_light_hetero_graph_h5(selected_groups, output_path, args=args, config=config)
+    result["selection"] = selection_summary
+    result["graph_definition"] = config["graph_definition"]
+    result["waveform_schema"] = str(getattr(tale_graph, "WAVEFORM_SCHEMA", ""))
+
+    if args.selection_summary:
+        summary_path = Path(args.selection_summary).expanduser()
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        _progress_write(f"hetero light selection summary: {summary_path}")
+
+    print(
+        "wrote "
+        f"{int(result.get('graphs_written', 0))} hetero light graphs to "
+        f"{', '.join(str(path) for path in result.get('output_paths', []))}"
+    )
+
+
 def _cmd_reshard_hetero(args: argparse.Namespace) -> None:
     import h5py
 
@@ -4028,6 +4424,46 @@ def build_parser() -> argparse.ArgumentParser:
     export_hetero.add_argument("--skip-errors", action="store_true", help="読めないDSTを警告してスキップする")
     export_hetero.add_argument("--skip-missing-mc-calibration", action="store_true", help="MC calibration が見つからないeventをスキップする")
     export_hetero.set_defaults(func=_cmd_export_hetero)
+
+    export_hetero_light = sub.add_parser(
+        "export-hetero-light",
+        help="filename source group だけで高速に軽量 heterogeneous HDF5 を作成",
+    )
+    export_hetero_light.add_argument("input", nargs="*", help="入力DSTファイル。複数指定可")
+    export_hetero_light.add_argument("--input-list", action="append", default=[], help="入力DSTパスを1行1ファイルで書いたリスト。複数指定可")
+    export_hetero_light.add_argument("--input-dir", action="append", default=[], help="入力DSTディレクトリ。*.dst.gzを再帰的に読む。複数指定可")
+    export_hetero_light.add_argument("-o", "--output", required=True, help="出力heterogeneous HDF5 graph directory")
+    export_hetero_light.add_argument("--kind", choices=["auto", "mc"], default="mc", help="入力DSTの種類。light export はMC専用")
+    export_hetero_light.add_argument("--const-dst", default=None, help="TALE-SD detector geometry DST")
+    export_hetero_light.add_argument("--mc-calib-dir", default=None, help="MC calibration directory")
+    export_hetero_light.add_argument("--min-event-date", type=int, default=None, help="YYMMDD形式。この日付より前のeventをDST読み込み時に除外する")
+    export_hetero_light.add_argument("--graphs-per-source-group", type=int, default=10, help="選択した独立シャワーごとに書くgraphable event数")
+    export_hetero_light.add_argument(
+        "--max-source-groups-per-stratum",
+        type=int,
+        default=None,
+        help="particle:DAT energy code stratumごとに使うsource group数の上限。未指定なら最小stratumに合わせる",
+    )
+    export_hetero_light.add_argument("--seed", type=int, default=12345, help="source group選択のdeterministic seed")
+    export_hetero_light.add_argument("--workers", type=int, default=1, help="source group単位のparallel worker数")
+    export_hetero_light.add_argument("--worker-max-files", type=int, default=DEFAULT_WORKER_MAX_FILES, help="workerをNタスクごとに再起動する。0なら無効")
+    export_hetero_light.add_argument("--selection-summary", default=None, help="light selection/write summary JSONの出力先")
+    export_hetero_light.add_argument("--h5-progress-interval-sec", type=float, default=30.0, help="HDF5 export progress出力間隔")
+    export_hetero_light.add_argument("--cleaning", choices=["ising", "none"], default="ising", help="dstio.tale.graph cleaning mode")
+    export_hetero_light.add_argument(
+        "--node-policy",
+        choices=["all_candidates_with_ising", "all_candidates", "ising_kept"],
+        default="all_candidates_with_ising",
+        help="pulse node policy。ML graphではall_candidates_with_isingを基本にする",
+    )
+    export_hetero_light.add_argument("--require-reference-core", action="store_true", help="Ising reference core があるgraphだけを書き出す")
+    export_hetero_light.add_argument("--shard-size", type=int, default=100000, help="NグラフごとにHDF5を分割する")
+    export_hetero_light.add_argument("--open-retries", type=int, default=3, help="DST open失敗時の再試行回数")
+    export_hetero_light.add_argument("--open-retry-delay", type=float, default=1.0, help="DST open再試行の待ち時間。試行ごとに線形に増やす")
+    export_hetero_light.add_argument("--keep-non-mode0", action="store_true", help="trgMode != 0 も残す")
+    export_hetero_light.add_argument("--skip-errors", action="store_true", help="読めないDSTを警告してスキップする")
+    export_hetero_light.add_argument("--skip-missing-mc-calibration", action="store_true", help="MC calibration が見つからないeventをスキップする")
+    export_hetero_light.set_defaults(func=_cmd_export_hetero_light)
 
     reshard_hetero = sub.add_parser("reshard-hetero", help="既存hetero HDF5をDST再読込なしで並べ替え・再shard化する")
     reshard_hetero.add_argument("--graphs", nargs="*", default=[], help="入力hetero HDF5。shard、shard base、またはHDF5ディレクトリを指定可")

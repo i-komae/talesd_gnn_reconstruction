@@ -47,6 +47,7 @@ from talesd_gnn_reconstruction.cli import (
     _cmd_reshard_hetero,
     _expand_h5_graph_paths,
     _ordered_selected_entries,
+    _select_light_hetero_source_groups,
     _selected_entries_from_path_indices,
 )
 import talesd_gnn_reconstruction.hetero_training as hetero_training
@@ -360,6 +361,37 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             self.assertEqual(patched.call_args.kwargs["selection_workers"], 1)
             self.assertEqual(patched.call_args.kwargs["h5_backend"], "auto")
             self.assertEqual(patched.call_args.kwargs["progress_interval_events"], 1000)
+
+    def test_light_hetero_selection_uses_filename_source_groups_only(self) -> None:
+        inputs = [
+            "/mc/proton/sel/DAT000116_gea_trg_000.dst.gz",
+            "/mc/proton/sel/DAT000116_gea_trg_001.dst.gz",
+            "/mc/proton/sel/DAT000216_gea_trg_000.dst.gz",
+            "/mc/proton/sel/DAT000316_gea_trg_000.dst.gz",
+            "/mc/iron/sel/DAT100116_gea_trg_000.dst.gz",
+            "/mc/iron/sel/DAT100216_gea_trg_000.dst.gz",
+            "/mc/proton/sel/DAT000117_gea_trg_000.dst.gz",
+            "/mc/iron/sel/DAT100117_gea_trg_000.dst.gz",
+            "/mc/iron/sel/DAT100217_gea_trg_000.dst.gz",
+        ]
+
+        selected, summary = _select_light_hetero_source_groups(inputs, seed=7)
+
+        self.assertEqual(
+            summary["source_groups_by_stratum"],
+            {"iron:16": 2, "iron:17": 2, "proton:16": 3, "proton:17": 1},
+        )
+        self.assertEqual(summary["selected_source_groups_per_stratum"], 1)
+        self.assertEqual(summary["selected_source_groups"], 4)
+        self.assertTrue(summary["does_not_prescan_events"])
+        self.assertEqual({group.stratum for group in selected}, {"proton:16", "proton:17", "iron:16", "iron:17"})
+        proton16 = [group for group in selected if group.stratum == "proton:16"]
+        self.assertEqual(len(proton16), 1)
+        if proton16[0].dat_tag == "DAT000116":
+            self.assertEqual(
+                [Path(path).name for path in proton16[0].paths],
+                ["DAT000116_gea_trg_000.dst.gz", "DAT000116_gea_trg_001.dst.gz"],
+            )
 
     def test_export_hetero_unbalanced_uses_dstio_h5_writer(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
