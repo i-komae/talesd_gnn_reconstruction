@@ -85,8 +85,26 @@
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id2">方向出力の正規化</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#gathgttransformerlaplacian-gcn">GAT、HGT、Transformer、Laplacian GCN との関係</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#readout">Readout</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id3">学習</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#output-heads">Output heads</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#reconstruction-head">reconstruction head</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#mass-head">mass head</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#quality-head">quality head</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#predicted-error-head">predicted-error head</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id3">forward pass全体を数式で見る</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id4">学習時に変わるもの</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id5">出力ごとの物理的な効き方</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#energy">Energy</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#core">Core</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#direction">Direction</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#mass">Mass</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../ja/hetero_model.html#quality-predicted-error">Quality / predicted error</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id6">短い説明</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id7">最重要ポイント</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#id8">学習</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#dst">DST 直接再構成</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../ja/hetero_model.html#transformer-sweep">最初の transformer sweep の投入コマンド</a></li>
 </ul>
@@ -242,7 +260,25 @@
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#direction-output-normalization">Direction output normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#relation-to-gat-hgt-transformer-and-laplacian-gcns">Relation to GAT, HGT, Transformer, and Laplacian GCNs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#readout">Readout</a></li>
-<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#output-heads">Output heads</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#reconstruction-head">Reconstruction head</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#mass-head">Mass head</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#quality-head">Quality head</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#predicted-error-head">Predicted-error head</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#whole-forward-pass-as-equations">Whole forward pass as equations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#what-changes-during-training">What changes during training</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#physical-interpretation-by-output">Physical interpretation by output</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#energy">Energy</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#core-position">Core position</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#direction">Direction</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#mass">Mass</a></li>
+<li class="toctree-l4"><a class="reference internal" href="hetero_model.html#quality-and-predicted-error">Quality and predicted error</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#short-explanation">Short explanation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="hetero_model.html#key-points">Key points</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#training">Training</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#direct-dst-reconstruction">Direct DST reconstruction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="hetero_model.html#server-command-for-the-first-transformer-sweep">Server command for the first transformer sweep</a></li>
@@ -378,15 +414,35 @@ That page follows the PyTorch and PyG documentation style and explains the actua
 </figure>
 <section id="graph-schema">
 <h2>Graph schema<a class="headerlink" href="#graph-schema" title="Link to this heading"></a></h2>
-<p>The second figure is the graph schema diagram. It shows the actual node and edge types used inside one <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code>.
+<p>The next figure is a real event display made from a <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> in the
+diagnostic notebook. It is useful to look at this before reading the abstract
+schema diagram, because it shows what detector nodes, pulse nodes, and typed
+edges look like in one event.</p>
+<figure class="align-default" id="id2">
+<a class="reference internal image-reference" href="../_images/hetero_graph_event_display.png"><img alt="Three-dimensional TALE-SD heterogeneous graph event display with detector nodes, pulse nodes, live no-signal detectors, Ising-rejected pulses, and typed edges." src="../_images/hetero_graph_event_display.png" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Example heterogeneous event graph. Square markers are detector nodes at the
+detector positions. Filled signal-detector squares have at least one
+Ising-kept pulse. Gray squares are live no-signal detector nodes. Open
+detector squares have only Ising-rejected pulse candidates. Round markers are
+pulse nodes placed above their detector on the pulse-time layer. Blue edges
+are detector--detector proximity relations, gray vertical edges connect a
+detector to its pulse nodes, green edges connect consecutive pulses on the
+same detector, gray pulse--pulse edges are near-space relations, and orange
+pulse--pulse edges are the time-causal subset.</span><a class="headerlink" href="#id2" title="Link to this image"></a></p>
+</figcaption>
+</figure>
+<p>The schema diagram below shows the same information in a simplified graph form.
+It shows the actual node and edge types used inside one <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code>.
 Detector nodes and pulse nodes are different node types.
 Detector waveforms are stored on detector nodes once, and pulse nodes refer to a waveform segment using <code class="docutils literal notranslate"><span class="pre">pulse_detector_index</span></code> and <code class="docutils literal notranslate"><span class="pre">pulse_bounds</span></code>.
 Both Ising-kept and Ising-rejected pulse candidates remain present in the ML graph.</p>
-<figure class="align-default" id="id2">
+<figure class="align-default" id="id3">
 <a class="reference internal image-reference" href="../_images/hetero_graph_schema.svg"><img alt="Heterogeneous TALE-SD graph schema with detector nodes, pulse nodes, typed edges, detector waveforms, pulse bounds, and Ising kept/rejected pulse candidates." src="../_images/hetero_graph_schema.svg" style="width: 100%;" />
 </a>
 <figcaption>
-<p><span class="caption-text">Detector-detector, pulse-pulse, and detector-pulse relations are separate edge types. Ising-rejected pulse candidates are annotated and kept as input rather than hard-dropped.</span><a class="headerlink" href="#id2" title="Link to this image"></a></p>
+<p><span class="caption-text">Detector-detector, pulse-pulse, and detector-pulse relations are separate edge types. Ising-rejected pulse candidates are annotated and kept as input rather than hard-dropped.</span><a class="headerlink" href="#id3" title="Link to this image"></a></p>
 </figcaption>
 </figure>
 <p><code class="docutils literal notranslate"><span class="pre">dstio.tale.graph.iter_graphs</span></code> emits <code class="docutils literal notranslate"><span class="pre">GraphEvent</span></code> objects using

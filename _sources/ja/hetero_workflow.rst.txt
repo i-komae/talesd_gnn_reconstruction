@@ -19,7 +19,24 @@ graph の物理的な定義と HDF5 export は ``dstio.tale.graph`` に寄せま
 Graph schema
 ------------
 
-次の図は graph schema 図です。1つの ``GraphEvent`` の中で使う node type と edge type を graph として示します。
+次の図は、diagnostic notebook で作成した実 event の ``GraphEvent`` 表示です。
+抽象的な schema 図を見る前にこの図を見ると、detector node、pulse node、typed edge が
+1 event の中でどのように見えるかを把握しやすくなります。
+
+.. figure:: ../fig/hetero_graph_event_display.png
+   :alt: detector node、pulse node、live no-signal detector、Ising rejected pulse、typed edge を示す TALE-SD heterogeneous graph の3D event display。
+   :width: 100%
+
+   実 event の heterogeneous graph 表示です。四角は detector node で、検出器位置に置かれます。
+   塗りつぶしの signal detector は Ising-kept pulse を1つ以上持つ detector です。
+   灰色四角は live no-signal detector、白抜き四角は Ising-rejected pulse candidate だけを持つ detector です。
+   丸印は pulse node で、対応する detector の上に pulse time layer として置かれます。
+   青線は detector--detector の近接 relation、灰色の縦線は detector と pulse の対応、
+   緑線は同一 detector 内の連続 pulse、灰色の pulse--pulse 線は near-space relation、
+   橙色の pulse--pulse 線は time-causal subset です。
+
+下の schema 図は、同じ情報を単純化した graph として示します。
+1つの ``GraphEvent`` の中で使う node type と edge type を graph として示します。
 detector node と pulse node は別の node type です。
 detector waveform は detector node 側に 1 回だけ保存し、pulse node は ``pulse_detector_index`` と ``pulse_bounds`` で waveform の一部を参照します。
 Ising-kept pulse candidate と Ising-rejected pulse candidate はどちらも ML graph に残します。
