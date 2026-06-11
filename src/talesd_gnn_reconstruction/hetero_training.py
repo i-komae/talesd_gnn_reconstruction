@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import random
 import json
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -482,6 +483,17 @@ def _scale_gradients(model: MinimalHeteroTaleSdGNN, scale: float) -> None:
             parameter.grad.mul_(float(scale))
 
 
+def _format_duration(seconds: float) -> str:
+    seconds = max(float(seconds), 0.0)
+    if seconds < 60.0:
+        return f"{seconds:.0f}s"
+    minutes, sec = divmod(int(seconds), 60)
+    if minutes < 60:
+        return f"{minutes}m{sec:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
+
+
 def _predict_hetero_numpy(
     model: MinimalHeteroTaleSdGNN,
     loader: Any,
@@ -765,13 +777,23 @@ def train_hetero_model(
     )
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     history: list[dict[str, Any]] = []
+    train_progress_interval_sec = float(os.environ.get("TALESD_GNN_TRAIN_PROGRESS_INTERVAL_SEC", "60"))
+    train_loader_batches = len(train_loader)
     for epoch in range(1, int(epochs) + 1):
         model.train()
         train_losses = []
         train_components: dict[str, list[float]] = {}
         optimizer.zero_grad(set_to_none=True)
         pending_accumulation_steps = 0
-        for batch in train_loader:
+        epoch_start = time.monotonic()
+        last_progress = epoch_start
+        print(
+            "hetero_train_epoch "
+            f"stage=start epoch={epoch}/{int(epochs)} "
+            f"train_batches={train_loader_batches} "
+            f"train_graphs={len(train_indices)}"
+        )
+        for batch_index, batch in enumerate(train_loader, start=1):
             batch = batch.to(device)
             loss, components = _hetero_batch_loss(
                 model,
@@ -820,6 +842,26 @@ def train_hetero_model(
             train_losses.append(float(loss.detach().cpu()))
             for name, value in components.items():
                 train_components.setdefault(name, []).append(float(value.detach().cpu()))
+            now = time.monotonic()
+            if (
+                train_progress_interval_sec > 0
+                and (now - last_progress) >= train_progress_interval_sec
+            ):
+                elapsed = now - epoch_start
+                rate = float(batch_index) / elapsed if elapsed > 0 else 0.0
+                remaining = max(train_loader_batches - batch_index, 0)
+                eta = float(remaining) / rate if rate > 0 else float("nan")
+                print(
+                    "hetero_train_progress "
+                    f"epoch={epoch}/{int(epochs)} "
+                    f"batch={batch_index}/{train_loader_batches} "
+                    f"graphs={min(batch_index * max(int(batch_size), 1), len(train_indices))}/{len(train_indices)} "
+                    f"elapsed={_format_duration(elapsed)} "
+                    f"rate={rate:.3g}/s "
+                    f"eta={_format_duration(eta) if np.isfinite(eta) else 'unknown'} "
+                    f"loss={float(np.mean(train_losses)) if train_losses else float('nan'):.6g}"
+                )
+                last_progress = now
         if pending_accumulation_steps > 0:
             _scale_gradients(
                 model,
@@ -882,6 +924,14 @@ def train_hetero_model(
         _append_component_mean(epoch_row, "train", train_components)
         _append_component_mean(epoch_row, "val", val_components)
         history.append(epoch_row)
+        epoch_elapsed = time.monotonic() - epoch_start
+        print(
+            "hetero_train_epoch "
+            f"stage=done epoch={epoch}/{int(epochs)} "
+            f"elapsed={_format_duration(epoch_elapsed)} "
+            f"train_loss={epoch_row['train_loss']:.6g} "
+            f"val_loss={epoch_row['val_loss']:.6g}"
+        )
     pred_val, target_val, mass_logit_val, mass_label_val, quality_val, error_val = _predict_hetero_numpy(
         model,
         val_loader,
