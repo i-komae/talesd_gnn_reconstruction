@@ -152,6 +152,23 @@ DST から作り直した energy-flat HDF5 は正常に完了している。
 pulse node は detector--pulse relation と pulse bounds によって対応する detector waveform を参照する。
 relation は pulse--pulse、detector--detector、detector--pulse の 3 系統である。
 
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig/hetero_graph_event_display.png}
+  \caption{
+    実 event から作成した heterogeneous graph 表示。
+    四角は detector node、丸印は pulse node である。
+    塗りつぶし detector は Ising-kept pulse を持ち、灰色 detector は live no-signal detector、白抜き detector は Ising-rejected pulse candidate だけを持つ。
+    pulse node は detector の上に pulse time layer として置かれ、縦線で対応する detector に接続される。
+    青線は detector--detector 近接 relation、緑線は同一 detector 内の連続 pulse、灰色線は near-space pulse relation、橙色線は time-causal pulse relation を表す。
+  }
+  \label{fig:hetero-graph-event-display}
+\end{figure}
+
+図\ref{fig:hetero-graph-event-display}のように、実際の入力 graph では detector node と pulse node が同じ平面上に押し込まれているわけではない。
+detector node は検出器位置を持ち、pulse node はその detector に属する時間方向の候補として扱う。
+そのため、model 側では detector feature、detector waveform、pulse feature、typed edge relation を別々に encoder へ渡す。
+
 heterogeneous 学習用 cache の流れは次である。
 \begin{small}
 \[

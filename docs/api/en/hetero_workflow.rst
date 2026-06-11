@@ -19,7 +19,27 @@ The first figure is the workflow diagram. It separates the HDF5 training-cache p
 Graph schema
 ------------
 
-The second figure is the graph schema diagram. It shows the actual node and edge types used inside one ``GraphEvent``.
+The next figure is a real event display made from a ``GraphEvent`` in the
+diagnostic notebook. It is useful to look at this before reading the abstract
+schema diagram, because it shows what detector nodes, pulse nodes, and typed
+edges look like in one event.
+
+.. figure:: ../fig/hetero_graph_event_display.png
+   :alt: Three-dimensional TALE-SD heterogeneous graph event display with detector nodes, pulse nodes, live no-signal detectors, Ising-rejected pulses, and typed edges.
+   :width: 100%
+
+   Example heterogeneous event graph. Square markers are detector nodes at the
+   detector positions. Filled signal-detector squares have at least one
+   Ising-kept pulse. Gray squares are live no-signal detector nodes. Open
+   detector squares have only Ising-rejected pulse candidates. Round markers are
+   pulse nodes placed above their detector on the pulse-time layer. Blue edges
+   are detector--detector proximity relations, gray vertical edges connect a
+   detector to its pulse nodes, green edges connect consecutive pulses on the
+   same detector, gray pulse--pulse edges are near-space relations, and orange
+   pulse--pulse edges are the time-causal subset.
+
+The schema diagram below shows the same information in a simplified graph form.
+It shows the actual node and edge types used inside one ``GraphEvent``.
 Detector nodes and pulse nodes are different node types.
 Detector waveforms are stored on detector nodes once, and pulse nodes refer to a waveform segment using ``pulse_detector_index`` and ``pulse_bounds``.
 Both Ising-kept and Ising-rejected pulse candidates remain present in the ML graph.

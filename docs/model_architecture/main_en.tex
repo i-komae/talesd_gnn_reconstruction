@@ -122,6 +122,23 @@ It represents detector readouts and pulse candidates as two node types rather th
 Detector waveforms are stored once on detector nodes, and pulse nodes refer to their detector through the detector--pulse relation and pulse bounds.
 The graph relations are pulse--pulse, detector--detector, and detector--pulse relations.
 
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig/hetero_graph_event_display.png}
+  \caption{
+    Heterogeneous graph display for one real event.
+    Square markers are detector nodes and round markers are pulse nodes.
+    Filled detector squares have at least one Ising-kept pulse; gray squares are live no-signal detector nodes; open detector squares have only Ising-rejected pulse candidates.
+    Pulse nodes are drawn above their detector on a pulse-time layer and are connected back to their detector by vertical detector--pulse edges.
+    Blue edges are detector--detector proximity relations, green edges connect consecutive pulses on the same detector, gray pulse--pulse edges are near-space relations, and orange pulse--pulse edges are the time-causal subset.
+  }
+  \label{fig:hetero-graph-event-display}
+\end{figure}
+
+Figure~\ref{fig:hetero-graph-event-display} shows why the model input is not a single homogeneous node table.
+Detector nodes carry detector-level features and detector waveforms, while pulse nodes carry pulse-candidate features and Ising annotations.
+The model therefore encodes detector features, detector waveforms, pulse features, and typed edge relations as separate inputs before message passing.
+
 The heterogeneous training/cache path is
 \begin{footnotesize}
 \[
