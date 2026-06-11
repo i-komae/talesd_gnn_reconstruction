@@ -189,9 +189,9 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             graph_dir = tmp / "graphs"
             graph_dir.mkdir()
             env = os.environ.copy()
+            env.pop("REPO", None)
             env.update(
                 {
-                    "REPO": str(repo),
                     "GRAPH_INPUT": str(graph_dir),
                     "OUTPUT_ROOT": str(tmp / "output"),
                     "RUN_ID": "dry",
@@ -211,6 +211,15 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             self.assertIn("batch_size=8", submit_result.stdout)
             self.assertIn("gradient_accumulation_steps=16", submit_result.stdout)
             self.assertIn("pin_memory=0", submit_result.stdout)
+            sbatch_path = (
+                tmp
+                / "output"
+                / "runs"
+                / "server_hetero_reco_mass_quality_v100_128epoch_dry"
+                / "slurm"
+                / "server_hetero_reco_mass_quality_v100_128epoch_dry.sbatch"
+            )
+            self.assertIn(f"runtime_source={repo}", sbatch_path.read_text())
 
             direct_env = env.copy()
             direct_env["OUTPUT_ROOT"] = str(tmp / "runner_output")
