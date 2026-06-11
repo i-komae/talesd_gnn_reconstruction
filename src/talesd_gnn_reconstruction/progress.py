@@ -38,6 +38,13 @@ def progress_stream() -> TextIO:
     return sys.stderr
 
 
+def progress_interval_seconds(default: float = 30.0) -> float:
+    try:
+        return max(float(os.environ.get("TALESD_GNN_PROGRESS_INTERVAL", str(default))), 1.0)
+    except ValueError:
+        return max(float(default), 1.0)
+
+
 class LineProgress:
     def __init__(self, desc: str, total: int | None = None) -> None:
         self.desc = desc
@@ -45,7 +52,7 @@ class LineProgress:
         self.count = 0
         self.started = time.perf_counter()
         self.last_report = self.started
-        self.interval = max(float(os.environ.get("TALESD_GNN_PROGRESS_INTERVAL", "30")), 1.0)
+        self.interval = progress_interval_seconds()
         self.postfix = ""
         self.closed = False
 

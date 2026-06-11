@@ -310,6 +310,118 @@ def _plot_split_distributions(
     return {"plot_files": pdf_files, "plot_data_json": str(plot_data_path)}
 
 
+def redraw_split_distribution_plots(plot_data_json: Path, output_dir: Path | None = None) -> dict[str, Any]:
+    from talesd_gnn_reconstruction.diagnostics import (  # noqa: PLC0415
+        FIGSIZE_GRID,
+        FIGSIZE_PAIR,
+        LINEWIDTH,
+        MARKERSIZE,
+        _prepare_matplotlib,
+        _save_pdf,
+        _style_axes,
+    )
+
+    plot_data_json = Path(plot_data_json).expanduser()
+    plot_data = json.loads(plot_data_json.read_text())
+    if plot_data.get("format") != "split_distribution_plot_data_v1":
+        raise ValueError(f"unsupported split plot data format: {plot_data.get('format')!r}")
+    output_dir = Path(output_dir).expanduser() if output_dir is not None else plot_data_json.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    _prepare_matplotlib()
+    import matplotlib.pyplot as plt  # noqa: PLC0415
+
+    split_order = [str(name) for name in plot_data.get("split_order", [])]
+    split_colors = dict(zip(split_order, plt.rcParams["axes.prop_cycle"].by_key().get("color", []), strict=False))
+    pdf_files: list[str] = []
+
+    feature_order = [
+        "log10_energy",
+        "core_x_km",
+        "core_y_km",
+        "zenith_deg",
+        "azimuth_deg",
+        "detector_nodes",
+        "pulse_nodes",
+        "edges",
+        "particle_labels",
+    ]
+    features = plot_data.get("features", {})
+    fig, axes = plt.subplots(3, 3, figsize=FIGSIZE_GRID)
+    for ax, key in zip(axes.reshape(-1), feature_order):
+        payload = features.get(key)
+        if payload is None:
+            ax.axis("off")
+            continue
+        bins = np.asarray(payload.get("bins", []), dtype=np.float64)
+        if bins.size < 2:
+            ax.axis("off")
+            continue
+        if key == "particle_labels":
+            ax.set_xticks([0.0, 1.0], ["p", "Fe"])
+        for name in split_order:
+            split_payload = payload.get("splits", {}).get(name, {})
+            density = np.asarray(split_payload.get("density", []), dtype=np.float64)
+            n = int(split_payload.get("n", 0))
+            if density.size != bins.size - 1 or n <= 0:
+                continue
+            ax.stairs(
+                density,
+                bins,
+                linewidth=LINEWIDTH,
+                color=split_colors.get(name),
+                label=f"{name} (n={n})",
+            )
+        ax.set_xlabel(str(payload.get("xlabel", key)))
+        ax.set_ylabel("density")
+        _style_axes(ax)
+    axes.reshape(-1)[0].legend(frameon=False)
+    fig.suptitle("Train/validation/test parameter distributions")
+    fig.tight_layout()
+    pdf_files.append(_save_pdf(fig, output_dir / "split_parameter_distributions.pdf"))
+
+    energy_counts = plot_data.get("energy_bin_counts", {})
+    bin_centers = np.asarray(energy_counts.get("bin_centers", []), dtype=np.float64)
+    bin_keys = [str(key) for key in energy_counts.get("bin_keys", [])]
+    if bin_centers.size:
+        fig, axes = plt.subplots(1, 2, figsize=FIGSIZE_PAIR)
+        for ax, value_key, ylabel in (
+            (axes[0], "events", "events"),
+            (axes[1], "independent_showers", "independent shower groups"),
+        ):
+            for name in split_order:
+                y = np.asarray(
+                    energy_counts.get("splits", {}).get(name, {}).get(value_key, []),
+                    dtype=np.float64,
+                )
+                if y.size != bin_centers.size:
+                    continue
+                ax.plot(
+                    bin_centers,
+                    y,
+                    marker="o",
+                    markersize=MARKERSIZE,
+                    linewidth=LINEWIDTH,
+                    color=split_colors.get(name),
+                    label=name,
+                )
+            ax.set_xlabel(r"$\log_{10}(E/\mathrm{eV})$ bin center")
+            ax.set_ylabel(ylabel)
+            ax.set_xticks(
+                bin_centers[:: max(len(bin_centers) // 8, 1)],
+                bin_keys[:: max(len(bin_keys) // 8, 1)],
+                rotation=45,
+                ha="right",
+            )
+            _style_axes(ax)
+        axes[0].legend(frameon=False)
+        fig.suptitle("Split counts by true-energy bin")
+        fig.tight_layout()
+        pdf_files.append(_save_pdf(fig, output_dir / "split_energy_bin_counts.pdf"))
+
+    return {"plot_files": pdf_files, "plot_data_json": str(plot_data_json)}
+
+
 def _shape_counts(dataset: GraphDataset, index: int) -> tuple[int | None, int | None, int | None, int | None]:
     path_index, _local_index, key = dataset._locate(index)  # noqa: SLF001 - summary script uses dataset internals for cheap shapes.
     group = dataset._handle(path_index)["events"][key]  # noqa: SLF001

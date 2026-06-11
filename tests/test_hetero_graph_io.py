@@ -52,7 +52,7 @@ from talesd_gnn_reconstruction.cli import (
     _selected_entries_from_path_indices,
 )
 import talesd_gnn_reconstruction.hetero_training as hetero_training
-from scripts.summarize_split_distributions import _energy_bin, summarize
+from scripts.summarize_split_distributions import _energy_bin, redraw_split_distribution_plots, summarize
 
 
 DATA_SAMPLE = Path("/Users/ikomae/TALE/dstio/test/data/tale_data_talesdcalibev_single_event.dst")
@@ -1047,6 +1047,13 @@ class HeteroGraphIoTest(unittest.TestCase):
                 self.assertIn("events", split_counts)
                 self.assertIn("independent_showers", split_counts)
                 self.assertNotIn("sources", split_counts)
+            for pdf in ("split_parameter_distributions.pdf", "split_energy_bin_counts.pdf"):
+                (plot_dir / pdf).unlink()
+                self.assertFalse((plot_dir / pdf).exists())
+            redraw_result = redraw_split_distribution_plots(Path(redraw["split_distribution_plot_data_json"]))
+            self.assertEqual(len(redraw_result["plot_files"]), 2)
+            self.assertTrue((plot_dir / "split_parameter_distributions.pdf").exists())
+            self.assertTrue((plot_dir / "split_energy_bin_counts.pdf").exists())
 
         self.assertEqual(payload["config"]["graph_format"], "hetero")
         total_events = sum(split["events"] for split in payload["totals"].values())

@@ -27,6 +27,7 @@ from .metrics import (
 )
 from .progress import progress as _progress
 from .progress import progress_bar as _progress_bar
+from .progress import progress_interval_seconds as _progress_interval_seconds
 from .progress import write as _progress_write
 
 if TYPE_CHECKING:
@@ -466,7 +467,7 @@ def _scan_stratified_source_paths_parallel(
         for _ in range(min(max_pending, len(payloads))):
             submit_next()
         while pending:
-            done, pending = wait(pending, timeout=progress.interval, return_when=FIRST_COMPLETED)
+            done, pending = wait(pending, timeout=_progress_interval_seconds(), return_when=FIRST_COMPLETED)
             if not done:
                 progress.set_postfix(pending=len(pending), workers=worker_count)
                 progress.update(0)
