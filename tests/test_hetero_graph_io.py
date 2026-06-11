@@ -450,8 +450,7 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
 
         path_counts = {
             "short.dst.gz": 5,
-            "full_a.dst.gz": 10,
-            "full_b.dst.gz": 10,
+            "full.dst.gz": 20,
         }
         written: list[tuple[int, str]] = []
 
@@ -468,6 +467,88 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 {
                     "stratum": "proton:16",
                     "target_graphs": 20,
+                    "groups": [
+                        {
+                            "source_group": "/mc/proton/DAT000116",
+                            "dat_tag": "DAT000116",
+                            "energy_bin_code": "16",
+                            "particle": "proton",
+                            "stratum": "proton:16",
+                            "paths": ["/mc/proton/short.dst.gz"],
+                        },
+                        {
+                            "source_group": "/mc/proton/DAT000216",
+                            "dat_tag": "DAT000216",
+                            "energy_bin_code": "16",
+                            "particle": "proton",
+                            "stratum": "proton:16",
+                            "paths": ["/mc/proton/full.dst.gz"],
+                        },
+                    ],
+                }
+            ],
+            "output_base": tempfile.mkdtemp(),
+            "graphs_per_source_group": 10,
+            "source_group_overdraw_factor": 10.0,
+            "seed": 12345,
+            "cleaning": "ising",
+            "node_policy": "all_candidates_with_ising",
+            "const_dst": None,
+            "mc_calib_dir": None,
+            "require_trigger_mode0": True,
+            "require_reference_core": True,
+            "skip_errors": True,
+            "skip_missing_mc_calibration": True,
+            "min_event_date": None,
+            "open_retries": 0,
+            "open_retry_delay": 0.0,
+            "shard_size": 1000,
+            "progress_interval_sec": 0.0,
+            "config": {},
+        }
+        with mock.patch.object(tale_graph, "create_graph_h5_file", return_value=FakeHandle()):
+            with mock.patch.object(tale_graph, "iter_graphs", side_effect=fake_iter_graphs):
+                with mock.patch.object(tale_graph, "write_graph_h5_event", side_effect=fake_write):
+                    result = _export_light_hetero_worker(payload)
+
+        self.assertEqual(result["graphs_written"], 20)
+        self.assertEqual([row["graphs_written"] for row in result["source_groups"]], [5, 15])
+        self.assertEqual([row["primary_graphs_written"] for row in result["source_groups"]], [5, 10])
+        self.assertEqual([row["refill_graphs_written"] for row in result["source_groups"]], [0, 5])
+        self.assertEqual([row["complete"] for row in result["source_groups"]], [False, True])
+        self.assertEqual(result["strata"][0]["target_met"], True)
+        self.assertEqual(result["strata"][0]["attempted_source_groups"], 2)
+        self.assertEqual([graph for _index, graph in written].count("short.dst.gz"), 5)
+        self.assertEqual([graph for _index, graph in written].count("full.dst.gz"), 15)
+
+    def test_light_hetero_worker_spreads_refill_over_surplus_groups(self) -> None:
+        class FakeHandle:
+            def flush(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        path_counts = {
+            "short.dst.gz": 5,
+            "full_a.dst.gz": 20,
+            "full_b.dst.gz": 20,
+        }
+        written: list[tuple[int, str]] = []
+
+        def fake_iter_graphs(paths: list[str], **_: object) -> list[str]:
+            path = Path(paths[0]).name
+            return [path] * path_counts[path]
+
+        def fake_write(_handle: FakeHandle, index: int, graph: str) -> None:
+            written.append((index, graph))
+
+        payload = {
+            "worker_index": 0,
+            "strata": [
+                {
+                    "stratum": "proton:16",
+                    "target_graphs": 30,
                     "groups": [
                         {
                             "source_group": "/mc/proton/DAT000116",
@@ -520,12 +601,14 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 with mock.patch.object(tale_graph, "write_graph_h5_event", side_effect=fake_write):
                     result = _export_light_hetero_worker(payload)
 
-        self.assertEqual(result["graphs_written"], 20)
-        self.assertEqual([row["graphs_written"] for row in result["source_groups"]], [0, 10, 10])
-        self.assertEqual([row["complete"] for row in result["source_groups"]], [False, True, True])
+        written_by_path = {path: [graph for _index, graph in written].count(path) for path in path_counts}
+        self.assertEqual(result["graphs_written"], 30)
+        self.assertEqual(written_by_path["short.dst.gz"], 5)
+        self.assertGreater(written_by_path["full_a.dst.gz"], 10)
+        self.assertGreater(written_by_path["full_b.dst.gz"], 10)
+        self.assertLessEqual(written_by_path["full_a.dst.gz"], 13)
+        self.assertLessEqual(written_by_path["full_b.dst.gz"], 13)
         self.assertEqual(result["strata"][0]["target_met"], True)
-        self.assertEqual(result["strata"][0]["attempted_source_groups"], 3)
-        self.assertEqual([graph for _index, graph in written], ["full_a.dst.gz"] * 10 + ["full_b.dst.gz"] * 10)
 
     def test_light_hetero_worker_discards_overdrawn_graphs_by_seeded_score(self) -> None:
         class FakeHandle:

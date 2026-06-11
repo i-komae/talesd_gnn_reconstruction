@@ -2533,6 +2533,11 @@ def _light_graph_sample_key(seed: int, group: LightHeteroSourceGroup, graph: Any
     )
 
 
+def _light_graph_identity(graph: Any, graphable_index: int) -> str:
+    event_id = str(getattr(graph, "event_id", "") or "")
+    return event_id or f"graphable_index:{int(graphable_index)}"
+
+
 def _open_light_hetero_shard(
     output_base: Path,
     shard_index: int,
@@ -2589,6 +2594,36 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
     def log(message: str) -> None:
         print(f"hetero light export: worker={worker_index} {message}", flush=True)
 
+    def collect_group_graphs(group: LightHeteroSourceGroup) -> list[tuple[float, int, str, Any]]:
+        group_graphs: list[tuple[float, int, str, Any]] = []
+        iterator = tale_graph.iter_graphs(
+            group.paths,
+            kind="mc",
+            cleaning=str(payload["cleaning"]),
+            node_policy=str(payload["node_policy"]),
+            const_dst=payload["const_dst"],
+            mc_calib_dir=payload["mc_calib_dir"],
+            require_trigger_mode0=bool(payload["require_trigger_mode0"]),
+            require_reference_core=bool(payload["require_reference_core"]),
+            skip_errors=bool(payload["skip_errors"]),
+            skip_missing_mc_calibration=bool(payload["skip_missing_mc_calibration"]),
+            min_event_date=payload["min_event_date"],
+            open_retries=int(payload["open_retries"]),
+            open_retry_delay=float(payload["open_retry_delay"]),
+        )
+        try:
+            for graphable_index, graph in enumerate(iterator):
+                score = _light_graph_sample_key(seed, group, graph, graphable_index)
+                group_graphs.append((score, graphable_index, _light_graph_identity(graph, graphable_index), graph))
+                if len(group_graphs) >= source_group_graph_cap:
+                    break
+        finally:
+            close = getattr(iterator, "close", None)
+            if callable(close):
+                close()
+        group_graphs.sort(key=lambda item: (item[0], item[1]))
+        return group_graphs
+
     def rotate_shard() -> None:
         nonlocal shard_index, shard_path, handle, written_in_shard
         handle.close()
@@ -2597,6 +2632,35 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
         output_paths.append(str(shard_path))
         written_in_shard = 0
         log(f"open_shard index={shard_index} path={shard_path}")
+
+    def write_selected_graphs(
+        group: LightHeteroSourceGroup,
+        selected_graphs: list[tuple[float, int, str, Any]],
+        *,
+        stratum: str,
+        stratum_written_before: int,
+        target_graphs: int,
+    ) -> int:
+        nonlocal written_total, written_in_shard, last_progress
+        written = 0
+        for _score, _graphable_index, _key, graph in selected_graphs:
+            if shard_size > 0 and written_in_shard >= shard_size:
+                rotate_shard()
+            tale_graph.write_graph_h5_event(handle, written_in_shard, graph)
+            written_total += 1
+            written_in_shard += 1
+            written += 1
+            written_counts_by_stratum[group.stratum] = written_counts_by_stratum.get(group.stratum, 0) + 1
+            now = time.monotonic()
+            if progress_interval_sec > 0 and now - last_progress >= progress_interval_sec:
+                elapsed = max(now - started_at, 1.0e-9)
+                log(
+                    f"written={written_total} stratum={stratum} "
+                    f"stratum_graphs={stratum_written_before + written}/{target_graphs} "
+                    f"rate={written_total / elapsed:.2f}/s current={group.source_group}"
+                )
+                last_progress = now
+        return written
 
     log(
         f"start strata={len(strata)} source_groups={source_group_count} "
@@ -2613,6 +2677,9 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
             stratum_written = 0
             attempted_groups = 0
             complete_groups = 0
+            selected_keys_by_group: dict[str, set[str]] = {}
+            row_by_group: dict[str, dict[str, Any]] = {}
+            attempted_group_order: list[LightHeteroSourceGroup] = []
             log(
                 f"start_stratum index={stratum_index}/{len(strata)} stratum={stratum} "
                 f"target_graphs={target_graphs} candidate_source_groups={len(groups)}"
@@ -2627,71 +2694,36 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                     f"stratum_graphs={stratum_written}/{target_graphs} "
                     f"source_group={group.source_group} files={len(group.paths)}"
                 )
-                group_graphs: list[tuple[float, int, Any]] = []
-                iterator = tale_graph.iter_graphs(
-                    group.paths,
-                    kind="mc",
-                    cleaning=str(payload["cleaning"]),
-                    node_policy=str(payload["node_policy"]),
-                    const_dst=payload["const_dst"],
-                    mc_calib_dir=payload["mc_calib_dir"],
-                    require_trigger_mode0=bool(payload["require_trigger_mode0"]),
-                    require_reference_core=bool(payload["require_reference_core"]),
-                    skip_errors=bool(payload["skip_errors"]),
-                    skip_missing_mc_calibration=bool(payload["skip_missing_mc_calibration"]),
-                    min_event_date=payload["min_event_date"],
-                    open_retries=int(payload["open_retries"]),
-                    open_retry_delay=float(payload["open_retry_delay"]),
-                )
-                try:
-                    for graphable_index, graph in enumerate(iterator):
-                        score = _light_graph_sample_key(seed, group, graph, graphable_index)
-                        group_graphs.append((score, graphable_index, graph))
-                        if len(group_graphs) >= source_group_graph_cap:
-                            break
-                finally:
-                    close = getattr(iterator, "close", None)
-                    if callable(close):
-                        close()
+                attempted_group_order.append(group)
+                group_graphs = collect_group_graphs(group)
                 graphable = len(group_graphs)
-                group_written = 0
-                if graphable >= graphs_per_source_group:
-                    selected_graphs = [
-                        graph
-                        for _score, _graphable_index, graph in sorted(group_graphs, key=lambda item: (item[0], item[1]))[
-                            :graphs_per_source_group
-                        ]
-                    ]
-                    for graph in selected_graphs:
-                        if shard_size > 0 and written_in_shard >= shard_size:
-                            rotate_shard()
-                        tale_graph.write_graph_h5_event(handle, written_in_shard, graph)
-                        written_total += 1
-                        written_in_shard += 1
-                        group_written += 1
-                        stratum_written += 1
-                        written_counts_by_stratum[group.stratum] = written_counts_by_stratum.get(group.stratum, 0) + 1
-                        now = time.monotonic()
-                        if progress_interval_sec > 0 and now - last_progress >= progress_interval_sec:
-                            elapsed = max(now - started_at, 1.0e-9)
-                            log(
-                                f"written={written_total} stratum={stratum} "
-                                f"stratum_graphs={stratum_written}/{target_graphs} "
-                                f"rate={written_total / elapsed:.2f}/s current={group.source_group}"
-                            )
-                            last_progress = now
-                    complete_groups += 1
-                group_rows.append(
-                    {
-                        **_light_group_to_dict(group),
-                        "graphs_found": int(graphable),
-                        "graphs_written": int(group_written),
-                        "discarded_graphs": int(graphable - group_written),
-                        "overdraw_cap_reached": bool(graphable >= source_group_graph_cap),
-                        "source_group_graph_cap": int(source_group_graph_cap),
-                        "complete": int(group_written) >= graphs_per_source_group,
-                    }
+                remaining_target = max(target_graphs - stratum_written, 0)
+                primary_quota = min(graphs_per_source_group, remaining_target)
+                selected_graphs = group_graphs[: min(graphable, primary_quota)]
+                group_written = write_selected_graphs(
+                    group,
+                    selected_graphs,
+                    stratum=stratum,
+                    stratum_written_before=stratum_written,
+                    target_graphs=target_graphs,
                 )
+                stratum_written += group_written
+                selected_keys_by_group[group.source_group] = {key for _score, _index, key, _graph in selected_graphs}
+                row = {
+                    **_light_group_to_dict(group),
+                    "graphs_found": int(graphable),
+                    "graphs_written": int(group_written),
+                    "primary_graphs_written": int(group_written),
+                    "refill_graphs_written": 0,
+                    "discarded_graphs": int(graphable - group_written),
+                    "overdraw_cap_reached": bool(graphable >= source_group_graph_cap),
+                    "source_group_graph_cap": int(source_group_graph_cap),
+                    "complete": int(group_written) >= graphs_per_source_group,
+                }
+                group_rows.append(row)
+                row_by_group[group.source_group] = row
+                if int(row["complete"]):
+                    complete_groups += 1
                 handle.flush()
                 group_elapsed = max(time.monotonic() - group_started_at, 1.0e-9)
                 log(
@@ -2702,6 +2734,59 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                     f"stratum_graphs={stratum_written}/{target_graphs} "
                     f"elapsed={group_elapsed:.1f}s total_written={written_total}"
                 )
+            refill_needed = max(target_graphs - stratum_written, 0)
+            if refill_needed > 0:
+                surplus_groups = [
+                    group
+                    for group in attempted_group_order
+                    if int(row_by_group[group.source_group]["graphs_found"])
+                    > int(row_by_group[group.source_group]["graphs_written"])
+                ]
+                surplus_groups.sort(
+                    key=lambda group: _sample_key_from_parts(int(seed), group.source_group, "light-refill-source-group", 0)
+                )
+                log(
+                    f"start_refill stratum={stratum} needed={refill_needed} "
+                    f"candidate_source_groups={len(surplus_groups)}"
+                )
+                for refill_index, group in enumerate(surplus_groups, start=1):
+                    refill_needed = max(target_graphs - stratum_written, 0)
+                    if refill_needed <= 0:
+                        break
+                    row = row_by_group[group.source_group]
+                    refill_started_at = time.monotonic()
+                    remaining_groups = max(len(surplus_groups) - refill_index + 1, 1)
+                    refill_quota = max(int(math.ceil(refill_needed / remaining_groups)), 1)
+                    group_graphs = collect_group_graphs(group)
+                    already_selected = selected_keys_by_group.setdefault(group.source_group, set())
+                    refill_candidates = [
+                        item
+                        for item in group_graphs
+                        if item[2] not in already_selected
+                    ][:refill_quota]
+                    refill_written = write_selected_graphs(
+                        group,
+                        refill_candidates,
+                        stratum=stratum,
+                        stratum_written_before=stratum_written,
+                        target_graphs=target_graphs,
+                    )
+                    stratum_written += refill_written
+                    already_selected.update(key for _score, _index, key, _graph in refill_candidates[:refill_written])
+                    row["graphs_written"] = int(row["graphs_written"]) + int(refill_written)
+                    row["refill_graphs_written"] = int(row["refill_graphs_written"]) + int(refill_written)
+                    row["discarded_graphs"] = max(int(row["graphs_found"]) - int(row["graphs_written"]), 0)
+                    was_complete = bool(row["complete"])
+                    row["complete"] = int(row["graphs_written"]) >= graphs_per_source_group
+                    if bool(row["complete"]) and not was_complete:
+                        complete_groups += 1
+                    handle.flush()
+                    log(
+                        f"done_refill index={refill_index}/{len(surplus_groups)} stratum={group.stratum} "
+                        f"source_group={group.source_group} written={refill_written} "
+                        f"stratum_graphs={stratum_written}/{target_graphs} "
+                        f"elapsed={max(time.monotonic() - refill_started_at, 1.0e-9):.1f}s total_written={written_total}"
+                    )
             stratum_rows.append(
                 {
                     "stratum": stratum,
