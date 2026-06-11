@@ -269,6 +269,64 @@ def _resolve_loader_settings(
     }
 
 
+def _configure_torch_sharing_strategy(num_workers: int) -> str:
+    if int(num_workers) <= 0:
+        return "single-process"
+    import torch.multiprocessing as torch_mp
+
+    requested = (
+        os.environ.get("TALESD_GNN_TORCH_SHARING_STRATEGY")
+        or os.environ.get("TORCH_SHARING_STRATEGY")
+        or "file_system"
+    )
+    requested = str(requested).strip()
+    if not requested or requested == "default":
+        return str(torch_mp.get_sharing_strategy())
+    available = set(torch_mp.get_all_sharing_strategies())
+    if requested not in available:
+        raise ValueError(
+            f"torch sharing strategy {requested!r} is not available; "
+            f"available={sorted(available)}"
+        )
+    torch_mp.set_sharing_strategy(requested)
+    return str(torch_mp.get_sharing_strategy())
+
+
+def _open_fd_count() -> int:
+    fd_dir = Path("/proc/self/fd")
+    if not fd_dir.exists():
+        return -1
+    try:
+        return len(list(fd_dir.iterdir()))
+    except OSError:
+        return -1
+
+
+def _nofile_limit() -> tuple[int, int]:
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except Exception:
+        return (-1, -1)
+    return int(soft), int(hard)
+
+
+def _hetero_loader_worker_init(worker_id: int) -> None:
+    _loader_worker_init(worker_id)
+    strategy = _configure_torch_sharing_strategy(1)
+    soft, hard = _nofile_limit()
+    print(
+        "hetero_loader_worker_init "
+        f"worker_id={int(worker_id)} "
+        f"torch_sharing_strategy={strategy} "
+        f"fd_count={_open_fd_count()} "
+        f"nofile_soft={soft} "
+        f"nofile_hard={hard}",
+        flush=True,
+    )
+
+
 def _make_hetero_loader(
     dataset: H5PyGHeteroGraphDataset,
     indices: Sequence[int],
@@ -294,7 +352,7 @@ def _make_hetero_loader(
         kwargs["multiprocessing_context"] = "spawn"
         kwargs["prefetch_factor"] = max(int(prefetch_factor), 1)
         kwargs["persistent_workers"] = bool(persistent_workers)
-        kwargs["worker_init_fn"] = _loader_worker_init
+        kwargs["worker_init_fn"] = _hetero_loader_worker_init
     return DataLoader(Subset(dataset, list(indices)), **kwargs)
 
 
@@ -615,6 +673,8 @@ def train_hetero_model(
         graph_byte_summary=graph_byte_summary,
     )
     num_workers = int(loader_settings["resolved_workers"])
+    torch_sharing_strategy = _configure_torch_sharing_strategy(num_workers)
+    nofile_soft, nofile_hard = _nofile_limit()
     print(
         "hetero_loader_memory "
         f"sampled_graphs={graph_byte_summary['sampled_graphs']} "
@@ -629,6 +689,10 @@ def train_hetero_model(
         f"cpu_worker_limit={loader_settings['cpu_worker_limit']} "
         f"prefetch_factor={loader_settings['prefetch_factor']} "
         f"pin_memory={int(loader_settings['pin_memory'])} "
+        f"torch_sharing_strategy={torch_sharing_strategy} "
+        f"main_fd_count={_open_fd_count()} "
+        f"nofile_soft={nofile_soft} "
+        f"nofile_hard={nofile_hard} "
         f"held_batches_estimate={loader_settings['held_batches_estimate']} "
         f"estimated_loader_bytes={loader_settings['estimated_loader_bytes']} "
         f"loader_memory_budget_bytes={loader_settings['loader_memory_budget_bytes']}"
