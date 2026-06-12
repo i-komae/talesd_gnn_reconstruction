@@ -320,6 +320,13 @@ def _progress_interval_from_env(name: str, default: float) -> float:
     return float(text)
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return bool(default)
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _maybe_log_flat_cache_progress(
     *,
     stage: str,
@@ -408,6 +415,7 @@ def _verify_flat_cache_samples(
     flat_path: Path,
     *,
     verify_samples: int,
+    cache_mode: str = "training",
     progress_interval_sec: float = 60.0,
 ) -> int:
     indices = _verification_indices(len(source), verify_samples)
@@ -423,8 +431,12 @@ def _verify_flat_cache_samples(
             flush=True,
         )
         for ordinal, index in enumerate(indices, start=1):
-            grouped = source[int(index)]
-            cached = flat[int(index)]
+            if cache_mode == "training":
+                grouped = source.training_sample(int(index))
+                cached = flat.training_sample(int(index))
+            else:
+                grouped = source[int(index)]
+                cached = flat[int(index)]
             for key in (
                 "detector_features",
                 "detector_context_features",
@@ -485,6 +497,14 @@ def _verify_flat_cache_samples(
         flat.close()
 
 
+def _flat_conversion_sample(source: Any, index: int, *, full_cache: bool) -> dict[str, Any]:
+    if full_cache:
+        return source[int(index)]
+    if hasattr(source, "training_sample"):
+        return source.training_sample(int(index))
+    return source[int(index)]
+
+
 def _dataset_axis_nbytes(dataset: h5py.Dataset, *, axis: int, count: int) -> int:
     count = max(int(count), 0)
     shape = list(dataset.shape)
@@ -507,10 +527,18 @@ def convert_hetero_to_flat_cache(
     input_paths: str | Path | Sequence[str | Path],
     output_path: str | Path,
     *,
-    compression: str | None = "lzf",
+    compression: str | None = "none",
+    cache_mode: str = "training",
+    max_graphs: int | None = None,
     verify_samples: int = 5,
     progress_interval_sec: float | None = None,
+    allow_slow_cache: bool | None = None,
 ) -> dict[str, Any]:
+    cache_mode = str(cache_mode).strip().lower()
+    if cache_mode not in {"training", "full"}:
+        raise ValueError(f"cache_mode must be training or full, got {cache_mode!r}")
+    if allow_slow_cache is None:
+        allow_slow_cache = _env_flag("ALLOW_SLOW_CACHE", False)
     if progress_interval_sec is None:
         progress_interval_sec = _progress_interval_from_env("HETERO_FLAT_CACHE_PROGRESS_INTERVAL_SEC", 60.0)
     progress_interval_sec = float(progress_interval_sec)
@@ -522,13 +550,29 @@ def convert_hetero_to_flat_cache(
         if len(source) == 0:
             raise ValueError("cannot convert empty hetero HDF5 dataset")
         n_events = int(len(source))
+        if max_graphs is not None and int(max_graphs) > 0:
+            n_events = min(n_events, int(max_graphs))
+        full_cache = cache_mode == "full"
         print(
             "hetero_flat_cache_start "
             f"input={input_paths} output={output} compression={compression_label} "
-            f"graphs={n_events} verify_samples={int(verify_samples)} "
+            f"cache_mode={cache_mode} graphs={n_events} verify_samples={int(verify_samples)} "
             f"progress_interval_sec={progress_interval_sec:.6g}",
             flush=True,
         )
+        if cache_mode == "training":
+            print(
+                "hetero_flat_cache_note "
+                "cache_mode=training stores only training tensors plus minimal split metadata; "
+                "use grouped HDF5 for visualization and attention maps",
+                flush=True,
+            )
+        if compression_label != "none":
+            print(
+                "WARNING: compressed post-hoc flat cache writes can be very slow; "
+                "use --compression none for training caches.",
+                flush=True,
+            )
         detector_total = 0
         pulse_total = 0
         edge_totals = {relation: 0 for relation in EDGE_RELATIONS}
@@ -547,7 +591,7 @@ def convert_hetero_to_flat_cache(
             flush=True,
         )
         for index in range(n_events):
-            sample = source[index]
+            sample = _flat_conversion_sample(source, index, full_cache=full_cache)
             detector_total += int(sample["detector_features"].shape[0])
             pulse_total += int(sample["pulse_features"].shape[0])
             waveform_channels = max(waveform_channels, int(sample["detector_waveforms"].shape[1]))
@@ -584,6 +628,7 @@ def convert_hetero_to_flat_cache(
             handle.attrs["graph_definition"] = GRAPH_DEFINITION
             handle.attrs["waveform_schema"] = WAVEFORM_SCHEMA
             handle.attrs["columns_json"] = source.columns_json
+            handle.attrs["cache_mode"] = cache_mode
             arrays = handle.create_group("arrays")
             offsets = handle.create_group("offsets")
             metadata = handle.create_group("metadata")
@@ -594,8 +639,9 @@ def convert_hetero_to_flat_cache(
                 dtype=np.float32,
                 **filter_kwargs,
             )
-            arrays.create_dataset("detector_positions_km", shape=(detector_total, 3), dtype=np.float32, **filter_kwargs)
-            arrays.create_dataset("detector_lids", shape=(detector_total,), dtype=np.int64, **filter_kwargs)
+            if full_cache:
+                arrays.create_dataset("detector_positions_km", shape=(detector_total, 3), dtype=np.float32, **filter_kwargs)
+                arrays.create_dataset("detector_lids", shape=(detector_total,), dtype=np.int64, **filter_kwargs)
             arrays.create_dataset(
                 "detector_waveforms",
                 shape=(detector_total, waveform_channels, waveform_length),
@@ -603,10 +649,11 @@ def convert_hetero_to_flat_cache(
                 **filter_kwargs,
             )
             arrays.create_dataset("pulse_features", shape=(pulse_total, pulse_dim), dtype=np.float32, **filter_kwargs)
-            arrays.create_dataset("pulse_positions_km", shape=(pulse_total, 3), dtype=np.float32, **filter_kwargs)
-            arrays.create_dataset("pulse_lids", shape=(pulse_total,), dtype=np.int64, **filter_kwargs)
-            arrays.create_dataset("pulse_detector_index", shape=(pulse_total,), dtype=np.int64, **filter_kwargs)
-            arrays.create_dataset("pulse_bounds", shape=(pulse_total, 4), dtype=np.float32, **filter_kwargs)
+            if full_cache:
+                arrays.create_dataset("pulse_positions_km", shape=(pulse_total, 3), dtype=np.float32, **filter_kwargs)
+                arrays.create_dataset("pulse_lids", shape=(pulse_total,), dtype=np.int64, **filter_kwargs)
+                arrays.create_dataset("pulse_detector_index", shape=(pulse_total,), dtype=np.int64, **filter_kwargs)
+                arrays.create_dataset("pulse_bounds", shape=(pulse_total, 4), dtype=np.float32, **filter_kwargs)
             arrays.create_dataset("target", shape=(n_events, target_dim), dtype=np.float32, **filter_kwargs)
             arrays.create_dataset("particle_label", shape=(n_events,), dtype=np.float32, **filter_kwargs)
             edge_index_group = arrays.create_group("edge_index_by_type")
@@ -628,7 +675,8 @@ def convert_hetero_to_flat_cache(
             metadata.create_dataset("event_id", shape=(n_events,), dtype=string_dtype)
             metadata.create_dataset("source_path", shape=(n_events,), dtype=string_dtype)
             metadata.create_dataset("source_index", shape=(n_events,), dtype=np.int64)
-            metadata.create_dataset("metadata_json", shape=(n_events,), dtype=string_dtype)
+            if full_cache:
+                metadata.create_dataset("metadata_json", shape=(n_events,), dtype=string_dtype)
 
             # Root-level names are the public training-cache schema. The
             # arrays/offsets groups are kept as hard-link aliases so older
@@ -636,14 +684,16 @@ def convert_hetero_to_flat_cache(
             # transition.
             handle["detector_features_all"] = arrays["detector_features"]
             handle["detector_context_features_all"] = arrays["detector_context_features"]
-            handle["detector_positions_km_all"] = arrays["detector_positions_km"]
-            handle["detector_lids_all"] = arrays["detector_lids"]
+            if full_cache:
+                handle["detector_positions_km_all"] = arrays["detector_positions_km"]
+                handle["detector_lids_all"] = arrays["detector_lids"]
             handle["detector_waveforms_all"] = arrays["detector_waveforms"]
             handle["pulse_features_all"] = arrays["pulse_features"]
-            handle["pulse_positions_km_all"] = arrays["pulse_positions_km"]
-            handle["pulse_lids_all"] = arrays["pulse_lids"]
-            handle["pulse_detector_index_all"] = arrays["pulse_detector_index"]
-            handle["pulse_bounds_all"] = arrays["pulse_bounds"]
+            if full_cache:
+                handle["pulse_positions_km_all"] = arrays["pulse_positions_km"]
+                handle["pulse_lids_all"] = arrays["pulse_lids"]
+                handle["pulse_detector_index_all"] = arrays["pulse_detector_index"]
+                handle["pulse_bounds_all"] = arrays["pulse_bounds"]
             handle["target_all"] = arrays["target"]
             handle["particle_label_all"] = arrays["particle_label"]
             handle["edge_index_all_by_relation"] = edge_index_group
@@ -661,24 +711,26 @@ def convert_hetero_to_flat_cache(
                 flush=True,
             )
             for index in range(n_events):
-                sample = source[index]
+                sample = _flat_conversion_sample(source, index, full_cache=full_cache)
                 n_detector = int(sample["detector_features"].shape[0])
                 n_pulse = int(sample["pulse_features"].shape[0])
                 detector_slice = slice(detector_cursor, detector_cursor + n_detector)
                 pulse_slice = slice(pulse_cursor, pulse_cursor + n_pulse)
                 arrays["detector_features"][detector_slice] = sample["detector_features"]
                 arrays["detector_context_features"][detector_slice] = sample["detector_context_features"]
-                arrays["detector_positions_km"][detector_slice] = sample["detector_positions_km"]
-                arrays["detector_lids"][detector_slice] = sample["detector_lids"]
+                if full_cache:
+                    arrays["detector_positions_km"][detector_slice] = sample["detector_positions_km"]
+                    arrays["detector_lids"][detector_slice] = sample["detector_lids"]
                 arrays["detector_waveforms"][detector_slice] = _pad_waveforms(
                     sample["detector_waveforms"],
                     waveform_length,
                 )
                 arrays["pulse_features"][pulse_slice] = sample["pulse_features"]
-                arrays["pulse_positions_km"][pulse_slice] = sample["pulse_positions_km"]
-                arrays["pulse_lids"][pulse_slice] = sample["pulse_lids"]
-                arrays["pulse_detector_index"][pulse_slice] = sample["pulse_detector_index"]
-                arrays["pulse_bounds"][pulse_slice] = sample["pulse_bounds"]
+                if full_cache:
+                    arrays["pulse_positions_km"][pulse_slice] = sample["pulse_positions_km"]
+                    arrays["pulse_lids"][pulse_slice] = sample["pulse_lids"]
+                    arrays["pulse_detector_index"][pulse_slice] = sample["pulse_detector_index"]
+                    arrays["pulse_bounds"][pulse_slice] = sample["pulse_bounds"]
                 arrays["target"][index] = sample["target"]
                 arrays["particle_label"][index] = (
                     np.nan if sample["particle_label"] is None else float(sample["particle_label"])
@@ -697,14 +749,19 @@ def convert_hetero_to_flat_cache(
                 detector_offsets[index + 1] = detector_cursor
                 pulse_offsets[index + 1] = pulse_cursor
                 metadata_dict = sample.get("metadata", {})
-                metadata["event_id"][index] = str(metadata_dict.get("event_id", sample.get("event_id", f"{index:08d}")))
+                event_id_value = metadata_dict.get("event_id", sample.get("event_id"))
+                if event_id_value is None and hasattr(source, "_metadata_value"):
+                    path_index, local_index, _key = source._locate(index)
+                    event_id_value = source._metadata_value(path_index, local_index, "event_id")
+                metadata["event_id"][index] = str(event_id_value if event_id_value is not None else f"{index:08d}")
                 metadata["source_path"][index] = str(metadata_dict.get("source_path", source.source_path(index)))
                 source_index_value = metadata_dict.get("source_index")
                 if source_index_value is None and hasattr(source, "_metadata_value"):
                     path_index, local_index, _key = source._locate(index)
                     source_index_value = source._metadata_value(path_index, local_index, "source_index")
                 metadata["source_index"][index] = -1 if source_index_value is None else int(source_index_value)
-                metadata["metadata_json"][index] = _metadata_json(metadata_dict)
+                if full_cache:
+                    metadata["metadata_json"][index] = _metadata_json(metadata_dict)
                 last_write_log = _maybe_log_flat_cache_progress(
                     stage="write",
                     index=index + 1,
@@ -717,6 +774,27 @@ def convert_hetero_to_flat_cache(
                     pulse_nodes=pulse_cursor,
                     edges=sum(edge_cursors.values()),
                 )
+                write_elapsed = max(time.monotonic() - write_start, 0.0)
+                if index + 1 > 0 and write_elapsed > 0.0:
+                    write_rate = float(index + 1) / write_elapsed
+                    eta_sec = float(n_events - (index + 1)) / write_rate if write_rate > 0.0 else float("inf")
+                    if eta_sec > 1800.0 and (index + 1) in {1, 10, 100}:
+                        print(
+                            "WARNING: hetero_flat_cache_write_slow "
+                            f"stage=write index={index + 1}/{n_events} events_per_sec={write_rate:.6g} "
+                            f"eta={_format_duration(eta_sec)} cache_mode={cache_mode} compression={compression_label}",
+                            flush=True,
+                        )
+                    if (
+                        _env_flag("SPEED_BENCHMARK", False)
+                        and eta_sec > 600.0
+                        and not bool(allow_slow_cache)
+                        and index + 1 >= 10
+                    ):
+                        raise RuntimeError(
+                            "flat cache write ETA exceeds 10 minutes in SPEED_BENCHMARK; "
+                            "rerun with PREPARE_FAST_CACHE=0 or ALLOW_SLOW_CACHE=1"
+                        )
             offsets.create_dataset("detector", data=detector_offsets)
             offsets.create_dataset("pulse", data=pulse_offsets)
             edge_offsets_group = offsets.create_group("edge_by_type")
@@ -729,6 +807,7 @@ def convert_hetero_to_flat_cache(
             source,
             output,
             verify_samples=int(verify_samples),
+            cache_mode=cache_mode,
             progress_interval_sec=progress_interval_sec,
         )
         _log_h5_layout(
@@ -742,7 +821,7 @@ def convert_hetero_to_flat_cache(
             "hetero_flat_cache_done "
             f"output={output} graphs={n_events} detector_nodes={int(detector_total)} "
             f"pulse_nodes={int(pulse_total)} edges={int(sum(edge_totals.values()))} "
-            f"compression={compression_label} verified_samples={int(verified_samples)} "
+            f"compression={compression_label} cache_mode={cache_mode} verified_samples={int(verified_samples)} "
             f"elapsed_sec={elapsed_sec:.6g} events_per_sec={float(n_events) / elapsed_sec if elapsed_sec > 0 else 0.0:.6g}",
             flush=True,
         )
@@ -755,6 +834,7 @@ def convert_hetero_to_flat_cache(
             "waveform_channels": int(waveform_channels),
             "waveform_length": int(waveform_length),
             "compression": compression_label,
+            "cache_mode": cache_mode,
             "verified_samples": int(verified_samples),
             "elapsed_sec": float(elapsed_sec),
             "events_per_sec": float(n_events) / elapsed_sec if elapsed_sec > 0 else 0.0,
@@ -1053,6 +1133,7 @@ class H5FlatHeteroGraphDataset:
         self._cumulative_lengths: list[int] = []
         self._path_local_indices: list[list[int] | None] = []
         self._path_key_lists: list[list[str] | None] = []
+        self._path_cache_modes: list[str] = []
         self._path_scan_chunkable = True
         self.columns_json = "{}"
         total = 0
@@ -1067,6 +1148,7 @@ class H5FlatHeteroGraphDataset:
                 if path_index == 0:
                     self.columns_json = str(handle.attrs.get("columns_json", "{}"))
                 n_events = int(self._offset_dataset(handle, "detector").shape[0] - 1)
+                cache_mode = str(handle.attrs.get("cache_mode", "full")).strip().lower() or "full"
                 compression = _flat_h5_compression(handle)
                 _log_h5_layout(
                     graph_path=graph_path,
@@ -1079,6 +1161,7 @@ class H5FlatHeteroGraphDataset:
             self._cumulative_lengths.append(total)
             self._path_local_indices.append(None)
             self._path_key_lists.append(None)
+            self._path_cache_modes.append(cache_mode)
 
     def __len__(self) -> int:
         return self._cumulative_lengths[-1] if self._cumulative_lengths else 0
@@ -1126,6 +1209,12 @@ class H5FlatHeteroGraphDataset:
         if public_name in handle:
             return handle[public_name]
         return handle[f"arrays/{name}"]
+
+    @staticmethod
+    def _has_array_dataset(handle: h5py.File, name: str) -> bool:
+        public_name = f"{name}_all"
+        arrays = handle.get("arrays")
+        return public_name in handle or (arrays is not None and name in arrays)
 
     @staticmethod
     def _offset_dataset(handle: h5py.File, name: str) -> h5py.Dataset:
@@ -1202,6 +1291,8 @@ class H5FlatHeteroGraphDataset:
             ("pulse_detector_index", n_pulse),
             ("pulse_bounds", n_pulse),
         ):
+            if not self._has_array_dataset(handle, name):
+                continue
             dataset = self._array_dataset(handle, name)
             total += _dataset_rows_nbytes(dataset, rows)
         arrays = handle.get("arrays")
@@ -1311,6 +1402,23 @@ class H5FlatHeteroGraphDataset:
     def __getitem__(self, index: int) -> dict[str, Any]:
         path_index, local_index = self._locate(index)
         handle = self._handle(path_index)
+        full_required = (
+            "detector_positions_km",
+            "detector_lids",
+            "pulse_positions_km",
+            "pulse_lids",
+            "pulse_detector_index",
+            "pulse_bounds",
+        )
+        missing = [name for name in full_required if not self._has_array_dataset(handle, name)]
+        if missing:
+            cache_mode = self._path_cache_modes[path_index] if path_index < len(self._path_cache_modes) else "training"
+            raise ValueError(
+                "flat hetero cache does not contain full graph metadata "
+                f"(cache_mode={cache_mode}, missing={','.join(missing)}). "
+                "Use H5TensorHeteroGraphDataset/training_sample() for training, "
+                "or rebuild the cache with --cache-mode full for PyG/visualization access."
+            )
         detector_slice = self._slice_offsets(handle, "detector", local_index)
         pulse_slice = self._slice_offsets(handle, "pulse", local_index)
         edge_index_by_type = {}

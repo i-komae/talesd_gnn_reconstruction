@@ -224,7 +224,7 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             self.assertIn("prefetch_factor=1", submit_result.stdout)
             self.assertIn("persistent_workers=1", submit_result.stdout)
             self.assertIn("train_workers=4", submit_result.stdout)
-            self.assertIn("prepare_fast_cache=1", submit_result.stdout)
+            self.assertIn("prepare_fast_cache=0", submit_result.stdout)
             self.assertIn("final_eval_data_format=fast_tensor", submit_result.stdout)
             self.assertIn("attention_maps=0", submit_result.stdout)
             self.assertIn("feature_importance=0", submit_result.stdout)
@@ -275,7 +275,7 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 for index in range(3):
                     write_hetero_graph(handle, index, _synthetic_graph(index))
 
-            result = convert_hetero_to_flat_cache(graph_path, flat_path, compression="none")
+            result = convert_hetero_to_flat_cache(graph_path, flat_path, compression="none", cache_mode="full")
 
             self.assertEqual(result["format"], FLAT_FORMAT_NAME)
             self.assertEqual(result["graphs"], 3)
@@ -286,6 +286,7 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 self.assertIn("pulse_features_all", handle)
                 self.assertIn("target_all", handle)
                 self.assertIn("particle_label_all", handle)
+                self.assertEqual(handle.attrs["cache_mode"], "full")
                 self.assertIn("detector_offsets", handle)
                 self.assertIn("pulse_offsets", handle)
                 self.assertIn("edge_offsets_by_relation", handle)
@@ -320,6 +321,8 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                     str(cli_flat_path),
                     "--compression",
                     "none",
+                    "--cache-mode",
+                    "full",
                 ],
                 text=True,
                 capture_output=True,
@@ -328,6 +331,42 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             self.assertIn("hetero_graph_io format=flat_hdf5", cli_result.stdout)
             self.assertIn("hetero_flat_cache", cli_result.stdout)
             self.assertEqual(hetero_graph_count(cli_flat_path), 3)
+
+    def test_training_flat_cache_is_fast_tensor_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            flat_path = Path(tmpdir) / "synthetic_hetero.training.flat.h5"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(2):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            result = convert_hetero_to_flat_cache(graph_path, flat_path, compression="none", cache_mode="training")
+            self.assertEqual(result["cache_mode"], "training")
+            with h5py.File(flat_path, "r") as handle:
+                self.assertEqual(handle.attrs["cache_mode"], "training")
+                self.assertIn("detector_features_all", handle)
+                self.assertIn("detector_waveforms_all", handle)
+                self.assertNotIn("detector_positions_km_all", handle)
+                self.assertNotIn("pulse_bounds_all", handle)
+                self.assertNotIn("metadata_json", handle["metadata"])
+
+            flat = H5FlatHeteroGraphDataset(flat_path, require_target=True, require_particle_label=True)
+            try:
+                training_sample = flat.training_sample(0)
+                self.assertIn("detector_waveforms", training_sample)
+                self.assertNotIn("pulse_bounds", training_sample)
+                with self.assertRaisesRegex(ValueError, "cache_mode=training"):
+                    _ = flat[0]
+                tensor_dataset = H5TensorHeteroGraphDataset(flat_path, require_target=True, require_particle_label=True)
+                try:
+                    tensor_sample = tensor_dataset[0]
+                    self.assertIn("detector", tensor_sample)
+                    self.assertIn("pulse", tensor_sample)
+                    self.assertNotIn("metadata", tensor_sample)
+                finally:
+                    tensor_dataset.close()
+            finally:
+                flat.close()
 
     def test_flat_split_distribution_summary_uses_flat_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -342,7 +381,7 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                     graph.metadata["time"] = 120000 + (index % 60)
                     graph.metadata["parttype"] = 14 if particle == "proton" else 5626
                     write_hetero_graph(handle, index, graph)
-            convert_hetero_to_flat_cache(graph_path, flat_path, compression="none")
+            convert_hetero_to_flat_cache(graph_path, flat_path, compression="none", cache_mode="full")
             dataset = H5FlatHeteroGraphDataset(flat_path, require_target=True, require_particle_label=True)
             try:
                 payload = summarize(
@@ -531,7 +570,7 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             with create_hetero_graph_file(grouped) as handle:
                 for index in range(2):
                     write_hetero_graph(handle, index, _synthetic_graph(index))
-            convert_hetero_to_flat_cache(grouped, flat, compression="none", verify_samples=1)
+            convert_hetero_to_flat_cache(grouped, flat, compression="none", verify_samples=1, cache_mode="full")
 
             dataset = H5FlatHeteroGraphDataset(flat, require_target=True, require_particle_label=True)
             try:

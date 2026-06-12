@@ -96,11 +96,9 @@ fi
 if [[ -z "${TRAIN_WORKERS:-}" && "${WAVEFORM_ENCODER}" == "transformer" ]]; then
   export TRAIN_WORKERS=4
 fi
-if [[ "${PREPARE_FAST_CACHE_WAS_SET}" == "0" && ( "${SPEED_BENCHMARK}" == "1" || "${WAVEFORM_ENCODER}" == "transformer" ) ]]; then
-  export PREPARE_FAST_CACHE=1
-else
-  export PREPARE_FAST_CACHE="${PREPARE_FAST_CACHE:-0}"
-fi
+export PREPARE_FAST_CACHE="${PREPARE_FAST_CACHE:-0}"
+export FAST_CACHE_COMPRESSION="${FAST_CACHE_COMPRESSION:-none}"
+export FAST_CACHE_MODE="${FAST_CACHE_MODE:-training}"
 export PERSISTENT_WORKERS="${PERSISTENT_WORKERS:-1}"
 export VAL_NUM_WORKERS="${VAL_NUM_WORKERS:-0}"
 export VALIDATE_EVERY_N_EPOCHS="${VALIDATE_EVERY_N_EPOCHS:-1}"
@@ -148,8 +146,8 @@ else
     export DIAGNOSTICS="${DIAGNOSTICS:-1}"
   fi
 fi
-if [[ "${PREPARE_FAST_CACHE}" == "0" && "${WAVEFORM_ENCODER}" == "transformer" ]]; then
-  echo "WARNING: transformer hetero production training should use PREPARE_FAST_CACHE=1 unless GRAPH_INPUT is already flat_hdf5" >&2
+if [[ "${PREPARE_FAST_CACHE}" == "1" ]]; then
+  echo "WARNING: PREPARE_FAST_CACHE=1 performs grouped-to-flat conversion before training. This may be slow. Prefer directly exported flat HDF5 or PREPARE_FAST_CACHE=0." >&2
 fi
 export ATTENTION_MAPS_SPLIT="${ATTENTION_MAPS_SPLIT:-validation}"
 export ATTENTION_MAPS_MAX_GRAPHS="${ATTENTION_MAPS_MAX_GRAPHS:-16}"

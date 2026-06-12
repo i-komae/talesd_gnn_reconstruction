@@ -183,14 +183,9 @@ ATTENTION_MAPS_MAX_GRAPHS="${ATTENTION_MAPS_MAX_GRAPHS:-16}"
 ATTENTION_MAPS_DEVICE="${ATTENTION_MAPS_DEVICE:-${DEVICE}}"
 SEED="${SEED:-12345}"
 PYTHON_BIN="${PYTHON_BIN:-.venv/bin/python}"
-if [[ -z "${PREPARE_FAST_CACHE:-}" ]]; then
-  if [[ "${SPEED_BENCHMARK}" == "1" || "${WAVEFORM_ENCODER}" == "transformer" ]]; then
-    PREPARE_FAST_CACHE=1
-  else
-    PREPARE_FAST_CACHE=0
-  fi
-fi
-FAST_CACHE_COMPRESSION="${FAST_CACHE_COMPRESSION:-lzf}"
+PREPARE_FAST_CACHE="${PREPARE_FAST_CACHE:-0}"
+FAST_CACHE_COMPRESSION="${FAST_CACHE_COMPRESSION:-none}"
+FAST_CACHE_MODE="${FAST_CACHE_MODE:-training}"
 FAST_CACHE_VERIFY_SAMPLES="${FAST_CACHE_VERIFY_SAMPLES:-5}"
 SCALER_CACHE="${SCALER_CACHE:-${RUN_DIR}/cache/${RUN_NAME}.scalers.json}"
 REUSE_SCALER_CACHE="${REUSE_SCALER_CACHE:-1}"
@@ -217,17 +212,21 @@ if [[ "${WAVEFORM_ENCODER}" == "transformer" && "${BATCH_SIZE}" =~ ^[0-9]+$ && "
   echo "WARNING: BATCH_SIZE is small for optimized transformer path; consider BATCH_SIZE=32 or 64" >&2
 fi
 if [[ "${GRAPH_INPUT_FORMAT}" == "grouped_hdf5" && "${PREPARE_FAST_CACHE}" != "1" ]]; then
-  echo "WARNING: grouped gzip HDF5 may be slow for production training; set PREPARE_FAST_CACHE=1" >&2
+  echo "hetero_graph_input format=grouped_hdf5 prepare_fast_cache=0 action=train_grouped_fast_tensor"
+  echo "WARNING: grouped HDF5 + fast_tensor is the current standard path; monitor hetero_epoch_profile data_wait_s before enabling post-hoc flat cache." >&2
 elif [[ "${GRAPH_INPUT_FORMAT}" == "flat_hdf5" ]]; then
   echo "hetero_graph_input format=flat_hdf5 prepare_fast_cache=${PREPARE_FAST_CACHE} action=use_existing_flat_cache"
 else
-  echo "WARNING: could not confirm hetero HDF5 format for GRAPH_INPUT=${GRAPH_INPUT}; long production runs should use flat_hdf5" >&2
+  echo "WARNING: could not confirm hetero HDF5 format for GRAPH_INPUT=${GRAPH_INPUT}; use PREPARE_FAST_CACHE=0 unless this is an explicit converter run" >&2
+fi
+if [[ "${PREPARE_FAST_CACHE}" == "1" ]]; then
+  echo "WARNING: PREPARE_FAST_CACHE=1 performs grouped-to-flat conversion before training. This may be slow. Prefer directly exported flat HDF5 or PREPARE_FAST_CACHE=0." >&2
 fi
 cat <<'EOF'
 recommended_speed_benchmark:
-  SPEED_BENCHMARK=1 WAVEFORM_ENCODER=transformer PREPARE_FAST_CACHE=1 DEVICE=cuda scripts/submit_server_hetero_reco_mass_quality_training.sh
+  SPEED_BENCHMARK=1 WAVEFORM_ENCODER=transformer PREPARE_FAST_CACHE=0 DEVICE=cuda scripts/submit_server_hetero_reco_mass_quality_training.sh
 recommended_production_start:
-  WAVEFORM_ENCODER=transformer WAVEFORM_TRANSFORMER_MAX_TOKENS=128 BATCH_SIZE=32 GRADIENT_ACCUMULATION_STEPS=4 AMP=fp16 PREPARE_FAST_CACHE=1 HETERO_TRAINING_DATA_FORMAT=fast_tensor FINAL_EVAL_DATA_FORMAT=fast_tensor PERSISTENT_WORKERS=1 PREFETCH_FACTOR=1 TRAIN_WORKERS=4 PIN_MEMORY=0 FEATURE_IMPORTANCE=0 ATTENTION_MAPS=0 DIAGNOSTICS=0 scripts/submit_server_hetero_reco_mass_quality_training.sh
+  WAVEFORM_ENCODER=transformer WAVEFORM_TRANSFORMER_MAX_TOKENS=128 BATCH_SIZE=32 GRADIENT_ACCUMULATION_STEPS=4 AMP=fp16 PREPARE_FAST_CACHE=0 HETERO_TRAINING_DATA_FORMAT=fast_tensor FINAL_EVAL_DATA_FORMAT=fast_tensor PERSISTENT_WORKERS=1 PREFETCH_FACTOR=1 TRAIN_WORKERS=4 PIN_MEMORY=0 FEATURE_IMPORTANCE=0 ATTENTION_MAPS=0 DIAGNOSTICS=0 scripts/submit_server_hetero_reco_mass_quality_training.sh
 EOF
 
 if [[ "${LOSS_MODE}" == "physics-nll" || "${LOSS_MODE}" == "nll" ]]; then
@@ -268,8 +267,12 @@ elif [[ "${PREPARE_FAST_CACHE}" == "1" && "${DRY_RUN:-0}" != "1" ]]; then
       --input "${GRAPH_INPUT}"
       -o "${FAST_CACHE_PATH}"
       --compression "${FAST_CACHE_COMPRESSION}"
+      --cache-mode "${FAST_CACHE_MODE}"
       --verify-samples "${FAST_CACHE_VERIFY_SAMPLES}"
       --progress-interval-sec "${FLAT_CACHE_PROGRESS_INTERVAL_SEC}")
+    if [[ -n "${MAX_GRAPHS:-}" && "${MAX_GRAPHS}" != "0" ]]; then
+      cache_cmd+=(--max-graphs "${MAX_GRAPHS}")
+    fi
     printf 'command:'
     printf ' %q' "${cache_cmd[@]}"
     printf '\n'
@@ -297,6 +300,7 @@ GRAPH_INPUT=${GRAPH_INPUT}
 GRAPH_INPUT_ORIGINAL=${GRAPH_INPUT_ORIGINAL}
 PREPARE_FAST_CACHE=${PREPARE_FAST_CACHE}
 FAST_CACHE_COMPRESSION=${FAST_CACHE_COMPRESSION}
+FAST_CACHE_MODE=${FAST_CACHE_MODE}
 FAST_CACHE_VERIFY_SAMPLES=${FAST_CACHE_VERIFY_SAMPLES}
 GRAPH_INPUT_FORMAT=${GRAPH_INPUT_FORMAT}
 SCALER_CACHE=${SCALER_CACHE}

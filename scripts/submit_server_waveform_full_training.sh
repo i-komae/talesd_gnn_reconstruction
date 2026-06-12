@@ -96,7 +96,8 @@ PIN_MEMORY="${PIN_MEMORY:-1}"
 TRAIN_LOADER_MEMORY_BUDGET_GIB="${TRAIN_LOADER_MEMORY_BUDGET_GIB:-}"
 TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES="${TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES:-512}"
 PREPARE_FAST_CACHE="${PREPARE_FAST_CACHE:-0}"
-FAST_CACHE_COMPRESSION="${FAST_CACHE_COMPRESSION:-lzf}"
+FAST_CACHE_COMPRESSION="${FAST_CACHE_COMPRESSION:-none}"
+FAST_CACHE_MODE="${FAST_CACHE_MODE:-training}"
 FAST_CACHE_VERIFY_SAMPLES="${FAST_CACHE_VERIFY_SAMPLES:-5}"
 SCALER_CACHE="${SCALER_CACHE:-}"
 REUSE_SCALER_CACHE="${REUSE_SCALER_CACHE:-1}"
@@ -148,9 +149,9 @@ if [[ "${TRAINING_BACKEND}" == "hetero" && "${WAVEFORM_ENCODER}" == "transformer
   if [[ "${TRAIN_WORKERS_WAS_SET}" == "0" ]]; then
     TRAIN_WORKERS=4
   fi
-  if [[ "${PREPARE_FAST_CACHE_WAS_SET}" == "0" ]]; then
-    PREPARE_FAST_CACHE=1
-  fi
+fi
+if [[ "${PREPARE_FAST_CACHE}" == "1" ]]; then
+  echo "WARNING: PREPARE_FAST_CACHE=1 performs grouped-to-flat conversion before training. This may be slow. Prefer directly exported flat HDF5 or PREPARE_FAST_CACHE=0." >&2
 fi
 if [[ "${TRAINING_BACKEND}" == "hetero" ]]; then
   if [[ "${PERSISTENT_WORKERS_WAS_SET}" == "0" ]]; then
@@ -1069,6 +1070,7 @@ echo "train_loader_memory_budget_gib=${TRAIN_LOADER_MEMORY_BUDGET_GIB}"
 echo "train_loader_memory_estimate_samples=${TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES}"
 echo "prepare_fast_cache=${PREPARE_FAST_CACHE}"
 echo "fast_cache_compression=${FAST_CACHE_COMPRESSION}"
+echo "fast_cache_mode=${FAST_CACHE_MODE}"
 echo "fast_cache_verify_samples=${FAST_CACHE_VERIFY_SAMPLES}"
 echo "collate_threads=${COLLATE_THREADS}"
 echo "epoch_learning_curve=${EPOCH_LEARNING_CURVE}"
@@ -1224,6 +1226,7 @@ env \\
   TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES="${TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES}" \\
   PREPARE_FAST_CACHE="${PREPARE_FAST_CACHE}" \\
   FAST_CACHE_COMPRESSION="${FAST_CACHE_COMPRESSION}" \\
+  FAST_CACHE_MODE="${FAST_CACHE_MODE}" \\
   FAST_CACHE_VERIFY_SAMPLES="${FAST_CACHE_VERIFY_SAMPLES}" \\
   SCALER_CACHE="${SCALER_CACHE}" \\
   REUSE_SCALER_CACHE="${REUSE_SCALER_CACHE}" \\
@@ -1319,6 +1322,7 @@ train_loader_memory_budget_gib=${TRAIN_LOADER_MEMORY_BUDGET_GIB}
 train_loader_memory_estimate_samples=${TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES}
 prepare_fast_cache=${PREPARE_FAST_CACHE}
 fast_cache_compression=${FAST_CACHE_COMPRESSION}
+fast_cache_mode=${FAST_CACHE_MODE}
 fast_cache_verify_samples=${FAST_CACHE_VERIFY_SAMPLES}
 scaler_cache=${SCALER_CACHE:-auto}
 reuse_scaler_cache=${REUSE_SCALER_CACHE}

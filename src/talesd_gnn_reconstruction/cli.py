@@ -4435,8 +4435,11 @@ def _cmd_convert_hetero_to_flat(args: argparse.Namespace) -> None:
         graphs,
         args.output,
         compression=args.compression,
+        cache_mode=args.cache_mode,
+        max_graphs=args.max_graphs,
         verify_samples=args.verify_samples,
         progress_interval_sec=args.progress_interval_sec,
+        allow_slow_cache=args.allow_slow_cache,
     )
     print(
         "hetero_flat_cache "
@@ -4446,6 +4449,7 @@ def _cmd_convert_hetero_to_flat(args: argparse.Namespace) -> None:
         f"pulse_nodes={summary['pulse_nodes']} "
         f"waveform_shape={summary['waveform_channels']}x{summary['waveform_length']} "
         f"compression={summary['compression']} "
+        f"cache_mode={summary.get('cache_mode', 'unknown')} "
         f"verified_samples={summary.get('verified_samples', 0)}"
     )
 
@@ -5106,9 +5110,21 @@ def build_parser() -> argparse.ArgumentParser:
     convert_hetero_flat.add_argument("-o", "--output", required=True, help="出力flat hetero HDF5 cache")
     convert_hetero_flat.add_argument(
         "--compression",
-        default="lzf",
+        default="none",
         choices=["lzf", "none"],
-        help="flat cache dataset compression。training I/Oではlzfまたはnoneを使う",
+        help="flat cache dataset compression。既定はnone。post-hoc training cacheでlzfは遅い場合がある",
+    )
+    convert_hetero_flat.add_argument(
+        "--cache-mode",
+        default="training",
+        choices=["training", "full"],
+        help="training は fast_tensor 学習用の最小配列だけを書く。full はPyG/可視化用metadataも保存する",
+    )
+    convert_hetero_flat.add_argument(
+        "--max-graphs",
+        type=int,
+        default=None,
+        help="変換する最大graph数。speed benchmark用cache作成時に全件変換を避ける",
     )
     convert_hetero_flat.add_argument(
         "--verify-samples",
@@ -5121,6 +5137,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="flat cache変換のprogress log間隔。既定はHETERO_FLAT_CACHE_PROGRESS_INTERVAL_SECまたは60秒",
+    )
+    convert_hetero_flat.add_argument(
+        "--allow-slow-cache",
+        action="store_true",
+        help="SPEED_BENCHMARK中でも遅いpost-hoc flat cache変換を明示的に許可する",
     )
     convert_hetero_flat.set_defaults(func=_cmd_convert_hetero_to_flat)
 
