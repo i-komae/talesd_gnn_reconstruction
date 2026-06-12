@@ -112,6 +112,15 @@ export TEST_FRACTION="${TEST_FRACTION:-0.10}"
 export SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION:-0.10}"
 export SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION:-0.20}"
 export DEVICE="${DEVICE:-cuda}"
+if [[ -z "${AMP:-}" ]]; then
+  if [[ "${WAVEFORM_ENCODER}" == "transformer" && "${DEVICE}" == cuda* ]]; then
+    export AMP=fp16
+  else
+    export AMP=off
+  fi
+else
+  export AMP
+fi
 export DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT:-1000}"
 export SPLIT_WORKERS="${SPLIT_WORKERS:-4}"
 

@@ -4378,6 +4378,7 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         loader_memory_budget_gib=args.loader_memory_budget_gib,
         loader_memory_estimate_samples=args.loader_memory_estimate_samples,
         split_workers=args.split_workers,
+        amp=args.amp,
         show_progress=not args.no_progress,
     )
     print(f"checkpoint: {result['checkpoint']}")
@@ -4956,6 +4957,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train_hetero.add_argument("--loader-memory-estimate-samples", type=int, default=512)
     train_hetero.add_argument("--split-workers", type=int, default=0, help="source-stratified split のHDF5 metadata scan worker数。0なら単一process")
+    train_hetero.add_argument(
+        "--amp",
+        choices=["off", "fp16", "bf16"],
+        default="off",
+        help="CUDA mixed precision。V100 transformer training では fp16 が速い",
+    )
     train_hetero.add_argument("--no-progress", action="store_true")
     train_hetero.set_defaults(func=_cmd_train_hetero)
 

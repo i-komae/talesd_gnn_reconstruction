@@ -131,6 +131,18 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"object is not JSON serializable: {type(value).__name__}")
 
 
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    tmp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    try:
+        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=_json_default))
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _split_dataset(
     dataset: H5HeteroGraphDataset,
     *,
@@ -626,6 +638,7 @@ def train_hetero_model(
     loader_memory_budget_gib: float | None = None,
     loader_memory_estimate_samples: int = 512,
     split_workers: int = 0,
+    amp: str = "off",
     show_progress: bool = True,
 ) -> dict[str, Any]:
     import torch
@@ -642,6 +655,9 @@ def train_hetero_model(
     model_architecture = str(model_architecture)
     if model_architecture not in {"minimal_hetero", "hetero_attention"}:
         raise ValueError("model_architecture must be 'minimal_hetero' or 'hetero_attention'")
+    amp_mode = str(amp).lower()
+    if amp_mode not in {"off", "fp16", "bf16"}:
+        raise ValueError("amp must be 'off', 'fp16', or 'bf16'")
     valid_loss_modes = {"scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics", "physics-nll", "nll"}
     if loss_mode not in valid_loss_modes:
         raise ValueError(
@@ -736,6 +752,17 @@ def train_hetero_model(
         attention_heads=attention_heads,
         readout_heads=readout_heads,
     ).to(device)
+    amp_enabled = bool(device.startswith("cuda") and amp_mode != "off")
+    amp_dtype = torch.float16 if amp_mode == "fp16" else torch.bfloat16
+    grad_scaler = torch.amp.GradScaler("cuda", enabled=bool(amp_enabled and amp_dtype is torch.float16))
+    print(
+        "hetero_precision "
+        f"amp={amp_mode} "
+        f"enabled={int(amp_enabled)} "
+        f"dtype={'none' if not amp_enabled else ('float16' if amp_dtype is torch.float16 else 'bfloat16')} "
+        f"grad_scaler={int(grad_scaler.is_enabled())}",
+        flush=True,
+    )
     base_dataset.close()
 
     pyg_dataset = H5PyGHeteroGraphDataset(
@@ -779,6 +806,161 @@ def train_hetero_model(
     history: list[dict[str, Any]] = []
     train_progress_interval_sec = float(os.environ.get("TALESD_GNN_TRAIN_PROGRESS_INTERVAL_SEC", "60"))
     train_loader_batches = len(train_loader)
+    output = Path(output_path).expanduser()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    metrics_path = Path(f"{output}.metrics.json")
+
+    def _split_payload() -> dict[str, Any]:
+        return {
+            "train_indices": np.asarray(train_indices, dtype=np.int64),
+            "val_indices": np.asarray(val_indices, dtype=np.int64),
+            "test_indices": np.asarray(split["test"], dtype=np.int64),
+            "split_mode": split_mode,
+            "n_train": int(len(train_indices)),
+            "n_val": int(len(val_indices)),
+            "n_test": int(len(split["test"])),
+        }
+
+    def _runtime_payload(
+        *,
+        checkpoint_epoch: int,
+        completed: bool,
+        checkpoint_kind: str,
+        best_epoch: int,
+        best_val_loss: float,
+    ) -> dict[str, Any]:
+        return {
+            "graph_format": "hetero",
+            "training_path": "hetero_smoke",
+            "training_task": "reconstruction",
+            "model_architecture": str(model_architecture),
+            "loss_mode": str(loss_mode),
+            "energy_loss_weight": float(energy_loss_weight),
+            "core_loss_weight": float(core_loss_weight),
+            "direction_loss_weight": float(direction_loss_weight),
+            "core_loss_scale_km": float(core_loss_scale_km),
+            "angular_loss_scale_deg": float(angular_loss_scale_deg),
+            "energy_bias_loss_weight": float(energy_bias_loss_weight),
+            "energy_particle_bias_loss_weight": float(energy_particle_bias_loss_weight),
+            "energy_bias_bin_width": float(energy_bias_bin_width),
+            "energy_bias_min_bin_count": int(energy_bias_min_bin_count),
+            "epochs": int(epochs),
+            "checkpoint_epoch": int(checkpoint_epoch),
+            "best_epoch": int(best_epoch),
+            "best_val_loss": None if not np.isfinite(best_val_loss) else float(best_val_loss),
+            "completed": bool(completed),
+            "checkpoint_kind": str(checkpoint_kind),
+            "batch_size": int(batch_size),
+            "learning_rate": float(learning_rate),
+            "weight_decay": float(weight_decay),
+            "hidden_dim": int(hidden_dim),
+            "layers": int(num_layers),
+            "dropout": float(dropout),
+            "attention_heads": int(attention_heads),
+            "readout_heads": int(readout_heads),
+            "device": str(device),
+            "mass_classification": bool(mass_classification),
+            "mass_loss_mode": str(mass_loss_mode),
+            "mass_loss_weight": float(mass_loss_weight),
+            "mass_focal_gamma": float(mass_focal_gamma),
+            "mass_ranking_weight": float(mass_ranking_weight),
+            "mass_ranking_margin": float(mass_ranking_margin),
+            "quality_prediction": bool(quality_prediction),
+            "quality_loss_weight": float(quality_loss_weight),
+            "quality_angular_scale_deg": float(quality_angular_scale_deg),
+            "quality_core_scale_km": float(quality_core_scale_km),
+            "quality_energy_scale": float(quality_energy_scale),
+            "error_prediction": bool(error_prediction),
+            "error_loss_weight": float(error_loss_weight),
+            "error_angular_scale_deg": float(error_angular_scale_deg),
+            "error_core_scale_km": float(error_core_scale_km),
+            "error_energy_scale": float(error_energy_scale),
+            "nll_loss_weight": float(nll_loss_weight),
+            "nll_sigma_energy_floor": float(nll_sigma_energy_floor),
+            "nll_sigma_angle_floor_deg": float(nll_sigma_angle_floor_deg),
+            "nll_sigma_core_floor_km": float(nll_sigma_core_floor_km),
+            "waveform_length": int(resolved_waveform_length),
+            "amp": str(amp_mode),
+            "amp_enabled": bool(amp_enabled),
+            "amp_dtype": "none" if not amp_enabled else ("float16" if amp_dtype is torch.float16 else "bfloat16"),
+            "batch_size": int(max(int(batch_size), 1)),
+            "gradient_accumulation_steps": int(gradient_accumulation_steps),
+            "effective_batch_size": int(max(int(batch_size), 1) * gradient_accumulation_steps),
+            "data_loader": {
+                **loader_settings,
+                **graph_byte_summary,
+                "loader_memory_budget_gib": None
+                if loader_memory_budget_gib is None
+                else float(loader_memory_budget_gib),
+                "loader_memory_estimate_samples": int(loader_memory_estimate_samples),
+                "split_workers": int(split_workers),
+            },
+        }
+
+    def _save_checkpoint_and_metrics(
+        *,
+        checkpoint_epoch: int,
+        completed: bool,
+        checkpoint_kind: str,
+        best_epoch: int,
+        best_val_loss: float,
+        metrics: dict[str, Any] | None = None,
+        diagnostics: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        checkpoint = {
+            "model_state": model.state_dict(),
+            "model_config": model.config,
+            "hetero_scalers": _scalers_to_dict(scalers),
+            "history": history,
+            "metrics": {} if metrics is None else metrics,
+            "diagnostics": {} if diagnostics is None else diagnostics,
+            "split": _split_payload(),
+            "runtime": _runtime_payload(
+                checkpoint_epoch=checkpoint_epoch,
+                completed=completed,
+                checkpoint_kind=checkpoint_kind,
+                best_epoch=best_epoch,
+                best_val_loss=best_val_loss,
+            ),
+        }
+        tmp_path = output.with_name(f".{output.name}.tmp-{os.getpid()}")
+        try:
+            torch.save(checkpoint, tmp_path)
+            os.replace(tmp_path, output)
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        metrics_payload = {
+            "checkpoint": str(output),
+            "history": history,
+            "metrics": checkpoint["metrics"],
+            "diagnostics": checkpoint["diagnostics"],
+            "split": {
+                "split_mode": split_mode,
+                "n_train": int(len(train_indices)),
+                "n_val": int(len(val_indices)),
+                "n_test": int(len(split["test"])),
+            },
+            "runtime": checkpoint["runtime"],
+        }
+        _write_json_atomic(metrics_path, metrics_payload)
+        print(
+            "hetero_checkpoint "
+            f"stage={checkpoint_kind} "
+            f"epoch={int(checkpoint_epoch)}/{int(epochs)} "
+            f"best_epoch={int(best_epoch)} "
+            f"best_val_loss={best_val_loss:.6g} "
+            f"checkpoint={output} "
+            f"metrics={metrics_path}",
+            flush=True,
+        )
+        return checkpoint
+
+    best_val_loss = float("inf")
+    best_epoch = 0
+    best_state: dict[str, torch.Tensor] | None = None
     for epoch in range(1, int(epochs) + 1):
         model.train()
         train_losses = []
@@ -795,87 +977,7 @@ def train_hetero_model(
         )
         for batch_index, batch in enumerate(train_loader, start=1):
             batch = batch.to(device)
-            loss, components = _hetero_batch_loss(
-                model,
-                batch,
-                target_dim=target_dim,
-                mass_classification=mass_classification,
-                scalers=scalers,
-                device=device,
-                loss_mode=loss_mode,
-                energy_loss_weight=energy_loss_weight,
-                core_loss_weight=core_loss_weight,
-                direction_loss_weight=direction_loss_weight,
-                core_loss_scale_km=core_loss_scale_km,
-                angular_loss_scale_deg=angular_loss_scale_deg,
-                energy_bias_loss_weight=energy_bias_loss_weight,
-                energy_particle_bias_loss_weight=energy_particle_bias_loss_weight,
-                energy_bias_bin_width=energy_bias_bin_width,
-                energy_bias_min_bin_count=energy_bias_min_bin_count,
-                mass_loss_weight=mass_loss_weight,
-                mass_loss_mode=mass_loss_mode,
-                mass_focal_gamma=mass_focal_gamma,
-                mass_ranking_weight=mass_ranking_weight,
-                mass_ranking_margin=mass_ranking_margin,
-                quality_prediction=quality_prediction,
-                quality_loss_weight=quality_loss_weight,
-                quality_angular_scale_deg=quality_angular_scale_deg,
-                quality_core_scale_km=quality_core_scale_km,
-                quality_energy_scale=quality_energy_scale,
-                error_prediction=error_prediction,
-                error_loss_weight=error_loss_weight,
-                error_angular_scale_deg=error_angular_scale_deg,
-                error_core_scale_km=error_core_scale_km,
-                error_energy_scale=error_energy_scale,
-                nll_loss_weight=nll_loss_weight,
-                nll_sigma_energy_floor=nll_sigma_energy_floor,
-                nll_sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
-                nll_sigma_core_floor_km=nll_sigma_core_floor_km,
-            )
-            (loss / float(gradient_accumulation_steps)).backward()
-            pending_accumulation_steps += 1
-            if pending_accumulation_steps >= gradient_accumulation_steps:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-                pending_accumulation_steps = 0
-            train_losses.append(float(loss.detach().cpu()))
-            for name, value in components.items():
-                train_components.setdefault(name, []).append(float(value.detach().cpu()))
-            now = time.monotonic()
-            if (
-                train_progress_interval_sec > 0
-                and (now - last_progress) >= train_progress_interval_sec
-            ):
-                elapsed = now - epoch_start
-                rate = float(batch_index) / elapsed if elapsed > 0 else 0.0
-                remaining = max(train_loader_batches - batch_index, 0)
-                eta = float(remaining) / rate if rate > 0 else float("nan")
-                print(
-                    "hetero_train_progress "
-                    f"epoch={epoch}/{int(epochs)} "
-                    f"batch={batch_index}/{train_loader_batches} "
-                    f"graphs={min(batch_index * max(int(batch_size), 1), len(train_indices))}/{len(train_indices)} "
-                    f"elapsed={_format_duration(elapsed)} "
-                    f"rate={rate:.3g}/s "
-                    f"eta={_format_duration(eta) if np.isfinite(eta) else 'unknown'} "
-                    f"loss={float(np.mean(train_losses)) if train_losses else float('nan'):.6g}"
-                )
-                last_progress = now
-        if pending_accumulation_steps > 0:
-            _scale_gradients(
-                model,
-                float(gradient_accumulation_steps) / float(pending_accumulation_steps),
-            )
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-        model.eval()
-        val_losses = []
-        val_components: dict[str, list[float]] = {}
-        with torch.no_grad():
-            for batch in val_loader:
-                batch = batch.to(device)
+            with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=amp_enabled):
                 loss, components = _hetero_batch_loss(
                     model,
                     batch,
@@ -913,6 +1015,92 @@ def train_hetero_model(
                     nll_sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
                     nll_sigma_core_floor_km=nll_sigma_core_floor_km,
                 )
+            grad_scaler.scale(loss / float(gradient_accumulation_steps)).backward()
+            pending_accumulation_steps += 1
+            if pending_accumulation_steps >= gradient_accumulation_steps:
+                grad_scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+                pending_accumulation_steps = 0
+            train_losses.append(float(loss.detach().cpu()))
+            for name, value in components.items():
+                train_components.setdefault(name, []).append(float(value.detach().cpu()))
+            now = time.monotonic()
+            if (
+                train_progress_interval_sec > 0
+                and (now - last_progress) >= train_progress_interval_sec
+            ):
+                elapsed = now - epoch_start
+                rate = float(batch_index) / elapsed if elapsed > 0 else 0.0
+                remaining = max(train_loader_batches - batch_index, 0)
+                eta = float(remaining) / rate if rate > 0 else float("nan")
+                print(
+                    "hetero_train_progress "
+                    f"epoch={epoch}/{int(epochs)} "
+                    f"batch={batch_index}/{train_loader_batches} "
+                    f"graphs={min(batch_index * max(int(batch_size), 1), len(train_indices))}/{len(train_indices)} "
+                    f"elapsed={_format_duration(elapsed)} "
+                    f"rate={rate:.3g}/s "
+                    f"eta={_format_duration(eta) if np.isfinite(eta) else 'unknown'} "
+                    f"loss={float(np.mean(train_losses)) if train_losses else float('nan'):.6g}"
+                )
+                last_progress = now
+        if pending_accumulation_steps > 0:
+            _scale_gradients(
+                model,
+                float(gradient_accumulation_steps) / float(pending_accumulation_steps),
+            )
+            grad_scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            grad_scaler.step(optimizer)
+            grad_scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+        model.eval()
+        val_losses = []
+        val_components: dict[str, list[float]] = {}
+        with torch.no_grad():
+            for batch in val_loader:
+                batch = batch.to(device)
+                with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=amp_enabled):
+                    loss, components = _hetero_batch_loss(
+                        model,
+                        batch,
+                        target_dim=target_dim,
+                        mass_classification=mass_classification,
+                        scalers=scalers,
+                        device=device,
+                        loss_mode=loss_mode,
+                        energy_loss_weight=energy_loss_weight,
+                        core_loss_weight=core_loss_weight,
+                        direction_loss_weight=direction_loss_weight,
+                        core_loss_scale_km=core_loss_scale_km,
+                        angular_loss_scale_deg=angular_loss_scale_deg,
+                        energy_bias_loss_weight=energy_bias_loss_weight,
+                        energy_particle_bias_loss_weight=energy_particle_bias_loss_weight,
+                        energy_bias_bin_width=energy_bias_bin_width,
+                        energy_bias_min_bin_count=energy_bias_min_bin_count,
+                        mass_loss_weight=mass_loss_weight,
+                        mass_loss_mode=mass_loss_mode,
+                        mass_focal_gamma=mass_focal_gamma,
+                        mass_ranking_weight=mass_ranking_weight,
+                        mass_ranking_margin=mass_ranking_margin,
+                        quality_prediction=quality_prediction,
+                        quality_loss_weight=quality_loss_weight,
+                        quality_angular_scale_deg=quality_angular_scale_deg,
+                        quality_core_scale_km=quality_core_scale_km,
+                        quality_energy_scale=quality_energy_scale,
+                        error_prediction=error_prediction,
+                        error_loss_weight=error_loss_weight,
+                        error_angular_scale_deg=error_angular_scale_deg,
+                        error_core_scale_km=error_core_scale_km,
+                        error_energy_scale=error_energy_scale,
+                        nll_loss_weight=nll_loss_weight,
+                        nll_sigma_energy_floor=nll_sigma_energy_floor,
+                        nll_sigma_angle_floor_deg=nll_sigma_angle_floor_deg,
+                        nll_sigma_core_floor_km=nll_sigma_core_floor_km,
+                    )
                 val_losses.append(float(loss.detach().cpu()))
                 for name, value in components.items():
                     val_components.setdefault(name, []).append(float(value.detach().cpu()))
@@ -932,6 +1120,39 @@ def train_hetero_model(
             f"train_loss={epoch_row['train_loss']:.6g} "
             f"val_loss={epoch_row['val_loss']:.6g}"
         )
+        val_loss = float(epoch_row["val_loss"])
+        if np.isfinite(val_loss) and (best_epoch == 0 or val_loss < best_val_loss):
+            best_val_loss = val_loss
+            best_epoch = int(epoch)
+            best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+            _save_checkpoint_and_metrics(
+                checkpoint_epoch=epoch,
+                completed=False,
+                checkpoint_kind="best",
+                best_epoch=best_epoch,
+                best_val_loss=best_val_loss,
+            )
+        else:
+            print(
+                "hetero_checkpoint "
+                f"stage=skip epoch={int(epoch)}/{int(epochs)} "
+                f"best_epoch={int(best_epoch)} "
+                f"best_val_loss={best_val_loss:.6g} "
+                f"val_loss={val_loss:.6g}",
+                flush=True,
+            )
+    if best_state is None:
+        best_epoch = int(history[-1]["epoch"]) if history else int(epochs)
+        best_val_loss = float(history[-1]["val_loss"]) if history else float("nan")
+        best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+        _save_checkpoint_and_metrics(
+            checkpoint_epoch=best_epoch,
+            completed=False,
+            checkpoint_kind="best",
+            best_epoch=best_epoch,
+            best_val_loss=best_val_loss,
+        )
+    model.load_state_dict({key: value.to(device) for key, value in best_state.items()})
     pred_val, target_val, mass_logit_val, mass_label_val, quality_val, error_val = _predict_hetero_numpy(
         model,
         val_loader,
@@ -993,108 +1214,15 @@ def train_hetero_model(
             min_bin_count=diagnostic_min_bin_count,
             save_reconstruction=target_dim >= 6,
         )
-    output = Path(output_path).expanduser()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint = {
-        "model_state": model.state_dict(),
-        "model_config": model.config,
-        "hetero_scalers": _scalers_to_dict(scalers),
-        "history": history,
-        "metrics": metrics,
-        "diagnostics": diagnostics,
-        "split": {
-            "train_indices": np.asarray(train_indices, dtype=np.int64),
-            "val_indices": np.asarray(val_indices, dtype=np.int64),
-            "test_indices": np.asarray(split["test"], dtype=np.int64),
-            "split_mode": split_mode,
-            "n_train": int(len(train_indices)),
-            "n_val": int(len(val_indices)),
-            "n_test": int(len(split["test"])),
-        },
-        "runtime": {
-            "graph_format": "hetero",
-            "training_path": "hetero_smoke",
-            "training_task": "reconstruction",
-            "model_architecture": str(model_architecture),
-            "loss_mode": str(loss_mode),
-            "energy_loss_weight": float(energy_loss_weight),
-            "core_loss_weight": float(core_loss_weight),
-            "direction_loss_weight": float(direction_loss_weight),
-            "core_loss_scale_km": float(core_loss_scale_km),
-            "angular_loss_scale_deg": float(angular_loss_scale_deg),
-            "energy_bias_loss_weight": float(energy_bias_loss_weight),
-            "energy_particle_bias_loss_weight": float(energy_particle_bias_loss_weight),
-            "energy_bias_bin_width": float(energy_bias_bin_width),
-            "energy_bias_min_bin_count": int(energy_bias_min_bin_count),
-            "epochs": int(epochs),
-            "batch_size": int(batch_size),
-            "learning_rate": float(learning_rate),
-            "weight_decay": float(weight_decay),
-            "hidden_dim": int(hidden_dim),
-            "layers": int(num_layers),
-            "dropout": float(dropout),
-            "attention_heads": int(attention_heads),
-            "readout_heads": int(readout_heads),
-            "device": str(device),
-            "mass_classification": bool(mass_classification),
-            "mass_loss_mode": str(mass_loss_mode),
-            "mass_loss_weight": float(mass_loss_weight),
-            "mass_focal_gamma": float(mass_focal_gamma),
-            "mass_ranking_weight": float(mass_ranking_weight),
-            "mass_ranking_margin": float(mass_ranking_margin),
-            "quality_prediction": bool(quality_prediction),
-            "quality_loss_weight": float(quality_loss_weight),
-            "quality_angular_scale_deg": float(quality_angular_scale_deg),
-            "quality_core_scale_km": float(quality_core_scale_km),
-            "quality_energy_scale": float(quality_energy_scale),
-            "error_prediction": bool(error_prediction),
-            "error_loss_weight": float(error_loss_weight),
-            "error_angular_scale_deg": float(error_angular_scale_deg),
-            "error_core_scale_km": float(error_core_scale_km),
-            "error_energy_scale": float(error_energy_scale),
-            "nll_loss_weight": float(nll_loss_weight),
-            "nll_sigma_energy_floor": float(nll_sigma_energy_floor),
-            "nll_sigma_angle_floor_deg": float(nll_sigma_angle_floor_deg),
-            "nll_sigma_core_floor_km": float(nll_sigma_core_floor_km),
-            "waveform_length": int(resolved_waveform_length),
-            "batch_size": int(max(int(batch_size), 1)),
-            "gradient_accumulation_steps": int(gradient_accumulation_steps),
-            "effective_batch_size": int(max(int(batch_size), 1) * gradient_accumulation_steps),
-            "data_loader": {
-                **loader_settings,
-                **graph_byte_summary,
-                "loader_memory_budget_gib": None
-                if loader_memory_budget_gib is None
-                else float(loader_memory_budget_gib),
-                "loader_memory_estimate_samples": int(loader_memory_estimate_samples),
-                "split_workers": int(split_workers),
-            },
-        },
-    }
-    tmp_path = output.with_name(f".{output.name}.tmp-{os.getpid()}")
-    try:
-        torch.save(checkpoint, tmp_path)
-        os.replace(tmp_path, output)
-    finally:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-    metrics_payload = {
-        "checkpoint": str(output),
-        "history": history,
-        "metrics": metrics,
-        "diagnostics": diagnostics,
-        "split": {
-            "split_mode": split_mode,
-            "n_train": int(len(train_indices)),
-            "n_val": int(len(val_indices)),
-            "n_test": int(len(split["test"])),
-        },
-        "runtime": checkpoint["runtime"],
-    }
-    metrics_path = Path(f"{output}.metrics.json")
-    metrics_path.write_text(json.dumps(metrics_payload, indent=2, sort_keys=True, default=_json_default))
+    checkpoint = _save_checkpoint_and_metrics(
+        checkpoint_epoch=best_epoch,
+        completed=True,
+        checkpoint_kind="final",
+        best_epoch=best_epoch,
+        best_val_loss=best_val_loss,
+        metrics=metrics,
+        diagnostics=diagnostics,
+    )
     pyg_dataset.close()
     return {
         "checkpoint": str(output),

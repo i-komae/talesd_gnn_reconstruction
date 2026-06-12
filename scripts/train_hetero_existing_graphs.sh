@@ -91,6 +91,13 @@ if [[ -z "${PIN_MEMORY:-}" ]]; then
     PIN_MEMORY=1
   fi
 fi
+if [[ -z "${AMP:-}" ]]; then
+  if [[ "${WAVEFORM_ENCODER}" == "transformer" && "${DEVICE}" == cuda* ]]; then
+    AMP=fp16
+  else
+    AMP=off
+  fi
+fi
 TRAIN_LOADER_MEMORY_BUDGET_GIB="${TRAIN_LOADER_MEMORY_BUDGET_GIB:-}"
 TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES="${TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES:-512}"
 DIAGNOSTICS="${DIAGNOSTICS:-1}"
@@ -194,6 +201,7 @@ SPLIT_WORKERS=${SPLIT_WORKERS}
 PREFETCH_FACTOR=${PREFETCH_FACTOR}
 PERSISTENT_WORKERS=${PERSISTENT_WORKERS}
 PIN_MEMORY=${PIN_MEMORY}
+AMP=${AMP}
 TRAIN_LOADER_MEMORY_BUDGET_GIB=${TRAIN_LOADER_MEMORY_BUDGET_GIB}
 TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES=${TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES}
 DIAGNOSTICS=${DIAGNOSTICS}
@@ -263,6 +271,7 @@ cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli train-hetero
   --split-workers "${SPLIT_WORKERS}"
   --num-workers "${TRAIN_WORKERS}"
   --prefetch-factor "${PREFETCH_FACTOR}"
+  --amp "${AMP}"
   --loader-memory-estimate-samples "${TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES}"
   --diagnostic-energy-bin-width 0.1
   --diagnostic-min-bin-count "${DIAGNOSTIC_MIN_BIN_COUNT}")
