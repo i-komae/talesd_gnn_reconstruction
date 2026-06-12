@@ -40,6 +40,7 @@ from talesd_gnn_reconstruction.hetero_graph_io import (
     WAVEFORM_SCHEMA,
     convert_hetero_to_flat_cache,
     create_hetero_graph_file,
+    graph_event_to_sample,
     hetero_dataset_class_for_paths,
     hetero_graph_count,
     write_hetero_graph,
@@ -281,6 +282,148 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 self.assertEqual(tuple(batch["core_anchor"].shape), (2, 2))
             finally:
                 dataset.close()
+
+    def test_sample_to_hetero_data_keeps_core_anchor(self) -> None:
+        sample = graph_event_to_sample(_synthetic_graph(0))
+        sample["core_anchor"] = np.asarray([-5.0, 16.0], dtype=np.float32)
+        data = sample_to_hetero_data(sample)
+        self.assertTrue(hasattr(data, "core_anchor"))
+        np.testing.assert_allclose(data.core_anchor.cpu().numpy(), np.asarray([[-5.0, 16.0]], dtype=np.float32))
+
+    def test_reconstruct_dst_restores_relative_core_to_absolute_csv(self) -> None:
+        class DummyModel:
+            def __init__(self, output: np.ndarray) -> None:
+                self.output = torch.as_tensor(output, dtype=torch.float32)
+
+            def to(self, device: str):
+                return self
+
+            def load_state_dict(self, state: dict[str, torch.Tensor]) -> None:
+                return None
+
+            def eval(self):
+                return self
+
+            def __call__(self, batch):
+                return self.output[: int(batch.num_graphs)]
+
+        graph = _synthetic_graph(0)
+        graph.metadata = dict(graph.metadata)
+        graph.metadata["reference_core_km"] = [-5.0, 16.0, 0.0]
+        checkpoint = {
+            "model_state": {},
+            "model_config": {
+                "target_dim": 6,
+                "classification_dim": 0,
+                "quality_dim": 0,
+                "error_dim": 0,
+                "detector_dim": DETECTOR_FEATURE_DIM,
+                "detector_context_dim": DETECTOR_CONTEXT_DIM,
+                "pulse_dim": PULSE_FEATURE_DIM,
+                "edge_dims": EDGE_FEATURE_DIMS,
+                "waveform_channels": 2,
+                "waveform_length": 16,
+            },
+            "hetero_scalers": {
+                "target": {
+                    "mean": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    "std": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                }
+            },
+            "runtime": {
+                "core_target_mode": "fit_core_relative",
+                "core_anchor_mode": "fit_core_relative",
+                "coordinate_feature_mode": "absolute_and_relative",
+                "raw_columns_json": json.dumps(GRAPH_COLUMNS),
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_csv = Path(tmpdir) / "reco.csv"
+            with (
+                mock.patch("talesd_gnn_reconstruction.hetero_predict._load_checkpoint", return_value=checkpoint),
+                mock.patch(
+                    "talesd_gnn_reconstruction.hetero_predict._build_hetero_model",
+                    return_value=DummyModel(np.asarray([[17.5, 0.2, -0.1, 0.0, 0.0, 1.0]], dtype=np.float32)),
+                ),
+                mock.patch.object(tale_graph, "iter_graphs", return_value=iter([graph])),
+            ):
+                result = reconstruct_dst("dummy.dst.gz", "checkpoint.pt", output_csv, device="cpu", batch_size=1)
+
+            self.assertEqual(result["events_written"], 1)
+            with output_csv.open() as handle:
+                row = next(csv.DictReader(handle))
+            self.assertAlmostEqual(float(row["core_x_km"]), -4.8, places=5)
+            self.assertAlmostEqual(float(row["core_y_km"]), 15.9, places=5)
+            self.assertAlmostEqual(float(row["pred_delta_core_x_km"]), 0.2, places=5)
+            self.assertAlmostEqual(float(row["pred_delta_core_y_km"]), -0.1, places=5)
+            self.assertAlmostEqual(float(row["core_anchor_x_km"]), -5.0, places=5)
+            self.assertAlmostEqual(float(row["core_anchor_y_km"]), 16.0, places=5)
+            self.assertEqual(row["core_target_mode"], "fit_core_relative")
+            self.assertEqual(row["core_anchor_mode"], "fit_core_relative")
+
+    def test_reconstruct_dst_absolute_core_csv_keeps_zero_anchor(self) -> None:
+        class DummyModel:
+            def __init__(self, output: np.ndarray) -> None:
+                self.output = torch.as_tensor(output, dtype=torch.float32)
+
+            def to(self, device: str):
+                return self
+
+            def load_state_dict(self, state: dict[str, torch.Tensor]) -> None:
+                return None
+
+            def eval(self):
+                return self
+
+            def __call__(self, batch):
+                return self.output[: int(batch.num_graphs)]
+
+        graph = _synthetic_graph(1)
+        checkpoint = {
+            "model_state": {},
+            "model_config": {
+                "target_dim": 6,
+                "classification_dim": 0,
+                "quality_dim": 0,
+                "error_dim": 0,
+                "detector_dim": DETECTOR_FEATURE_DIM,
+                "detector_context_dim": DETECTOR_CONTEXT_DIM,
+                "pulse_dim": PULSE_FEATURE_DIM,
+                "edge_dims": EDGE_FEATURE_DIMS,
+                "waveform_channels": 2,
+                "waveform_length": 16,
+            },
+            "hetero_scalers": {},
+            "runtime": {
+                "core_target_mode": "absolute",
+                "core_anchor_mode": "absolute",
+                "coordinate_feature_mode": "absolute_and_relative",
+                "raw_columns_json": json.dumps(GRAPH_COLUMNS),
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_csv = Path(tmpdir) / "reco.csv"
+            with (
+                mock.patch("talesd_gnn_reconstruction.hetero_predict._load_checkpoint", return_value=checkpoint),
+                mock.patch(
+                    "talesd_gnn_reconstruction.hetero_predict._build_hetero_model",
+                    return_value=DummyModel(np.asarray([[17.5, 1.25, -2.5, 0.0, 0.0, 1.0]], dtype=np.float32)),
+                ),
+                mock.patch.object(tale_graph, "iter_graphs", return_value=iter([graph])),
+            ):
+                result = reconstruct_dst("dummy.dst.gz", "checkpoint.pt", output_csv, device="cpu", batch_size=1)
+
+            self.assertEqual(result["events_written"], 1)
+            with output_csv.open() as handle:
+                row = next(csv.DictReader(handle))
+            self.assertAlmostEqual(float(row["core_x_km"]), 1.25, places=5)
+            self.assertAlmostEqual(float(row["core_y_km"]), -2.5, places=5)
+            self.assertAlmostEqual(float(row["pred_delta_core_x_km"]), 0.0, places=5)
+            self.assertAlmostEqual(float(row["pred_delta_core_y_km"]), 0.0, places=5)
+            self.assertAlmostEqual(float(row["core_anchor_x_km"]), 0.0, places=5)
+            self.assertAlmostEqual(float(row["core_anchor_y_km"]), 0.0, places=5)
+            self.assertEqual(row["core_target_mode"], "absolute")
+            self.assertEqual(row["core_anchor_mode"], "absolute")
 
     def test_hetero_transformer_training_defaults_are_v100_safe(self) -> None:
         repo = Path(__file__).resolve().parents[1]

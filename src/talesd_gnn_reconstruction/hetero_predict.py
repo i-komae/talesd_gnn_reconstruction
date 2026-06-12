@@ -7,6 +7,15 @@ from typing import Any
 
 import numpy as np
 
+from .core_coordinates import (
+    core_anchor_from_sample,
+    filter_feature_matrix,
+    filtered_columns,
+    inverse_transform_core_target,
+    normalize_coordinate_feature_mode,
+    normalize_core_target_mode,
+    parse_columns_json,
+)
 from .hetero_data import sample_to_hetero_data
 from .hetero_graph_io import graph_event_to_sample
 from .hetero_model import MinimalHeteroTaleSdGNN
@@ -50,6 +59,79 @@ def _batched(items: Iterable[Any], batch_size: int) -> Iterable[list[Any]]:
         yield batch
 
 
+def _columns_from_runtime(runtime: Mapping[str, Any]) -> dict[str, Any]:
+    for key in ("raw_columns_json", "columns_json"):
+        value = runtime.get(key)
+        if value:
+            columns = parse_columns_json(value)
+            if columns:
+                return columns
+    try:
+        import dstio.tale.graph as tale_graph
+
+        return dict(tale_graph.graph_columns())
+    except Exception:
+        columns: dict[str, Any] = {}
+        detector_columns = runtime.get("detector_feature_columns")
+        pulse_columns = runtime.get("pulse_feature_columns")
+        if detector_columns:
+            columns["detector_features"] = list(detector_columns)
+        if pulse_columns:
+            columns["pulse_features"] = list(pulse_columns)
+        return columns
+
+
+def _prepare_reconstruct_sample(
+    graph: Any,
+    *,
+    columns: Mapping[str, Any],
+    core_anchor_mode: str,
+    coordinate_feature_mode: str,
+) -> dict[str, Any]:
+    sample = graph_event_to_sample(graph)
+    core_anchor = core_anchor_from_sample(sample, columns=columns, core_anchor_mode=core_anchor_mode)
+    sample["core_anchor"] = np.asarray(core_anchor, dtype=np.float32).reshape(-1)[:2]
+    detector_columns = list(columns.get("detector_features", []))
+    pulse_columns = list(columns.get("pulse_features", []))
+    sample["detector_features"] = filter_feature_matrix(
+        np.asarray(sample["detector_features"], dtype=np.float32),
+        detector_columns,
+        coordinate_feature_mode,
+    )
+    sample["pulse_features"] = filter_feature_matrix(
+        np.asarray(sample["pulse_features"], dtype=np.float32),
+        pulse_columns,
+        coordinate_feature_mode,
+    )
+    sample["detector_feature_columns"] = filtered_columns(detector_columns, coordinate_feature_mode)
+    sample["pulse_feature_columns"] = filtered_columns(pulse_columns, coordinate_feature_mode)
+    return sample
+
+
+def _validate_reconstruct_sample_dims(
+    sample: Mapping[str, Any],
+    *,
+    model_config: Mapping[str, Any],
+    coordinate_feature_mode: str,
+) -> None:
+    expected_detector = int(model_config.get("detector_dim", sample["detector_features"].shape[1]))
+    actual_detector = int(sample["detector_features"].shape[1])
+    if actual_detector != expected_detector:
+        raise RuntimeError(
+            "detector feature dimension mismatch in reconstruct_dst: "
+            f"checkpoint detector_dim={expected_detector}, sample detector_dim={actual_detector}, "
+            f"coordinate_feature_mode={coordinate_feature_mode}"
+        )
+    expected_pulse = int(model_config.get("pulse_dim", sample["pulse_features"].shape[1]))
+    actual_pulse = int(sample["pulse_features"].shape[1])
+    if actual_pulse != expected_pulse:
+        raise RuntimeError(
+            "pulse feature dimension mismatch in reconstruct_dst: "
+            f"checkpoint pulse_dim={expected_pulse}, sample pulse_dim={actual_pulse}, "
+            f"coordinate_feature_mode={coordinate_feature_mode}"
+        )
+
+
 def _prediction_rows(
     samples: Sequence[Mapping[str, Any]],
     pred_all: np.ndarray,
@@ -61,6 +143,10 @@ def _prediction_rows(
     error_energy_scale: float,
     error_angular_scale_deg: float,
     error_core_scale_km: float,
+    core_anchor: np.ndarray | None = None,
+    delta_core_xy: np.ndarray | None = None,
+    core_target_mode: str = "absolute",
+    core_anchor_mode: str = "absolute",
 ) -> list[dict[str, Any]]:
     pred = None
     zenith = None
@@ -108,12 +194,30 @@ def _prediction_rows(
             "core_relative_features_valid": metadata.get("core_relative_features_valid", ""),
         }
         if pred is not None and zenith is not None and azimuth is not None:
+            if core_anchor is not None and core_anchor.shape[0] > index:
+                anchor_x = float(core_anchor[index, 0])
+                anchor_y = float(core_anchor[index, 1])
+            else:
+                anchor_x = 0.0
+                anchor_y = 0.0
+            if delta_core_xy is not None and delta_core_xy.shape[0] > index:
+                delta_x = float(delta_core_xy[index, 0])
+                delta_y = float(delta_core_xy[index, 1])
+            else:
+                delta_x = 0.0
+                delta_y = 0.0
             row.update(
                 {
                     "log10_energy_eV": float(pred[index, 0]),
                     "energy_eV": float(10.0 ** pred[index, 0]),
                     "core_x_km": float(pred[index, 1]),
                     "core_y_km": float(pred[index, 2]),
+                    "pred_delta_core_x_km": delta_x,
+                    "pred_delta_core_y_km": delta_y,
+                    "core_anchor_x_km": anchor_x,
+                    "core_anchor_y_km": anchor_y,
+                    "core_target_mode": core_target_mode,
+                    "core_anchor_mode": core_anchor_mode,
                     "zenith_deg": float(zenith[index]),
                     "azimuth_deg": float(azimuth[index]),
                 }
@@ -177,9 +281,22 @@ def reconstruct_dst(
     error_dim = int(model_config.get("error_dim", 0))
     waveform_length = int(model_config["waveform_length"])
     runtime = dict(checkpoint.get("runtime", {}))
+    core_target_mode = normalize_core_target_mode(runtime.get("core_target_mode", "absolute"))
+    core_anchor_mode = normalize_core_target_mode(runtime.get("core_anchor_mode", core_target_mode))
+    coordinate_feature_mode = normalize_coordinate_feature_mode(
+        runtime.get("coordinate_feature_mode", "absolute_and_relative")
+    )
+    columns = _columns_from_runtime(runtime)
     error_energy_scale = float(runtime.get("error_energy_scale", runtime.get("quality_energy_scale", 0.10)))
     error_angular_scale_deg = float(runtime.get("error_angular_scale_deg", runtime.get("quality_angular_scale_deg", 1.0)))
     error_core_scale_km = float(runtime.get("error_core_scale_km", runtime.get("quality_core_scale_km", 0.05)))
+    print(
+        "hetero_reconstruct_config "
+        f"core_target_mode={core_target_mode} "
+        f"core_anchor_mode={core_anchor_mode} "
+        f"coordinate_feature_mode={coordinate_feature_mode}",
+        flush=True,
+    )
 
     input_list = [Path(inputs).expanduser()] if isinstance(inputs, (str, Path)) else [Path(item).expanduser() for item in inputs]
     graphs = tale_graph.iter_graphs(
@@ -212,7 +329,22 @@ def reconstruct_dst(
         "core_relative_features_valid",
     ]
     if target_dim >= 6:
-        fieldnames.extend(["log10_energy_eV", "energy_eV", "core_x_km", "core_y_km", "zenith_deg", "azimuth_deg"])
+        fieldnames.extend(
+            [
+                "log10_energy_eV",
+                "energy_eV",
+                "core_x_km",
+                "core_y_km",
+                "pred_delta_core_x_km",
+                "pred_delta_core_y_km",
+                "core_anchor_x_km",
+                "core_anchor_y_km",
+                "core_target_mode",
+                "core_anchor_mode",
+                "zenith_deg",
+                "azimuth_deg",
+            ]
+        )
     if classification_dim > 0:
         fieldnames.extend(["p_iron", "p_proton", "pred_parttype"])
     if quality_dim > 0:
@@ -228,7 +360,29 @@ def reconstruct_dst(
         writer.writeheader()
         with torch.no_grad():
             for graph_batch in _batched(graphs, max(int(batch_size), 1)):
-                samples = [graph_event_to_sample(graph) for graph in graph_batch]
+                samples = []
+                for graph in graph_batch:
+                    try:
+                        sample = _prepare_reconstruct_sample(
+                            graph,
+                            columns=columns,
+                            core_anchor_mode=core_anchor_mode,
+                            coordinate_feature_mode=coordinate_feature_mode,
+                        )
+                        _validate_reconstruct_sample_dims(
+                            sample,
+                            model_config=model_config,
+                            coordinate_feature_mode=coordinate_feature_mode,
+                        )
+                    except Exception as exc:
+                        if not skip_errors:
+                            raise
+                        event_id = getattr(graph, "event_id", "")
+                        print(f"hetero_reconstruct_skip event_id={event_id} reason={exc}", flush=True)
+                        continue
+                    samples.append(sample)
+                if not samples:
+                    continue
                 data_list = [
                     sample_to_hetero_data(
                         sample,
@@ -240,8 +394,19 @@ def reconstruct_dst(
                 loader = DataLoader(data_list, batch_size=len(data_list))
                 batch = next(iter(loader)).to(device)
                 pred_all = model(batch).detach().cpu().numpy()
+                core_anchor_values = None
+                delta_core_xy = None
                 if target_dim >= 6:
-                    pred_all[:, :target_dim] = _inverse_target(pred_all[:, :target_dim], scalers)
+                    pred_target = _inverse_target(pred_all[:, :target_dim], scalers)
+                    core_anchor_values = np.stack(
+                        [np.asarray(sample["core_anchor"], dtype=np.float32).reshape(-1)[:2] for sample in samples],
+                        axis=0,
+                    ).astype(np.float32)
+                    if core_target_mode != "absolute":
+                        delta_core_xy = pred_target[:, 1:3].copy()
+                    pred_absolute = inverse_transform_core_target(pred_target, core_anchor_values, core_target_mode)
+                    pred_all = pred_all.copy()
+                    pred_all[:, :target_dim] = pred_absolute
                 for row in _prediction_rows(
                     samples,
                     pred_all,
@@ -252,6 +417,10 @@ def reconstruct_dst(
                     error_energy_scale=error_energy_scale,
                     error_angular_scale_deg=error_angular_scale_deg,
                     error_core_scale_km=error_core_scale_km,
+                    core_anchor=core_anchor_values,
+                    delta_core_xy=delta_core_xy,
+                    core_target_mode=core_target_mode,
+                    core_anchor_mode=core_anchor_mode,
                 ):
                     writer.writerow(row)
                     written += 1
