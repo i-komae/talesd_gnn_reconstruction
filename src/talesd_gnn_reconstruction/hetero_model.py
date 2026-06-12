@@ -163,6 +163,7 @@ class HeteroAttentionMessageLayer(nn.Module):
             value = self.value[relation](src_input).view(-1, self.heads, self.head_dim)
             scores = (query * key).sum(dim=-1) * scale
             weights = _scatter_softmax(scores, dst_index, dst_state.shape[0])
+            weights = weights.to(dtype=value.dtype)
             if return_attention:
                 attention_by_relation[str(relation)] = {
                     "src_type": src_type,
@@ -214,7 +215,7 @@ class HeteroAttentiveReadout(nn.Module):
         *,
         return_attention: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        weights = _scatter_softmax(self.score(state), batch, num_graphs)
+        weights = _scatter_softmax(self.score(state), batch, num_graphs).to(dtype=state.dtype)
         pooled = [_scatter_mean(state, batch, num_graphs), _scatter_max(state, batch, num_graphs)]
         for head in range(self.heads):
             weighted = state * weights[:, head : head + 1]

@@ -20,6 +20,9 @@ def _make_mlp(in_dim: int, hidden_dim: int, out_dim: int, dropout: float) -> nn.
 
 
 def _scatter_mean(values: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
+    batch = batch.to(device=values.device, dtype=torch.long)
+    if int(num_graphs) <= 0:
+        return torch.zeros(0, values.shape[1], dtype=values.dtype, device=values.device)
     out = torch.zeros(num_graphs, values.shape[1], dtype=values.dtype, device=values.device)
     out.index_add_(0, batch, values)
     counts = torch.zeros(num_graphs, 1, dtype=values.dtype, device=values.device)
@@ -28,6 +31,9 @@ def _scatter_mean(values: torch.Tensor, batch: torch.Tensor, num_graphs: int) ->
 
 
 def _scatter_max(values: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
+    batch = batch.to(device=values.device, dtype=torch.long)
+    if int(num_graphs) <= 0:
+        return torch.zeros(0, values.shape[1], dtype=values.dtype, device=values.device)
     out = torch.full((num_graphs, values.shape[1]), -torch.inf, dtype=values.dtype, device=values.device)
     if hasattr(out, "scatter_reduce_"):
         index = batch[:, None].expand(-1, values.shape[1])
@@ -153,12 +159,22 @@ def _waveform_mass_readout(
 def _scatter_softmax(scores: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
     if scores.ndim == 1:
         scores = scores[:, None]
-    max_values = _scatter_max(scores, batch, num_graphs)
-    stable = scores - max_values[batch]
-    weights = torch.exp(torch.clamp(stable, min=-80.0, max=40.0)).to(dtype=scores.dtype)
-    denom = torch.zeros(num_graphs, scores.shape[1], dtype=scores.dtype, device=scores.device)
+    if scores.numel() == 0 or int(num_graphs) <= 0:
+        return torch.zeros_like(scores)
+
+    original_dtype = scores.dtype
+    batch = batch.to(device=scores.device, dtype=torch.long)
+    work = scores.float() if scores.dtype in (torch.float16, torch.bfloat16) else scores
+
+    max_values = _scatter_max(work, batch, num_graphs)
+    stable = work - max_values[batch]
+    stable = torch.clamp(stable, min=-80.0, max=40.0)
+    weights = torch.exp(stable)
+    denom = torch.zeros(int(num_graphs), work.shape[1], dtype=weights.dtype, device=weights.device)
     denom.index_add_(0, batch, weights)
-    return weights / denom[batch].clamp_min(1.0e-12)
+    eps = torch.finfo(weights.dtype).eps
+    output = weights / denom[batch].clamp_min(eps)
+    return output.to(dtype=original_dtype)
 
 
 class EdgeMessageLayer(nn.Module):
@@ -284,7 +300,7 @@ class AttentiveReadout(nn.Module):
 
     def forward(self, node: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
         scores = self.score(node)
-        weights = _scatter_softmax(scores, batch, num_graphs)
+        weights = _scatter_softmax(scores, batch, num_graphs).to(dtype=node.dtype)
         outputs = []
         for head in range(self.heads):
             weighted = node * weights[:, head : head + 1]
