@@ -163,7 +163,7 @@ def _summarize_values(values: np.ndarray) -> dict[str, float | int | None]:
 
 
 def _escape_tex(text: str) -> str:
-    return text.replace("_", r"\_")
+    return text.replace("\\", r"\textbackslash{}").replace("_", r"\_").replace("%", r"\%")
 
 
 def _plot_feature_group(samples: dict[str, np.ndarray], output: Path, title: str) -> None:
@@ -437,26 +437,56 @@ def _metric_delta(baseline: dict[str, Any] | None, changed: dict[str, Any] | Non
     return delta
 
 
-def _feature_group_importance_plot_data(result: dict[str, Any]) -> dict[str, Any]:
-    rows = list(result.get("groups", []))
-    plot_specs: list[dict[str, str]] = []
+def _feature_importance_plot_specs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    reconstruction_labels = {
+        "rmse_log10_energy": "energy RMSE loss",
+        "angular_68_deg": "angle 68% loss",
+        "core_68_km": "core 68% loss",
+    }
     for metric in ("rmse_log10_energy", "angular_68_deg", "core_68_km"):
         if any(metric in row.get("reconstruction_delta", {}) for row in rows):
-            plot_specs.append({"section": "reconstruction_delta", "metric": metric, "label": f"Delta {metric}"})
-    for metric in ("accuracy", "balanced_accuracy"):
-        if any(metric in row.get("mass_delta", {}) for row in rows):
-            plot_specs.append({"section": "mass_delta", "metric": metric, "label": f"Delta {metric}"})
+            specs.append(
+                {
+                    "section": "reconstruction_delta",
+                    "metric": metric,
+                    "label": reconstruction_labels[metric],
+                    "display_name": f"delta_{metric}",
+                    "display_transform": "ablated_minus_baseline",
+                    "sign": 1.0,
+                    "interpretation": "positive means ablation worsens this error metric; negative means ablation improves it",
+                }
+            )
+    if any("balanced_accuracy" in row.get("mass_delta", {}) for row in rows):
+        specs.append(
+            {
+                "section": "mass_delta",
+                "metric": "balanced_accuracy",
+                "label": "balanced accuracy loss",
+                "display_name": "balanced_accuracy_drop",
+                "display_transform": "baseline_minus_ablated",
+                "sign": -1.0,
+                "interpretation": "positive means ablation lowers balanced accuracy; negative means ablation improves it",
+            }
+        )
+    return specs
+
+
+def _feature_group_importance_plot_data(result: dict[str, Any]) -> dict[str, Any]:
+    rows = list(result.get("groups", []))
+    plot_specs = _feature_importance_plot_specs(rows)
     return {
         "format": "feature_group_importance_plot_data_v1",
         "split": result.get("split"),
         "n_graphs": result.get("n_graphs"),
+        "display_convention": "Positive values mean ablation worsens performance. Negative values mean ablation improves that metric.",
         "groups": [str(row.get("group", "")) for row in rows],
         "plot_specs": [
             {
                 **spec,
                 "values": [
                     (
-                        float(row.get(spec["section"], {}).get(spec["metric"]))
+                        float(spec["sign"]) * float(row.get(spec["section"], {}).get(spec["metric"]))
                         if row.get(spec["section"], {}).get(spec["metric"]) is not None
                         else None
                     )
@@ -607,13 +637,7 @@ def _plot_feature_group_importance(result: dict[str, Any], output: Path) -> None
     if not rows:
         return
     names = [str(row["group"]) for row in rows]
-    plot_specs: list[tuple[str, str, str]] = []
-    for metric in ("rmse_log10_energy", "angular_68_deg", "core_68_km"):
-        if any(metric in row.get("reconstruction_delta", {}) for row in rows):
-            plot_specs.append(("reconstruction_delta", metric, r"$\Delta$ " + _escape_tex(metric)))
-    for metric in ("accuracy", "balanced_accuracy"):
-        if any(metric in row.get("mass_delta", {}) for row in rows):
-            plot_specs.append(("mass_delta", metric, r"$\Delta$ " + _escape_tex(metric)))
+    plot_specs = _feature_importance_plot_specs(list(rows))
     if not plot_specs:
         return
 
@@ -622,12 +646,15 @@ def _plot_feature_group_importance(result: dict[str, Any], output: Path) -> None
     axes = np.atleast_1d(axes)
     x = np.arange(len(names))
     colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["#1f77b4"])
-    for ax, (section, metric, ylabel) in zip(axes, plot_specs, strict=True):
-        values = [float(row.get(section, {}).get(metric, np.nan)) for row in rows]
+    for ax, spec in zip(axes, plot_specs, strict=True):
+        section = str(spec["section"])
+        metric = str(spec["metric"])
+        values = [float(spec["sign"]) * float(row.get(section, {}).get(metric, np.nan)) for row in rows]
         ax.bar(x, values, color=colors[0], alpha=0.75)
         ax.axhline(0.0, color="0.25", linewidth=LINEWIDTH_THIN)
-        ax.set_ylabel(ylabel)
+        ax.set_ylabel(_escape_tex(str(spec["label"])))
         _style_axes(ax)
+    axes[0].set_title("feature group ablation: positive means ablation worsens performance")
     axes[-1].set_xticks(x, [_escape_tex(name) for name in names], rotation=35, ha="right")
     fig.tight_layout()
     _save_pdf(fig, output)

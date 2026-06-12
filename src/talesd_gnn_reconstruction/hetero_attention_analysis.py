@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import random
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from .diagnostics import LINEWIDTH_THIN, _prepare_matplotlib, _style_axes
 from .dataset import StandardScaler
 from .feature_analysis import expand_graph_paths
 from .hetero_data import hetero_sample_to_tensors
@@ -67,6 +68,149 @@ def _build_hetero_model_from_checkpoint(checkpoint: dict[str, Any]) -> tuple[Min
             f"got architecture={architecture!r}"
         )
     return MinimalHeteroTaleSdGNN(architecture=architecture, **model_config), model_config
+
+
+def _normalize_weights(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=float).reshape(-1)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return np.zeros_like(values, dtype=float)
+    lo = float(np.min(finite))
+    hi = float(np.max(finite))
+    if hi <= lo:
+        return np.where(np.isfinite(values), 0.5, 0.0)
+    return np.clip((values - lo) / (hi - lo), 0.0, 1.0)
+
+
+def _node_positions_for_type(event_arrays: dict[str, str], arrays: Mapping[str, np.ndarray], node_type: str) -> np.ndarray:
+    key = event_arrays.get(f"{node_type}_positions_km")
+    if key is None:
+        return np.zeros((0, 3), dtype=float)
+    values = np.asarray(arrays.get(key, np.zeros((0, 3))), dtype=float)
+    if values.ndim == 1:
+        values = values.reshape(-1, 3) if values.size % 3 == 0 else np.zeros((0, 3), dtype=float)
+    return values
+
+
+def _plot_attention_nodes(ax: Any, positions: np.ndarray, weights: np.ndarray, *, marker: str, label: str) -> None:
+    if positions.size == 0:
+        return
+    weights = np.asarray(weights, dtype=float).reshape(-1)
+    if weights.size != positions.shape[0]:
+        weights = np.full(positions.shape[0], np.nan, dtype=float)
+    color_values = np.nan_to_num(weights, nan=0.0)
+    sizes = 22.0 + 130.0 * _normalize_weights(color_values)
+    scatter = ax.scatter(
+        positions[:, 0],
+        positions[:, 1],
+        c=color_values,
+        s=sizes,
+        marker=marker,
+        cmap="viridis",
+        edgecolors="black",
+        linewidths=0.35,
+        label=label,
+        zorder=3,
+    )
+    return scatter
+
+
+def _save_attention_map_plots(output: Path, result: dict[str, Any], arrays: Mapping[str, np.ndarray]) -> Path | None:
+    events = list(result.get("events", []))
+    if not events:
+        return None
+    _prepare_matplotlib()
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    pdf_path = output / "attention_maps.pdf"
+    with PdfPages(pdf_path) as pdf:
+        for event in events:
+            event_arrays = dict(event.get("arrays", {}))
+            detector_positions = _node_positions_for_type(event_arrays, arrays, "detector")
+            pulse_positions = _node_positions_for_type(event_arrays, arrays, "pulse")
+            detector_weights = np.asarray(arrays.get(event_arrays.get("readout_detector_weights", ""), np.zeros((0,))), dtype=float).reshape(-1)
+            pulse_weights = np.asarray(arrays.get(event_arrays.get("readout_pulse_weights", ""), np.zeros((0,))), dtype=float).reshape(-1)
+
+            fig, axes = plt.subplots(1, 3, figsize=(15.0, 4.8))
+            fig.suptitle(f"event {event.get('graph_index')}: {event.get('event_id', '')}")
+
+            ax = axes[0]
+            det_scatter = _plot_attention_nodes(ax, detector_positions, detector_weights, marker="s", label="detector readout")
+            if pulse_positions.size:
+                ax.scatter(pulse_positions[:, 0], pulse_positions[:, 1], s=10, color="0.65", marker="o", alpha=0.35, label="pulse")
+            ax.set_title("detector readout attention")
+            ax.set_xlabel("x [km]")
+            ax.set_ylabel("y [km]")
+            ax.legend(frameon=False, loc="best")
+            if det_scatter is not None:
+                fig.colorbar(det_scatter, ax=ax, label="readout weight")
+            _style_axes(ax)
+
+            ax = axes[1]
+            if detector_positions.size:
+                ax.scatter(detector_positions[:, 0], detector_positions[:, 1], s=18, color="0.75", marker="s", alpha=0.45, label="detector")
+            pulse_scatter = _plot_attention_nodes(ax, pulse_positions, pulse_weights, marker="o", label="pulse readout")
+            ax.set_title("pulse readout attention")
+            ax.set_xlabel("x [km]")
+            ax.set_ylabel("y [km]")
+            ax.legend(frameon=False, loc="best")
+            if pulse_scatter is not None:
+                fig.colorbar(pulse_scatter, ax=ax, label="readout weight")
+            _style_axes(ax)
+
+            ax = axes[2]
+            if detector_positions.size:
+                ax.scatter(detector_positions[:, 0], detector_positions[:, 1], s=18, color="0.82", marker="s", alpha=0.6, label="detector")
+            if pulse_positions.size:
+                ax.scatter(pulse_positions[:, 0], pulse_positions[:, 1], s=14, color="0.25", marker="o", alpha=0.35, label="pulse")
+            relation_summaries: list[tuple[str, float, int]] = []
+            for relation_record in event.get("relations", []):
+                edge_index = np.asarray(arrays.get(relation_record.get("edge_index", ""), np.zeros((2, 0))), dtype=int)
+                weights = np.asarray(arrays.get(relation_record.get("attention_weight_mean", ""), np.zeros((0,))), dtype=float).reshape(-1)
+                if edge_index.shape[0] != 2 or edge_index.shape[1] == 0 or weights.size == 0:
+                    continue
+                src_positions = _node_positions_for_type(event_arrays, arrays, str(relation_record.get("src_type", "")))
+                dst_positions = _node_positions_for_type(event_arrays, arrays, str(relation_record.get("dst_type", "")))
+                if src_positions.size == 0 or dst_positions.size == 0:
+                    continue
+                valid = (
+                    (edge_index[0] >= 0)
+                    & (edge_index[0] < src_positions.shape[0])
+                    & (edge_index[1] >= 0)
+                    & (edge_index[1] < dst_positions.shape[0])
+                    & np.isfinite(weights)
+                )
+                if not np.any(valid):
+                    continue
+                valid_indices = np.flatnonzero(valid)
+                order = valid_indices[np.argsort(weights[valid_indices])[-min(80, valid_indices.size) :]]
+                normalized = _normalize_weights(weights[order])
+                for idx, norm_weight in zip(order, normalized):
+                    src = src_positions[edge_index[0, idx]]
+                    dst = dst_positions[edge_index[1, idx]]
+                    ax.plot(
+                        [src[0], dst[0]],
+                        [src[1], dst[1]],
+                        color="#d95f02",
+                        alpha=0.08 + 0.45 * float(norm_weight),
+                        linewidth=LINEWIDTH_THIN + 1.4 * float(norm_weight),
+                        zorder=1,
+                    )
+                relation_summaries.append((str(relation_record.get("relation", "")), float(np.nanmean(weights[valid])), int(np.sum(valid))))
+            ax.set_title("top relation attention edges")
+            ax.set_xlabel("x [km]")
+            ax.set_ylabel("y [km]")
+            if relation_summaries:
+                top = sorted(relation_summaries, key=lambda item: item[1], reverse=True)[:5]
+                text = "\n".join(f"{name}: mean={mean:.3g}, n={count}" for name, mean, count in top)
+                ax.text(0.02, 0.98, text, transform=ax.transAxes, va="top", ha="left", fontsize=7)
+            ax.legend(frameon=False, loc="best")
+            _style_axes(ax)
+            fig.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
+    return pdf_path
 
 
 def _event_metadata(dataset: H5HeteroGraphDataset, sample: dict[str, Any], index: int) -> dict[str, Any]:
@@ -297,7 +441,11 @@ def save_hetero_attention_maps(
         "events": event_records,
         "summary_json": str(json_path),
     }
+    plot_pdf = _save_attention_map_plots(output, result, arrays)
+    if plot_pdf is not None:
+        result["plot_pdf"] = str(plot_pdf)
     json_path.write_text(json.dumps(result, indent=2, sort_keys=True, default=_json_default))
     if show_progress:
-        _progress_write(f"stage=done hetero_attention_maps summary_json={json_path} array_file={npz_path}")
+        plot_text = f" plot_pdf={plot_pdf}" if plot_pdf is not None else ""
+        _progress_write(f"stage=done hetero_attention_maps summary_json={json_path} array_file={npz_path}{plot_text}")
     return result

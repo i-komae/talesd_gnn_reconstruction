@@ -4303,6 +4303,10 @@ def _cmd_train(args: argparse.Namespace) -> None:
     diagnostics = result.get("diagnostics") or {}
     if diagnostics:
         print(f"learning curve: {diagnostics.get('learning_curve_pdf')}")
+        if diagnostics.get("loss_component_curves_pdf"):
+            print(f"loss component curves: {diagnostics.get('loss_component_curves_pdf')}")
+        if diagnostics.get("mass_metric_curves_pdf"):
+            print(f"mass metric curves: {diagnostics.get('mass_metric_curves_pdf')}")
         print(f"diagnostics summary: {diagnostics.get('summary_json')}")
         for split_name in ("validation", "test"):
             split_info = diagnostics.get(split_name) or {}
@@ -4635,6 +4639,8 @@ def _cmd_attention_maps(args: argparse.Namespace) -> None:
     )
     print(f"attention maps: {summary['summary_json']}")
     print(f"attention arrays: {summary['array_file']}")
+    if summary.get("plot_pdf"):
+        print(f"attention plots: {summary['plot_pdf']}")
 
 
 def _cmd_visualize(args: argparse.Namespace) -> None:

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
+import talesd_gnn_reconstruction.diagnostics as diagnostics
+from talesd_gnn_reconstruction.feature_analysis import _feature_group_importance_plot_data
 from talesd_gnn_reconstruction.diagnostics import (
     QUALITY_CUT_KEEP_FRACTIONS,
     QUALITY_ENERGY_KEEP_FRACTIONS,
@@ -44,6 +48,65 @@ class DiagnosticsFitTest(unittest.TestCase):
             self.assertIn(0.90, fractions)
             self.assertIn(0.80, fractions)
             self.assertNotIn(0.20, fractions)
+
+    def test_learning_progress_writes_total_and_component_loss_curves(self) -> None:
+        history = [
+            {
+                "epoch": 1,
+                "train_loss": 3.0,
+                "val_loss": 3.4,
+                "train_reconstruction_loss": 2.5,
+                "val_reconstruction_loss": 2.8,
+                "train_mass_loss": 0.8,
+                "val_mass_loss": 0.9,
+                "train_quality_loss": 0.3,
+                "val_quality_loss": 0.4,
+            },
+            {
+                "epoch": 2,
+                "train_loss": 2.0,
+                "val_loss": 2.3,
+                "train_reconstruction_loss": 1.7,
+                "val_reconstruction_loss": 1.9,
+                "train_mass_loss": 0.7,
+                "val_mass_loss": 0.8,
+                "train_quality_loss": 0.25,
+                "val_quality_loss": 0.35,
+            },
+        ]
+        old_require = diagnostics.require_matplotlib_latex
+        diagnostics.require_matplotlib_latex = lambda: None
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                paths = diagnostics.save_learning_progress(Path(tmpdir) / "checkpoint.pt", history)
+                self.assertIn("learning_curve_pdf", paths)
+                self.assertIn("loss_component_curves_pdf", paths)
+                self.assertTrue(Path(paths["learning_curve_pdf"]).exists())
+                self.assertTrue(Path(paths["loss_component_curves_pdf"]).exists())
+                self.assertNotEqual(paths["learning_curve_pdf"], paths["loss_component_curves_pdf"])
+        finally:
+            diagnostics.require_matplotlib_latex = old_require
+
+    def test_feature_importance_plot_values_use_common_performance_loss_direction(self) -> None:
+        result = {
+            "split": "validation",
+            "n_graphs": 10,
+            "groups": [
+                {
+                    "group": "detector",
+                    "reconstruction_delta": {"core_68_km": 0.12},
+                    "mass_delta": {"accuracy": -0.03, "balanced_accuracy": 0.02},
+                }
+            ],
+        }
+
+        plot_data = _feature_group_importance_plot_data(result)
+
+        values_by_name = {spec["display_name"]: spec["values"][0] for spec in plot_data["plot_specs"]}
+        self.assertAlmostEqual(values_by_name["delta_core_68_km"], 0.12)
+        self.assertAlmostEqual(values_by_name["balanced_accuracy_drop"], -0.02)
+        self.assertNotIn("accuracy_drop", values_by_name)
+        self.assertIn("Positive values", plot_data["display_convention"])
 
 
 if __name__ == "__main__":

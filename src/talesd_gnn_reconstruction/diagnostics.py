@@ -1059,14 +1059,34 @@ def _save_predicted_actual_error_scatter(
     return fig
 
 
-def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Path:
-    _prepare_matplotlib()
-    import matplotlib.pyplot as plt
+def _history_values(history: list[dict[str, Any]], key: str) -> np.ndarray:
+    values: list[float] = []
+    for row in history:
+        try:
+            values.append(float(row.get(key, float("nan"))))
+        except (TypeError, ValueError):
+            values.append(float("nan"))
+    return np.asarray(values, dtype=float)
 
-    path = _diagnostics_root(output_path) / "learning_curve.pdf"
-    epochs = [row["epoch"] for row in history]
-    train = [row["train_loss"] for row in history]
-    val = [row["val_loss"] for row in history]
+
+def _has_finite(values: np.ndarray) -> bool:
+    return bool(np.isfinite(values).any())
+
+
+def _set_loss_axis_scale(ax: Any, *series: np.ndarray) -> None:
+    finite_parts = [values[np.isfinite(values)] for values in series if values.size]
+    if not finite_parts:
+        return
+    finite = np.concatenate(finite_parts)
+    if finite.size and np.all(finite > 0.0):
+        ax.set_yscale("log")
+
+
+def _tex_label(label: str) -> str:
+    return label.replace("_", r"\_")
+
+
+def _best_validation_epoch(history: list[dict[str, Any]]) -> tuple[int | None, float]:
     best_epoch = None
     best_val_loss = math.inf
     for row in history:
@@ -1078,45 +1098,58 @@ def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Pa
         if math.isfinite(val_loss) and val_loss < best_val_loss:
             best_epoch = epoch_value
             best_val_loss = val_loss
-    has_reconstruction = "train_reconstruction_loss" in history[0] if history else False
-    has_mass = "train_mass_loss" in history[0] if history else False
-    has_mass_accuracy = "train_mass_accuracy" in history[0] and "val_mass_accuracy" in history[0] if history else False
-    has_mass_balanced_accuracy = False
-    if history and "train_mass_balanced_accuracy" in history[0] and "val_mass_balanced_accuracy" in history[0]:
-        train_delta = np.max(
-            np.abs(
-                np.asarray([row["train_mass_accuracy"] for row in history], dtype=float)
-                - np.asarray([row["train_mass_balanced_accuracy"] for row in history], dtype=float)
-            )
-        )
-        val_delta = np.max(
-            np.abs(
-                np.asarray([row["val_mass_accuracy"] for row in history], dtype=float)
-                - np.asarray([row["val_mass_balanced_accuracy"] for row in history], dtype=float)
-            )
-        )
-        has_mass_balanced_accuracy = max(float(train_delta), float(val_delta)) >= BALANCED_ACCURACY_PLOT_MIN_DELTA
-    mass_loss_duplicates_total = bool(
-        has_mass
-        and not has_reconstruction
-        and all(
-            np.isclose(row["train_loss"], row["train_mass_loss"])
-            and np.isclose(row["val_loss"], row["val_mass_loss"])
-            for row in history
-        )
-    )
-    show_separate_mass_loss = bool(has_mass and not mass_loss_duplicates_total)
+    return best_epoch, best_val_loss
 
-    if has_mass:
-        ncols = 1 + int(show_separate_mass_loss) + int(has_mass_accuracy) + int(has_mass_balanced_accuracy)
-        fig, axes = plt.subplots(1, ncols, figsize=(5.0 * ncols, 4.2))
-        axes = np.atleast_1d(axes)
-        ax = axes[0]
-    else:
-        fig, ax = plt.subplots(figsize=(6.4, 4.4))
-        axes = [ax]
-    ax.plot(epochs, train, marker="o", markersize=2.5, linewidth=1.4, label="train")
-    ax.plot(epochs, val, marker="s", markersize=2.5, linewidth=1.4, label="validation")
+
+def _loss_component_names(history: list[dict[str, Any]]) -> list[str]:
+    names: set[str] = set()
+    for row in history:
+        for key in row:
+            if key.startswith("train_") and key.endswith("_loss") and key != "train_loss":
+                names.add(key[len("train_") : -len("_loss")])
+            if key.startswith("val_") and key.endswith("_loss") and key != "val_loss":
+                names.add(key[len("val_") : -len("_loss")])
+    preferred = [
+        "reconstruction",
+        "physics",
+        "energy",
+        "core",
+        "direction",
+        "nll",
+        "energy_bias",
+        "energy_particle_bias",
+        "mass",
+        "quality",
+        "error",
+    ]
+    ordered = [name for name in preferred if name in names]
+    ordered.extend(sorted(names.difference(ordered)))
+    return ordered
+
+
+def _plot_loss_pair(ax: Any, epochs: list[Any], history: list[dict[str, Any]], train_key: str, val_key: str) -> None:
+    train_values = _history_values(history, train_key)
+    val_values = _history_values(history, val_key)
+    if _has_finite(train_values):
+        ax.plot(epochs, train_values, marker="o", markersize=2.5, linewidth=1.4, label="train")
+    if _has_finite(val_values):
+        ax.plot(epochs, val_values, marker="s", markersize=2.5, linewidth=1.4, label="validation")
+    _set_loss_axis_scale(ax, train_values, val_values)
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("loss")
+    ax.legend(frameon=False)
+    _style_axes(ax)
+
+
+def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Path:
+    _prepare_matplotlib()
+    import matplotlib.pyplot as plt
+
+    path = _diagnostics_root(output_path) / "learning_curve.pdf"
+    epochs = [row["epoch"] for row in history]
+    best_epoch, _best_val_loss = _best_validation_epoch(history)
+    fig, ax = plt.subplots(figsize=(6.4, 4.4))
+    _plot_loss_pair(ax, epochs, history, "train_loss", "val_loss")
     if best_epoch is not None:
         ax.axvline(
             best_epoch,
@@ -1125,55 +1158,70 @@ def _save_learning_curve(output_path: Path, history: list[dict[str, Any]]) -> Pa
             linewidth=LINEWIDTH_THIN,
             label=f"selected epoch {best_epoch}",
         )
+        ax.legend(frameon=False)
+    ax.set_title("total training objective")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+    return path
+
+
+def _save_loss_component_curves(output_path: Path, history: list[dict[str, Any]]) -> Path | None:
+    component_names = _loss_component_names(history)
+    if not component_names:
+        return None
+    _prepare_matplotlib()
+    import matplotlib.pyplot as plt
+
+    path = _diagnostics_root(output_path) / "loss_component_curves.pdf"
+    epochs = [row["epoch"] for row in history]
+    ncols = 2 if len(component_names) > 1 else 1
+    nrows = int(math.ceil(len(component_names) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6.0 * ncols, 3.6 * nrows), squeeze=False)
+    for ax, name in zip(axes.ravel(), component_names):
+        _plot_loss_pair(ax, epochs, history, f"train_{name}_loss", f"val_{name}_loss")
+        ax.set_title(_tex_label(name))
+    for ax in axes.ravel()[len(component_names) :]:
+        ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+    return path
+
+
+def _save_mass_metric_curves(output_path: Path, history: list[dict[str, Any]]) -> Path | None:
+    if not history:
+        return None
+    if "train_mass_balanced_accuracy" not in history[0] or "val_mass_balanced_accuracy" not in history[0]:
+        return None
+
+    _prepare_matplotlib()
+    import matplotlib.pyplot as plt
+
+    path = _diagnostics_root(output_path) / "mass_metric_curves.pdf"
+    epochs = [row["epoch"] for row in history]
+    fig, ax = plt.subplots(figsize=(5.4, 4.2))
+    ax.plot(
+        epochs,
+        _history_values(history, "train_mass_balanced_accuracy"),
+        marker="o",
+        markersize=2.5,
+        linewidth=1.4,
+        label="train balanced accuracy",
+    )
+    ax.plot(
+        epochs,
+        _history_values(history, "val_mass_balanced_accuracy"),
+        marker="s",
+        markersize=2.5,
+        linewidth=1.4,
+        label="validation balanced accuracy",
+    )
     ax.set_xlabel("epoch")
-    ax.set_ylabel("BCE loss" if mass_loss_duplicates_total else "loss")
-    ax.set_yscale("log")
+    ax.set_ylabel("balanced accuracy")
+    ax.set_ylim(0.0, 1.02)
     ax.legend(frameon=False)
     _style_axes(ax)
-    panel_index = 1
-    if show_separate_mass_loss:
-        ax = axes[panel_index]
-        panel_index += 1
-        ax.plot(epochs, [row["train_mass_loss"] for row in history], marker="o", markersize=2.5, linewidth=1.4, label="train")
-        ax.plot(epochs, [row["val_mass_loss"] for row in history], marker="s", markersize=2.5, linewidth=1.4, label="validation")
-        ax.set_xlabel("epoch")
-        ax.set_ylabel("BCE loss")
-        ax.set_yscale("log")
-        ax.legend(frameon=False)
-        _style_axes(ax)
-    if has_mass_accuracy:
-        ax = axes[panel_index]
-        panel_index += 1
-        ax.plot(epochs, [row["train_mass_accuracy"] for row in history], marker="o", markersize=2.5, linewidth=1.4, label="train accuracy")
-        ax.plot(epochs, [row["val_mass_accuracy"] for row in history], marker="s", markersize=2.5, linewidth=1.4, label="validation accuracy")
-        ax.set_xlabel("epoch")
-        ax.set_ylabel("accuracy")
-        ax.set_ylim(0.0, 1.02)
-        ax.legend(frameon=False)
-        _style_axes(ax)
-    if has_mass_balanced_accuracy:
-        ax = axes[panel_index]
-        ax.plot(
-            epochs,
-            [row["train_mass_balanced_accuracy"] for row in history],
-            marker="o",
-            markersize=2.5,
-            linewidth=1.4,
-            label="train balanced accuracy",
-        )
-        ax.plot(
-            epochs,
-            [row["val_mass_balanced_accuracy"] for row in history],
-            marker="s",
-            markersize=2.5,
-            linewidth=1.4,
-            label="validation balanced accuracy",
-        )
-        ax.set_xlabel("epoch")
-        ax.set_ylabel("balanced accuracy")
-        ax.set_ylim(0.0, 1.02)
-        ax.legend(frameon=False)
-        _style_axes(ax)
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
@@ -1185,12 +1233,19 @@ def save_learning_progress(output_path: str | Path, history: list[dict[str, Any]
     diagnostics_dir = _diagnostics_root(output)
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
     learning_curve = _save_learning_curve(output, history)
+    loss_component_curves = _save_loss_component_curves(output, history)
+    mass_metric_curves = _save_mass_metric_curves(output, history)
     history_json = diagnostics_dir / "history.json"
     history_json.write_text(json.dumps(history, indent=2, sort_keys=True))
-    return {
+    result = {
         "learning_curve_pdf": str(learning_curve),
         "history_json": str(history_json),
     }
+    if loss_component_curves is not None:
+        result["loss_component_curves_pdf"] = str(loss_component_curves)
+    if mass_metric_curves is not None:
+        result["mass_metric_curves_pdf"] = str(mass_metric_curves)
+    return result
 
 
 def save_best_validation_diagnostics(
@@ -2499,6 +2554,10 @@ def save_training_diagnostics(
         "history_json": progress_paths["history_json"],
         "prediction_cache": str(prediction_cache),
     }
+    if "loss_component_curves_pdf" in progress_paths:
+        diagnostics["loss_component_curves_pdf"] = progress_paths["loss_component_curves_pdf"]
+    if "mass_metric_curves_pdf" in progress_paths:
+        diagnostics["mass_metric_curves_pdf"] = progress_paths["mass_metric_curves_pdf"]
     if save_reconstruction:
         for split_name, pair, quality, predicted_errors in [
             ("validation", validation, validation_quality, validation_predicted_errors),

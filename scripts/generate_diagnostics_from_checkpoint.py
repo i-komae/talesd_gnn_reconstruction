@@ -70,6 +70,10 @@ def _reconstruction_metrics_for_task(training_task: str, pred: np.ndarray, targe
 def _print_diagnostics_paths(diagnostics: dict[str, Any]) -> None:
     print("diagnostics directory:", diagnostics["directory"], flush=True)
     print("learning curve:", diagnostics["learning_curve_pdf"], flush=True)
+    if diagnostics.get("loss_component_curves_pdf"):
+        print("loss component curves:", diagnostics["loss_component_curves_pdf"], flush=True)
+    if diagnostics.get("mass_metric_curves_pdf"):
+        print("mass metric curves:", diagnostics["mass_metric_curves_pdf"], flush=True)
     for key, label in [
         ("validation", "validation diagnostics"),
         ("test", "test diagnostics"),

@@ -157,7 +157,8 @@ export MILESTONE_EVAL_BEST_MODEL="${MILESTONE_EVAL_BEST_MODEL:-0}"
 if [[ "${PREPARE_FAST_CACHE}" == "1" ]]; then
   echo "WARNING: PREPARE_FAST_CACHE=1 performs grouped-to-flat conversion before training. This may be slow. Prefer directly exported flat HDF5 or PREPARE_FAST_CACHE=0." >&2
 fi
-export ATTENTION_MAPS_SPLIT="${ATTENTION_MAPS_SPLIT:-validation}"
+export FEATURE_IMPORTANCE_SPLIT="${FEATURE_IMPORTANCE_SPLIT:-validation test}"
+export ATTENTION_MAPS_SPLIT="${ATTENTION_MAPS_SPLIT:-validation test}"
 export ATTENTION_MAPS_MAX_GRAPHS="${ATTENTION_MAPS_MAX_GRAPHS:-16}"
 export ATTENTION_MAPS_DEVICE="${ATTENTION_MAPS_DEVICE:-${DEVICE:-cuda}}"
 export SUMMARIZE_GRAPHS="${SUMMARIZE_GRAPHS:-0}"
