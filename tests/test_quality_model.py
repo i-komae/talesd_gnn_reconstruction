@@ -21,13 +21,13 @@ class QualityModelTest(unittest.TestCase):
         torch.manual_seed(123)
         encoder = WaveformEncoder(
             waveform_channels=2,
-            waveform_length=64,
+            waveform_length=2048,
             embedding_dim=8,
             mode="transformer",
             dropout=0.0,
             transformer_heads=2,
             transformer_layers=1,
-            transformer_max_tokens=16,
+            transformer_max_tokens=128,
         )
         encoder.eval()
         token_counts: list[int] = []
@@ -37,7 +37,7 @@ class QualityModelTest(unittest.TestCase):
 
         hook = encoder.transformer.register_forward_pre_hook(_capture_tokens)
         try:
-            waveform = torch.randn(3, 2, 64)
+            waveform = torch.randn(3, 2, 2048)
             valid_mask = torch.tensor([1.0, 0.0, 1.0])
             with torch.no_grad():
                 baseline = encoder(
@@ -56,11 +56,19 @@ class QualityModelTest(unittest.TestCase):
                     dtype=torch.float32,
                     valid_mask=valid_mask,
                 )
+                sliced = encoder(
+                    waveform[[0, 2]],
+                    num_nodes=2,
+                    device=torch.device("cpu"),
+                    dtype=torch.float32,
+                    valid_mask=torch.ones(2),
+                )
         finally:
             hook.remove()
 
-        self.assertEqual(token_counts, [16, 16])
+        self.assertEqual(token_counts, [128, 128, 128])
         self.assertTrue(torch.allclose(baseline[1], torch.zeros_like(baseline[1])))
+        self.assertTrue(torch.allclose(baseline[[0, 2]], sliced, atol=1.0e-6, rtol=1.0e-6))
         self.assertTrue(torch.allclose(baseline, repeated, atol=1.0e-6, rtol=1.0e-6))
 
     def test_physics_model_outputs_reconstruction_mass_and_quality(self) -> None:

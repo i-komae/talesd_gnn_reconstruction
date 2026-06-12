@@ -536,19 +536,36 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         else:
             output = torch.cat(outputs, dim=-1)
         if return_attention:
+            node_metadata: dict[str, torch.Tensor] = {}
+            missing_metadata = []
+
+            def _add_metadata(store: Mapping[str, Any], source_key: str, output_key: str) -> None:
+                if source_key in store:
+                    value = store[source_key]
+                    node_metadata[output_key] = value.detach() if hasattr(value, "detach") else value
+                else:
+                    missing_metadata.append(output_key)
+
+            _add_metadata(detector, "batch", "detector_batch")
+            _add_metadata(detector, "lid", "detector_lid")
+            _add_metadata(detector, "pos", "detector_pos")
+            _add_metadata(pulse, "batch", "pulse_batch")
+            _add_metadata(pulse, "lid", "pulse_lid")
+            _add_metadata(pulse, "pos", "pulse_pos")
+            _add_metadata(pulse, "detector_index", "pulse_detector_index")
+            _add_metadata(pulse, "pulse_bounds", "pulse_bounds")
+            if missing_metadata and not getattr(self, "_warned_missing_attention_metadata", False):
+                print(
+                    "hetero_attention_metadata "
+                    "missing=1 data_format=fast_tensor "
+                    f"fields={','.join(missing_metadata)}",
+                    flush=True,
+                )
+                self._warned_missing_attention_metadata = True
             attention_payload = {
                 "layers": layer_attention,
                 "readout": readout_attention,
-                "node_metadata": {
-                    "detector_batch": detector["batch"].detach(),
-                    "detector_lid": detector["lid"].detach(),
-                    "detector_pos": detector["pos"].detach(),
-                    "pulse_batch": pulse["batch"].detach(),
-                    "pulse_lid": pulse["lid"].detach(),
-                    "pulse_pos": pulse["pos"].detach(),
-                    "pulse_detector_index": pulse["detector_index"].detach(),
-                    "pulse_bounds": pulse["pulse_bounds"].detach(),
-                },
+                "node_metadata": node_metadata,
             }
             return output, attention_payload
         return output

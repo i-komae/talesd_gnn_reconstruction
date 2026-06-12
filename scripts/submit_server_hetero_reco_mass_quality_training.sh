@@ -4,11 +4,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+SPEED_BENCHMARK="${SPEED_BENCHMARK:-0}"
 PARTITION_FOR_NAME="${PARTITION:-v100-al9_long}"
 RESOURCE_TAG="${RESOURCE_TAG:-${PARTITION_FOR_NAME%%-*}}"
-TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}"
+if [[ "${SPEED_BENCHMARK}" == "1" ]]; then
+  TRAIN_EPOCHS="${TRAIN_EPOCHS:-2}"
+else
+  TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}"
+fi
 
 export RUN_ID
+export SPEED_BENCHMARK
 export RESOURCE_TAG
 export TRAIN_EPOCHS
 export RUN_NAME="${RUN_NAME:-server_hetero_reco_mass_quality_${RESOURCE_TAG}_${TRAIN_EPOCHS}epoch_${RUN_ID}}"

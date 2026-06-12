@@ -203,13 +203,17 @@ def _limit_split_for_debug(
     limited: dict[str, list[int]] = {}
     assigned = 0
     names = ["train", "val", "test"]
+    nonempty_names = [name for name in names if split.get(name)]
+    keep_one_per_nonempty_split = requested >= len(nonempty_names)
     for name in names:
         values = list(split.get(name, []))
         if not values:
             limited[name] = []
             continue
         quota = int(round(requested * (len(values) / float(total_before))))
-        if name == "train":
+        if keep_one_per_nonempty_split:
+            quota = max(quota, 1)
+        elif name == "train":
             quota = max(quota, 1)
         quota = min(max(quota, 0), len(values))
         limited[name] = sorted(rng.sample(values, quota)) if quota < len(values) else values
@@ -493,19 +497,24 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
     }
 
 
-def _batch_to_device(batch: Any, device: str) -> Any:
+def _batch_to_device(batch: Any, device: str, *, non_blocking: bool = False) -> Any:
     import torch
 
     if hasattr(batch, "to"):
-        return batch.to(device)
+        try:
+            return batch.to(device, non_blocking=bool(non_blocking))
+        except TypeError:
+            return batch.to(device)
     if isinstance(batch, dict):
         moved: dict[str, Any] = {}
         for key, value in batch.items():
             if isinstance(value, torch.Tensor):
-                moved[key] = value.to(device)
+                moved[key] = value.to(device, non_blocking=bool(non_blocking))
             elif isinstance(value, dict):
                 moved[key] = {
-                    sub_key: sub_value.to(device) if isinstance(sub_value, torch.Tensor) else sub_value
+                    sub_key: sub_value.to(device, non_blocking=bool(non_blocking))
+                    if isinstance(sub_value, torch.Tensor)
+                    else sub_value
                     for sub_key, sub_value in value.items()
                 }
             else:
@@ -1014,10 +1023,19 @@ def _predict_hetero_numpy(
     show_progress: bool,
     enabled_relations: set[str] | None = None,
     max_neighbors: dict[str, int] | None = None,
+    non_blocking: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     import torch
 
     model.eval()
+    if len(loader) == 0:
+        print(
+            "hetero_split_warning "
+            f"split={desc} graphs=0 metrics_skipped=1",
+            flush=True,
+        )
+        empty_target = np.zeros((0, int(target_dim)), dtype=np.float32)
+        return empty_target, empty_target, None, None, None, None
     pred_rows: list[np.ndarray] = []
     target_rows: list[np.ndarray] = []
     mass_logit_rows: list[np.ndarray] = []
@@ -1026,12 +1044,12 @@ def _predict_hetero_numpy(
     error_prediction_rows: list[np.ndarray] = []
     with torch.no_grad():
         for batch in _progress(loader, desc=desc, total=len(loader), enabled=show_progress, leave=False):
-            batch = _batch_to_device(batch, device)
             batch = _filter_batch_relations(
                 batch,
                 enabled_relations=set(EDGE_TYPE_BY_RELATION) if enabled_relations is None else enabled_relations,
                 max_neighbors={} if max_neighbors is None else max_neighbors,
             )
+            batch = _batch_to_device(batch, device, non_blocking=bool(non_blocking))
             pred_all = model(batch)
             pred_scaled, mass_logit, quality_logit, error_raw = _split_model_output(
                 pred_all,
@@ -1059,6 +1077,14 @@ def _predict_hetero_numpy(
                     energy_scale=error_energy_scale,
                 )
                 error_prediction_rows.append(predicted_errors.detach().cpu().numpy())
+    if not pred_rows or not target_rows:
+        print(
+            "hetero_split_warning "
+            f"split={desc} graphs=0 metrics_skipped=1",
+            flush=True,
+        )
+        empty_target = np.zeros((0, int(target_dim)), dtype=np.float32)
+        return empty_target, empty_target, None, None, None, None
     return (
         np.concatenate(pred_rows, axis=0),
         np.concatenate(target_rows, axis=0),
@@ -1153,6 +1179,8 @@ def train_hetero_model(
     early_stopping_patience: int = 0,
     early_stopping_min_epochs: int = 1,
     checkpoint_milestones: Sequence[int] | None = None,
+    checkpoint_milestone_full_eval: bool | None = None,
+    allow_train_loss_checkpoint: bool | None = None,
     pin_memory: bool | None = None,
     loader_memory_budget_gib: float | None = None,
     loader_memory_estimate_samples: int = 512,
@@ -1161,6 +1189,7 @@ def train_hetero_model(
     profile: bool | None = None,
     max_graphs: int | None = None,
     training_data_format: str | None = None,
+    final_eval_data_format: str | None = None,
     hetero_relations: str | None = None,
     dataloader_timeout_sec: float | None = None,
     data_wait_warn_sec: float | None = None,
@@ -1182,9 +1211,15 @@ def train_hetero_model(
     early_stopping_patience = max(int(early_stopping_patience), 0)
     early_stopping_min_epochs = max(int(early_stopping_min_epochs), 1)
     if checkpoint_milestones is None:
-        milestone_epochs = tuple(epoch for epoch in (8, 16, 32, 64) if epoch <= int(epochs))
+        milestone_epochs: tuple[int, ...] = ()
     else:
         milestone_epochs = tuple(sorted({int(epoch) for epoch in checkpoint_milestones if int(epoch) > 0}))
+    if checkpoint_milestone_full_eval is None:
+        checkpoint_milestone_full_eval = _env_flag("CHECKPOINT_MILESTONE_FULL_EVAL", False)
+    checkpoint_milestone_full_eval = bool(checkpoint_milestone_full_eval)
+    if allow_train_loss_checkpoint is None:
+        allow_train_loss_checkpoint = _env_flag("ALLOW_TRAIN_LOSS_CHECKPOINT", False)
+    allow_train_loss_checkpoint = bool(allow_train_loss_checkpoint)
     max_val_graphs = None if max_val_graphs is None or int(max_val_graphs) <= 0 else int(max_val_graphs)
     max_graphs = None if max_graphs is None or int(max_graphs) <= 0 else int(max_graphs)
     training_data_format = str(
@@ -1192,6 +1227,11 @@ def train_hetero_model(
     ).strip()
     if training_data_format not in {"fast_tensor", "pyg"}:
         raise ValueError("training_data_format must be fast_tensor or pyg")
+    final_eval_data_format = str(
+        final_eval_data_format or os.environ.get("HETERO_FINAL_EVAL_DATA_FORMAT", training_data_format)
+    ).strip()
+    if final_eval_data_format not in {"fast_tensor", "pyg"}:
+        raise ValueError("final_eval_data_format must be fast_tensor or pyg")
     enabled_relations = _parse_relation_filter(hetero_relations)
     max_neighbors = _max_neighbors_by_relation()
     if dataloader_timeout_sec is None:
@@ -1302,10 +1342,20 @@ def train_hetero_model(
         f"early_stopping_patience={int(early_stopping_patience)} "
         f"early_stopping_min_epochs={int(early_stopping_min_epochs)} "
         f"checkpoint_milestones={','.join(str(epoch) for epoch in milestone_epochs)} "
+        f"checkpoint_milestone_full_eval={int(checkpoint_milestone_full_eval)} "
+        f"allow_train_loss_checkpoint={int(allow_train_loss_checkpoint)} "
         f"val_graphs_per_epoch={len(val_indices_for_epoch)} "
         f"val_num_workers={int(val_num_workers)} "
+        f"final_eval_data_format={final_eval_data_format} "
         f"dataloader_timeout_sec={float(dataloader_timeout_sec):.6g} "
         f"data_wait_warn_sec={float(data_wait_warn_sec):.6g}",
+        flush=True,
+    )
+    print(
+        "hetero_checkpoint_milestones "
+        f"enabled={int(bool(milestone_epochs))} "
+        f"milestones={','.join(str(epoch) for epoch in milestone_epochs)} "
+        f"full_eval={int(checkpoint_milestone_full_eval)}",
         flush=True,
     )
     _waveform_channels, resolved_waveform_length = _resolve_waveform_shape(
@@ -1397,7 +1447,8 @@ def train_hetero_model(
         timeout_sec=dataloader_timeout_sec,
         data_format=training_data_format,
     )
-    eval_dataset = H5PyGHeteroGraphDataset(
+    eval_dataset_class: Any = H5TensorHeteroGraphDataset if final_eval_data_format == "fast_tensor" else H5PyGHeteroGraphDataset
+    eval_dataset = eval_dataset_class(
         graphs_path,
         require_target=True,
         require_particle_label=mass_classification,
@@ -1415,7 +1466,7 @@ def train_hetero_model(
         persistent_workers=False,
         split_name="validation_final",
         timeout_sec=0.0,
-        data_format="pyg",
+        data_format=final_eval_data_format,
     )
     test_loader = _make_hetero_loader(
         eval_dataset,
@@ -1428,8 +1479,9 @@ def train_hetero_model(
         persistent_workers=False,
         split_name="test_final",
         timeout_sec=0.0,
-        data_format="pyg",
+        data_format=final_eval_data_format,
     )
+    non_blocking_h2d = bool(pin_memory and str(device).startswith("cuda"))
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     history: list[dict[str, Any]] = []
     train_progress_interval_sec = float(os.environ.get("TALESD_GNN_TRAIN_PROGRESS_INTERVAL_SEC", "60"))
@@ -1456,6 +1508,9 @@ def train_hetero_model(
         checkpoint_kind: str,
         best_epoch: int,
         best_val_loss: float,
+        best_checkpoint_score: float,
+        best_checkpoint_metric: str,
+        best_checkpoint_kind: str,
     ) -> dict[str, Any]:
         return {
             "graph_format": "hetero",
@@ -1476,6 +1531,9 @@ def train_hetero_model(
             "checkpoint_epoch": int(checkpoint_epoch),
             "best_epoch": int(best_epoch),
             "best_val_loss": None if not np.isfinite(best_val_loss) else float(best_val_loss),
+            "best_checkpoint_score": None if not np.isfinite(best_checkpoint_score) else float(best_checkpoint_score),
+            "best_checkpoint_metric": str(best_checkpoint_metric),
+            "best_checkpoint_kind": str(best_checkpoint_kind),
             "completed": bool(completed),
             "checkpoint_kind": str(checkpoint_kind),
             "batch_size": int(batch_size),
@@ -1526,6 +1584,9 @@ def train_hetero_model(
             "validate_every_n_epochs": int(validate_every_n_epochs),
             "max_val_graphs": None if max_val_graphs is None else int(max_val_graphs),
             "checkpoint_milestones": [int(epoch) for epoch in milestone_epochs],
+            "checkpoint_milestone_full_eval": bool(checkpoint_milestone_full_eval),
+            "allow_train_loss_checkpoint": bool(allow_train_loss_checkpoint),
+            "final_eval_data_format": str(final_eval_data_format),
             "data_loader": {
                 **loader_settings,
                 **graph_byte_summary,
@@ -1544,6 +1605,9 @@ def train_hetero_model(
                 "early_stopping_patience": int(early_stopping_patience),
                 "early_stopping_min_epochs": int(early_stopping_min_epochs),
                 "checkpoint_milestones": [int(epoch) for epoch in milestone_epochs],
+                "checkpoint_milestone_full_eval": bool(checkpoint_milestone_full_eval),
+                "allow_train_loss_checkpoint": bool(allow_train_loss_checkpoint),
+                "final_eval_data_format": str(final_eval_data_format),
                 "val_num_workers": int(val_num_workers),
                 "dataloader_timeout_sec": float(dataloader_timeout_sec),
                 "data_wait_warn_sec": float(data_wait_warn_sec),
@@ -1557,6 +1621,9 @@ def train_hetero_model(
         checkpoint_kind: str,
         best_epoch: int,
         best_val_loss: float,
+        best_checkpoint_score: float,
+        best_checkpoint_metric: str,
+        best_checkpoint_kind: str,
         metrics: dict[str, Any] | None = None,
         diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -1574,6 +1641,9 @@ def train_hetero_model(
                 checkpoint_kind=checkpoint_kind,
                 best_epoch=best_epoch,
                 best_val_loss=best_val_loss,
+                best_checkpoint_score=best_checkpoint_score,
+                best_checkpoint_metric=best_checkpoint_metric,
+                best_checkpoint_kind=best_checkpoint_kind,
             ),
         }
         tmp_path = output.with_name(f".{output.name}.tmp-{os.getpid()}")
@@ -1605,6 +1675,8 @@ def train_hetero_model(
             f"epoch={int(checkpoint_epoch)}/{int(epochs)} "
             f"best_epoch={int(best_epoch)} "
             f"best_val_loss={best_val_loss:.6g} "
+            f"best_checkpoint_score={best_checkpoint_score:.6g} "
+            f"best_checkpoint_metric={best_checkpoint_metric} "
             f"checkpoint={output} "
             f"metrics={metrics_path}",
             flush=True,
@@ -1631,6 +1703,7 @@ def train_hetero_model(
             show_progress=show_progress,
             enabled_relations=enabled_relations,
             max_neighbors=max_neighbors,
+            non_blocking=non_blocking_h2d,
         )
         pred_test, target_test, mass_logit_test, mass_label_test, quality_test, error_test = _predict_hetero_numpy(
             model,
@@ -1648,14 +1721,29 @@ def train_hetero_model(
             show_progress=show_progress,
             enabled_relations=enabled_relations,
             max_neighbors=max_neighbors,
+            non_blocking=non_blocking_h2d,
         )
-        metrics: dict[str, Any] = {
-            "validation": reconstruction_metrics(pred_val, target_val),
-            "test": reconstruction_metrics(pred_test, target_test),
-        }
-        if mass_classification and mass_logit_val is not None and mass_label_val is not None:
+
+        def _add_reconstruction_metric(split_name: str, pred: np.ndarray, target: np.ndarray) -> dict[str, Any] | None:
+            if int(pred.shape[0]) == 0 or int(target.shape[0]) == 0:
+                print(
+                    "hetero_split_warning "
+                    f"split={split_name} graphs=0 metrics_skipped=1",
+                    flush=True,
+                )
+                return None
+            return reconstruction_metrics(pred, target)
+
+        metrics: dict[str, Any] = {}
+        val_metrics = _add_reconstruction_metric("validation", pred_val, target_val)
+        test_metrics = _add_reconstruction_metric("test", pred_test, target_test)
+        if val_metrics is not None:
+            metrics["validation"] = val_metrics
+        if test_metrics is not None:
+            metrics["test"] = test_metrics
+        if mass_classification and mass_logit_val is not None and mass_label_val is not None and mass_logit_val.shape[0] > 0:
             metrics["validation_mass"] = binary_classification_metrics(mass_logit_val, mass_label_val)
-        if mass_classification and mass_logit_test is not None and mass_label_test is not None:
+        if mass_classification and mass_logit_test is not None and mass_label_test is not None and mass_logit_test.shape[0] > 0:
             metrics["test_mass"] = binary_classification_metrics(mass_logit_test, mass_label_test)
         return (
             metrics,
@@ -1666,10 +1754,12 @@ def train_hetero_model(
     def _save_milestone_checkpoint(epoch: int) -> None:
         if best_state is None or best_epoch <= 0:
             return
-        current_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
-        model.load_state_dict({key: value.to(device) for key, value in best_state.items()})
-        metrics, _val_payload, _test_payload = _evaluate_current_model(desc_suffix=f"milestone_{int(epoch)}")
-        model.load_state_dict({key: value.to(device) for key, value in current_state.items()})
+        metrics: dict[str, Any] = {}
+        if checkpoint_milestone_full_eval:
+            current_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+            model.load_state_dict({key: value.to(device) for key, value in best_state.items()})
+            metrics, _val_payload, _test_payload = _evaluate_current_model(desc_suffix=f"milestone_{int(epoch)}")
+            model.load_state_dict({key: value.to(device) for key, value in current_state.items()})
         milestone_path = output.with_name(f"{output.stem}.best_through_epoch{int(epoch):04d}{output.suffix}")
         milestone_metrics_path = Path(f"{milestone_path}.metrics.json")
         checkpoint = {
@@ -1687,8 +1777,12 @@ def train_hetero_model(
                     checkpoint_kind=f"milestone_epoch_{int(epoch)}",
                     best_epoch=best_epoch,
                     best_val_loss=best_val_loss,
+                    best_checkpoint_score=best_checkpoint_score,
+                    best_checkpoint_metric=best_checkpoint_metric,
+                    best_checkpoint_kind=best_checkpoint_kind,
                 ),
                 "milestone_epoch": int(epoch),
+                "milestone_full_eval": bool(checkpoint_milestone_full_eval),
             },
         }
         tmp_path = milestone_path.with_name(f".{milestone_path.name}.tmp-{os.getpid()}")
@@ -1721,12 +1815,18 @@ def train_hetero_model(
             f"stage=milestone epoch={int(epoch)}/{int(epochs)} "
             f"best_epoch={int(best_epoch)} "
             f"best_val_loss={best_val_loss:.6g} "
+            f"best_checkpoint_score={best_checkpoint_score:.6g} "
+            f"best_checkpoint_metric={best_checkpoint_metric} "
+            f"full_eval={int(checkpoint_milestone_full_eval)} "
             f"checkpoint={milestone_path} "
             f"metrics={milestone_metrics_path}",
             flush=True,
         )
 
     best_val_loss = float("inf")
+    best_checkpoint_score = float("inf")
+    best_checkpoint_metric = "none"
+    best_checkpoint_kind = "none"
     best_epoch = 0
     best_state: dict[str, torch.Tensor] | None = None
     epochs_since_best = 0
@@ -1776,8 +1876,8 @@ def train_hetero_model(
             if profile_enabled:
                 profile_data_wait += data_wait
             h2d_start = time.perf_counter()
-            batch = _batch_to_device(batch, device)
             batch = _filter_batch_relations(batch, enabled_relations=enabled_relations, max_neighbors=max_neighbors)
+            batch = _batch_to_device(batch, device, non_blocking=non_blocking_h2d)
             _profile_sync()
             if profile_enabled:
                 profile_h2d += time.perf_counter() - h2d_start
@@ -1934,12 +2034,12 @@ def train_hetero_model(
                         timeout_sec=float(dataloader_timeout_sec),
                         warn_sec=float(data_wait_warn_sec),
                     )
-                    batch = _batch_to_device(batch, device)
                     batch = _filter_batch_relations(
                         batch,
                         enabled_relations=enabled_relations,
                         max_neighbors=max_neighbors,
                     )
+                    batch = _batch_to_device(batch, device, non_blocking=non_blocking_h2d)
                     with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=amp_enabled):
                         loss, components = _hetero_batch_loss(
                             model,
@@ -2041,26 +2141,58 @@ def train_hetero_model(
                 flush=True,
             )
         val_loss = float(epoch_row["val_loss"])
-        checkpoint_score = val_loss if np.isfinite(val_loss) else float(epoch_row["train_loss"])
-        if np.isfinite(checkpoint_score) and (best_epoch == 0 or checkpoint_score < best_val_loss):
-            best_val_loss = checkpoint_score
+        train_loss = float(epoch_row["train_loss"])
+        checkpoint_score = float("nan")
+        checkpoint_metric = "none"
+        checkpoint_kind = "best"
+        if run_validation and np.isfinite(val_loss):
+            checkpoint_score = val_loss
+            checkpoint_metric = "validation_loss"
+            checkpoint_kind = "best"
+        elif allow_train_loss_checkpoint and np.isfinite(train_loss):
+            checkpoint_score = train_loss
+            checkpoint_metric = "train_loss_benchmark"
+            checkpoint_kind = "train_loss_benchmark"
+        else:
+            reason = "validation_not_run" if not run_validation else "validation_loss_nonfinite"
+            print(
+                "hetero_checkpoint "
+                f"stage=skip_no_validation epoch={int(epoch)}/{int(epochs)} "
+                f"reason={reason} "
+                f"allow_train_loss_checkpoint={int(allow_train_loss_checkpoint)} "
+                f"best_epoch={int(best_epoch)} "
+                f"best_val_loss={best_val_loss:.6g}",
+                flush=True,
+            )
+        if np.isfinite(checkpoint_score) and (best_epoch == 0 or checkpoint_score < best_checkpoint_score):
+            if checkpoint_metric == "validation_loss":
+                best_val_loss = val_loss
+            best_checkpoint_score = checkpoint_score
+            best_checkpoint_metric = checkpoint_metric
+            best_checkpoint_kind = checkpoint_kind
             best_epoch = int(epoch)
             epochs_since_best = 0
             best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
             _save_checkpoint_and_metrics(
                 checkpoint_epoch=epoch,
                 completed=False,
-                checkpoint_kind="best",
+                checkpoint_kind=checkpoint_kind,
                 best_epoch=best_epoch,
                 best_val_loss=best_val_loss,
+                best_checkpoint_score=best_checkpoint_score,
+                best_checkpoint_metric=best_checkpoint_metric,
+                best_checkpoint_kind=best_checkpoint_kind,
             )
-        else:
+        elif np.isfinite(checkpoint_score):
             epochs_since_best += 1
             print(
                 "hetero_checkpoint "
                 f"stage=skip epoch={int(epoch)}/{int(epochs)} "
                 f"best_epoch={int(best_epoch)} "
                 f"best_val_loss={best_val_loss:.6g} "
+                f"best_checkpoint_score={best_checkpoint_score:.6g} "
+                f"checkpoint_score={checkpoint_score:.6g} "
+                f"checkpoint_metric={checkpoint_metric} "
                 f"val_loss={val_loss:.6g}",
                 flush=True,
             )
@@ -2083,14 +2215,16 @@ def train_hetero_model(
             break
     if best_state is None:
         best_epoch = int(history[-1]["epoch"]) if history else int(epochs)
-        best_val_loss = float(history[-1]["val_loss"]) if history else float("nan")
+        best_val_loss = float("nan")
+        best_checkpoint_score = float("nan")
+        best_checkpoint_metric = "none_no_validation"
+        best_checkpoint_kind = "none_no_validation"
         best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
-        _save_checkpoint_and_metrics(
-            checkpoint_epoch=best_epoch,
-            completed=False,
-            checkpoint_kind="best",
-            best_epoch=best_epoch,
-            best_val_loss=best_val_loss,
+        print(
+            "hetero_checkpoint "
+            f"stage=no_best_validation epoch={int(best_epoch)}/{int(epochs)} "
+            "reason=no_validation_checkpoint_available use_current_state_for_final=1",
+            flush=True,
         )
     model.load_state_dict({key: value.to(device) for key, value in best_state.items()})
     metrics, validation_payload, test_payload = _evaluate_current_model(desc_suffix="final")
@@ -2125,6 +2259,9 @@ def train_hetero_model(
         checkpoint_kind="final",
         best_epoch=best_epoch,
         best_val_loss=best_val_loss,
+        best_checkpoint_score=best_checkpoint_score,
+        best_checkpoint_metric=best_checkpoint_metric,
+        best_checkpoint_kind=best_checkpoint_kind,
         metrics=metrics,
         diagnostics=diagnostics,
     )

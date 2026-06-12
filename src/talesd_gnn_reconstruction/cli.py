@@ -4386,6 +4386,8 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         early_stopping_patience=args.early_stopping_patience,
         early_stopping_min_epochs=args.early_stopping_min_epochs,
         checkpoint_milestones=args.checkpoint_milestones,
+        checkpoint_milestone_full_eval=args.checkpoint_milestone_full_eval,
+        allow_train_loss_checkpoint=args.allow_train_loss_checkpoint,
         pin_memory=None if not args.no_pin_memory else False,
         loader_memory_budget_gib=args.loader_memory_budget_gib,
         loader_memory_estimate_samples=args.loader_memory_estimate_samples,
@@ -4394,6 +4396,7 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         profile=True if args.profile else None,
         max_graphs=args.max_graphs,
         training_data_format=args.training_data_format,
+        final_eval_data_format=args.final_eval_data_format,
         hetero_relations=args.hetero_relations,
         dataloader_timeout_sec=args.dataloader_timeout_sec,
         data_wait_warn_sec=args.data_wait_warn_sec,
@@ -4430,6 +4433,7 @@ def _cmd_convert_hetero_to_flat(args: argparse.Namespace) -> None:
         graphs,
         args.output,
         compression=args.compression,
+        verify_samples=args.verify_samples,
     )
     print(
         "hetero_flat_cache "
@@ -4438,7 +4442,8 @@ def _cmd_convert_hetero_to_flat(args: argparse.Namespace) -> None:
         f"detector_nodes={summary['detector_nodes']} "
         f"pulse_nodes={summary['pulse_nodes']} "
         f"waveform_shape={summary['waveform_channels']}x{summary['waveform_length']} "
-        f"compression={summary['compression']}"
+        f"compression={summary['compression']} "
+        f"verified_samples={summary.get('verified_samples', 0)}"
     )
 
 
@@ -5021,7 +5026,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--checkpoint-milestones",
         type=lambda value: [int(item) for item in str(value).split(",") if item.strip()],
         default=None,
-        help="到達時点までのbest checkpointとfull評価を保存するepoch list。既定は8,16,32,64",
+        help="到達時点までのbest checkpointを保存するepoch list。空文字なら無効。既定は無効",
+    )
+    train_hetero.add_argument(
+        "--checkpoint-milestone-full-eval",
+        action="store_true",
+        default=None,
+        help="milestone checkpoint保存時にfull validation/test評価も実行する。既定は保存のみ",
+    )
+    train_hetero.add_argument(
+        "--allow-train-loss-checkpoint",
+        action="store_true",
+        default=None,
+        help="validationを実行しないepochでtrain lossによるbenchmark checkpoint更新を明示的に許可する",
     )
     train_hetero.add_argument("--no-pin-memory", action="store_true", help="CUDA転送用のpinned memoryを使わない")
     train_hetero.add_argument(
@@ -5046,6 +5063,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="training DataLoader形式。既定はfast_tensor",
     )
+    train_hetero.add_argument(
+        "--final-eval-data-format",
+        choices=["fast_tensor", "pyg"],
+        default=None,
+        help="final validation/test metrics用DataLoader形式。既定はtraining-data-formatと同じ",
+    )
     train_hetero.add_argument("--hetero-relations", default=None, help="使用relationのcomma list。既定はHETERO_RELATIONSまたはall")
     train_hetero.add_argument("--dataloader-timeout-sec", type=float, default=None)
     train_hetero.add_argument("--data-wait-warn-sec", type=float, default=None)
@@ -5065,6 +5088,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="lzf",
         choices=["lzf", "none"],
         help="flat cache dataset compression。training I/Oではlzfまたはnoneを使う",
+    )
+    convert_hetero_flat.add_argument(
+        "--verify-samples",
+        type=int,
+        default=5,
+        help="変換後にgrouped/flat sampleを比較する件数。0なら無効",
     )
     convert_hetero_flat.set_defaults(func=_cmd_convert_hetero_to_flat)
 

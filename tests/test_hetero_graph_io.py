@@ -397,7 +397,12 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 model.eval()
                 with torch.no_grad():
                     output = model(filtered)
+                    attention_output, attention = model(filtered, return_attention=True)
                 self.assertEqual(output.shape, (2, 7))
+                self.assertEqual(attention_output.shape, (2, 7))
+                self.assertIn("node_metadata", attention)
+                self.assertIn("detector_batch", attention["node_metadata"])
+                self.assertNotIn("detector_lid", attention["node_metadata"])
             finally:
                 dataset.close()
 
@@ -430,6 +435,29 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                     np.asarray([0.0, 1.0, 1.0], dtype=np.float32),
                 )
                 self.assertEqual(scaler_sample["pulse_features"].shape, (4, PULSE_FEATURE_DIM))
+                self.assertEqual(set(scaler_sample["edge_features_by_type"]), set(EDGE_RELATIONS))
+            finally:
+                dataset.close()
+
+    def test_flat_cache_scaler_sample_does_not_load_waveforms_or_call_getitem(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            grouped = Path(tmpdir) / "synthetic_hetero.h5"
+            flat = Path(tmpdir) / "synthetic_hetero.flat.h5"
+            with create_hetero_graph_file(grouped) as handle:
+                for index in range(2):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+            summary = convert_hetero_to_flat_cache(grouped, flat, compression="none", verify_samples=2)
+            self.assertEqual(summary["verified_samples"], 2)
+
+            dataset = H5FlatHeteroGraphDataset(flat, require_target=True, require_particle_label=True)
+            try:
+                with mock.patch.object(H5FlatHeteroGraphDataset, "__getitem__", side_effect=AssertionError):
+                    scaler_sample = dataset.scaler_sample(0)
+                self.assertNotIn("detector_waveforms", scaler_sample)
+                self.assertNotIn("detector_positions_km", scaler_sample)
+                self.assertNotIn("detector_lids", scaler_sample)
+                self.assertNotIn("pulse_bounds", scaler_sample)
+                self.assertEqual(scaler_sample["detector_features"].shape, (3, DETECTOR_FEATURE_DIM))
                 self.assertEqual(set(scaler_sample["edge_features_by_type"]), set(EDGE_RELATIONS))
             finally:
                 dataset.close()
@@ -1113,6 +1141,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                 device="cpu",
                 num_workers=0,
                 checkpoint_milestones=(1,),
+                checkpoint_milestone_full_eval=True,
                 show_progress=False,
             )
 
@@ -1147,6 +1176,87 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertEqual(milestone_payload["runtime"]["checkpoint_kind"], "milestone_epoch_1")
             self.assertIn("validation", milestone_payload["metrics"])
             self.assertIn("test", milestone_payload["metrics"])
+
+    def test_validation_skip_does_not_update_best_without_explicit_train_loss_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            checkpoint_path = Path(tmpdir) / "checkpoint.pt"
+            checkpoint_train_loss_path = Path(tmpdir) / "checkpoint_train_loss.pt"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(8):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            train_hetero_model(
+                graph_path,
+                checkpoint_path,
+                epochs=1,
+                batch_size=2,
+                hidden_dim=16,
+                num_layers=1,
+                dropout=0.0,
+                waveform_embedding_dim=8,
+                mass_classification=True,
+                split_mode="event",
+                device="cpu",
+                num_workers=0,
+                validate_every_n_epochs=0,
+                show_progress=False,
+            )
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            self.assertEqual(checkpoint["runtime"]["best_checkpoint_metric"], "none_no_validation")
+            self.assertEqual(checkpoint["runtime"]["best_checkpoint_kind"], "none_no_validation")
+
+            train_hetero_model(
+                graph_path,
+                checkpoint_train_loss_path,
+                epochs=1,
+                batch_size=2,
+                hidden_dim=16,
+                num_layers=1,
+                dropout=0.0,
+                waveform_embedding_dim=8,
+                mass_classification=True,
+                split_mode="event",
+                device="cpu",
+                num_workers=0,
+                validate_every_n_epochs=0,
+                allow_train_loss_checkpoint=True,
+                show_progress=False,
+            )
+            checkpoint_train = torch.load(checkpoint_train_loss_path, map_location="cpu", weights_only=False)
+            self.assertEqual(checkpoint_train["runtime"]["best_checkpoint_metric"], "train_loss_benchmark")
+            self.assertEqual(checkpoint_train["runtime"]["best_checkpoint_kind"], "train_loss_benchmark")
+
+    def test_train_hetero_small_max_graphs_smoke_does_not_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            checkpoint_path = Path(tmpdir) / "checkpoint.pt"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(30):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            result = train_hetero_model(
+                graph_path,
+                checkpoint_path,
+                epochs=1,
+                batch_size=2,
+                hidden_dim=16,
+                num_layers=1,
+                dropout=0.0,
+                waveform_embedding_dim=8,
+                mass_classification=True,
+                split_mode="event",
+                device="cpu",
+                num_workers=0,
+                max_graphs=20,
+                show_progress=False,
+            )
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            split = checkpoint["split"]
+            self.assertGreaterEqual(split["n_train"], 1)
+            self.assertGreaterEqual(split["n_val"], 1)
+            self.assertGreaterEqual(split["n_test"], 1)
+            self.assertEqual(result["checkpoint"], str(checkpoint_path))
 
     def test_train_hetero_from_flat_cache_smoke_saves_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

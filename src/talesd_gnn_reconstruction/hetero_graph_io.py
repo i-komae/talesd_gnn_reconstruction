@@ -318,11 +318,98 @@ def _pad_waveforms(waveforms: np.ndarray, waveform_length: int) -> np.ndarray:
     return np.concatenate([waveforms, np.zeros(pad_shape, dtype=np.float32)], axis=-1)
 
 
+def _verification_indices(n_events: int, verify_samples: int) -> list[int]:
+    n_events = int(n_events)
+    verify_samples = int(verify_samples)
+    if n_events <= 0 or verify_samples <= 0:
+        return []
+    if n_events <= verify_samples:
+        return list(range(n_events))
+    positions = np.linspace(0, n_events - 1, num=verify_samples, dtype=np.int64)
+    return [int(position) for position in positions]
+
+
+def _assert_array_equal_or_close(name: str, left: np.ndarray, right: np.ndarray) -> None:
+    left_array = np.asarray(left)
+    right_array = np.asarray(right)
+    if left_array.shape != right_array.shape:
+        raise ValueError(f"flat cache verification failed for {name}: shape {left_array.shape} != {right_array.shape}")
+    if np.issubdtype(left_array.dtype, np.floating) or np.issubdtype(right_array.dtype, np.floating):
+        if not np.allclose(left_array, right_array, rtol=1.0e-6, atol=1.0e-6, equal_nan=True):
+            raise ValueError(f"flat cache verification failed for {name}: values differ")
+    elif not np.array_equal(left_array, right_array):
+        raise ValueError(f"flat cache verification failed for {name}: values differ")
+
+
+def _verify_flat_cache_samples(
+    source: "H5HeteroGraphDataset",
+    flat_path: Path,
+    *,
+    verify_samples: int,
+) -> int:
+    indices = _verification_indices(len(source), verify_samples)
+    if not indices:
+        return 0
+    flat = H5FlatHeteroGraphDataset(flat_path, require_target=source.require_target, load_attrs=False)
+    try:
+        for index in indices:
+            grouped = source[int(index)]
+            cached = flat[int(index)]
+            for key in (
+                "detector_features",
+                "detector_context_features",
+                "pulse_features",
+                "target",
+            ):
+                _assert_array_equal_or_close(f"{key}[{index}]", grouped[key], cached[key])
+            grouped_label = np.asarray(
+                [np.nan if grouped["particle_label"] is None else float(grouped["particle_label"])],
+                dtype=np.float32,
+            )
+            cached_label = np.asarray(
+                [np.nan if cached["particle_label"] is None else float(cached["particle_label"])],
+                dtype=np.float32,
+            )
+            _assert_array_equal_or_close(f"particle_label[{index}]", grouped_label, cached_label)
+            for relation in EDGE_RELATIONS:
+                _assert_array_equal_or_close(
+                    f"edge_index_by_type/{relation}[{index}]",
+                    grouped["edge_index_by_type"][relation],
+                    cached["edge_index_by_type"][relation],
+                )
+                _assert_array_equal_or_close(
+                    f"edge_features_by_type/{relation}[{index}]",
+                    grouped["edge_features_by_type"][relation],
+                    cached["edge_features_by_type"][relation],
+                )
+            grouped_waveform = np.asarray(grouped["detector_waveforms"], dtype=np.float32)
+            cached_waveform = np.asarray(cached["detector_waveforms"], dtype=np.float32)
+            if cached_waveform.shape[:2] != grouped_waveform.shape[:2] or cached_waveform.shape[2] < grouped_waveform.shape[2]:
+                raise ValueError(
+                    "flat cache verification failed for detector_waveforms: "
+                    f"grouped_shape={grouped_waveform.shape} cached_shape={cached_waveform.shape}"
+                )
+            _assert_array_equal_or_close(
+                f"detector_waveforms prefix[{index}]",
+                grouped_waveform,
+                cached_waveform[..., : grouped_waveform.shape[-1]],
+            )
+        print(
+            "hetero_flat_cache_verify "
+            f"samples={len(indices)} status=ok path={flat_path}",
+            flush=True,
+        )
+        return len(indices)
+    finally:
+        flat.close()
+
+
 def convert_hetero_to_flat_cache(
     input_paths: str | Path | Sequence[str | Path],
     output_path: str | Path,
     *,
     compression: str | None = "lzf",
+    verify_samples: int = 5,
 ) -> dict[str, Any]:
     source = H5HeteroGraphDataset(input_paths, require_target=True, load_attrs=True)
     try:
@@ -486,6 +573,7 @@ def convert_hetero_to_flat_cache(
             handle["detector_offsets"] = offsets["detector"]
             handle["pulse_offsets"] = offsets["pulse"]
             handle["edge_offsets_by_relation"] = edge_offsets_group
+        verified_samples = _verify_flat_cache_samples(source, output, verify_samples=int(verify_samples))
         _log_h5_layout(
             graph_path=output,
             format_label="flat_hdf5",
@@ -501,6 +589,7 @@ def convert_hetero_to_flat_cache(
             "waveform_channels": int(waveform_channels),
             "waveform_length": int(waveform_length),
             "compression": "none" if compression in {None, "", "none"} else str(compression),
+            "verified_samples": int(verified_samples),
         }
     finally:
         source.close()
@@ -896,14 +985,33 @@ class H5FlatHeteroGraphDataset:
         return int(total)
 
     def scaler_sample(self, index: int) -> dict[str, Any]:
-        sample = self[index]
+        path_index, local_index = self._locate(index)
+        handle = self._handle(path_index)
+        detector_slice = self._slice_offsets(handle, "detector", local_index)
+        pulse_slice = self._slice_offsets(handle, "pulse", local_index)
+        edge_features_by_type = {}
+        for relation in EDGE_RELATIONS:
+            offsets = self._edge_offset_dataset(handle, relation)
+            edge_slice = slice(int(offsets[local_index]), int(offsets[local_index + 1]))
+            edge_features_by_type[relation] = self._edge_feature_dataset(handle, relation)[edge_slice].astype(np.float32)
+        arrays = handle.get("arrays")
+        target = (
+            self._array_dataset(handle, "target")[local_index].astype(np.float32)
+            if "target_all" in handle or (arrays is not None and "target" in arrays)
+            else None
+        )
+        if self.require_target and target is None:
+            raise ValueError(f"graph has no target: {self.paths[path_index]}::{local_index}")
+        particle_label = self.particle_label(index)
+        if self.require_particle_label and particle_label is None:
+            raise ValueError(f"graph has no particle label: {self.paths[path_index]}::{local_index}")
         return {
-            "detector_features": sample["detector_features"],
-            "detector_context_features": sample["detector_context_features"],
-            "pulse_features": sample["pulse_features"],
-            "edge_features_by_type": sample["edge_features_by_type"],
-            "target": sample["target"],
-            "particle_label": sample["particle_label"],
+            "detector_features": self._array_dataset(handle, "detector_features")[detector_slice].astype(np.float32),
+            "detector_context_features": self._array_dataset(handle, "detector_context_features")[detector_slice].astype(np.float32),
+            "pulse_features": self._array_dataset(handle, "pulse_features")[pulse_slice].astype(np.float32),
+            "edge_features_by_type": edge_features_by_type,
+            "target": target,
+            "particle_label": particle_label,
         }
 
     def __getitem__(self, index: int) -> dict[str, Any]:
