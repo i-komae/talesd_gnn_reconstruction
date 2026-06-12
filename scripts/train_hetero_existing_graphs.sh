@@ -131,8 +131,20 @@ ALLOW_TRAIN_LOSS_CHECKPOINT="${ALLOW_TRAIN_LOSS_CHECKPOINT:-0}"
 HETERO_TRAINING_DATA_FORMAT="${HETERO_TRAINING_DATA_FORMAT:-fast_tensor}"
 FINAL_EVAL_DATA_FORMAT="${FINAL_EVAL_DATA_FORMAT:-${HETERO_TRAINING_DATA_FORMAT}}"
 HETERO_RELATIONS="${HETERO_RELATIONS:-all}"
-DATALOADER_TIMEOUT_SEC="${DATALOADER_TIMEOUT_SEC:-300}"
+DATALOADER_TIMEOUT_SEC="${DATALOADER_TIMEOUT_SEC:-120}"
 DATA_WAIT_WARN_SEC="${DATA_WAIT_WARN_SEC:-30}"
+TRAIN_PROGRESS_INTERVAL_SEC="${TALESD_GNN_TRAIN_PROGRESS_INTERVAL_SEC:-${TRAIN_PROGRESS_INTERVAL_SEC:-60}}"
+VALIDATION_PROGRESS_INTERVAL_SEC="${TALESD_GNN_VALIDATION_PROGRESS_INTERVAL_SEC:-${VALIDATION_PROGRESS_INTERVAL_SEC:-60}}"
+PREDICT_PROGRESS_INTERVAL_SEC="${TALESD_GNN_PREDICT_PROGRESS_INTERVAL_SEC:-${PREDICT_PROGRESS_INTERVAL_SEC:-60}}"
+SCALER_PROGRESS_INTERVAL_SEC="${TALESD_GNN_SCALER_PROGRESS_INTERVAL_SEC:-${SCALER_PROGRESS_INTERVAL_SEC:-60}}"
+FLAT_CACHE_PROGRESS_INTERVAL_SEC="${HETERO_FLAT_CACHE_PROGRESS_INTERVAL_SEC:-${FLAT_CACHE_PROGRESS_INTERVAL_SEC:-60}}"
+export TALESD_GNN_TRAIN_PROGRESS_INTERVAL_SEC="${TRAIN_PROGRESS_INTERVAL_SEC}"
+export TALESD_GNN_VALIDATION_PROGRESS_INTERVAL_SEC="${VALIDATION_PROGRESS_INTERVAL_SEC}"
+export TALESD_GNN_PREDICT_PROGRESS_INTERVAL_SEC="${PREDICT_PROGRESS_INTERVAL_SEC}"
+export TALESD_GNN_SCALER_PROGRESS_INTERVAL_SEC="${SCALER_PROGRESS_INTERVAL_SEC}"
+export HETERO_FLAT_CACHE_PROGRESS_INTERVAL_SEC="${FLAT_CACHE_PROGRESS_INTERVAL_SEC}"
+export TALESD_GNN_DATALOADER_TIMEOUT_SEC="${DATALOADER_TIMEOUT_SEC}"
+export TALESD_GNN_DATA_WAIT_WARN_SEC="${DATA_WAIT_WARN_SEC}"
 PROFILE="${PROFILE:-${TALESD_GNN_PROFILE:-0}}"
 if [[ -z "${PIN_MEMORY:-}" ]]; then
   if [[ "${WAVEFORM_ENCODER}" == "transformer" ]]; then
@@ -256,7 +268,8 @@ elif [[ "${PREPARE_FAST_CACHE}" == "1" && "${DRY_RUN:-0}" != "1" ]]; then
       --input "${GRAPH_INPUT}"
       -o "${FAST_CACHE_PATH}"
       --compression "${FAST_CACHE_COMPRESSION}"
-      --verify-samples "${FAST_CACHE_VERIFY_SAMPLES}")
+      --verify-samples "${FAST_CACHE_VERIFY_SAMPLES}"
+      --progress-interval-sec "${FLAT_CACHE_PROGRESS_INTERVAL_SEC}")
     printf 'command:'
     printf ' %q' "${cache_cmd[@]}"
     printf '\n'
@@ -362,6 +375,11 @@ FINAL_EVAL_DATA_FORMAT=${FINAL_EVAL_DATA_FORMAT}
 HETERO_RELATIONS=${HETERO_RELATIONS}
 DATALOADER_TIMEOUT_SEC=${DATALOADER_TIMEOUT_SEC}
 DATA_WAIT_WARN_SEC=${DATA_WAIT_WARN_SEC}
+TRAIN_PROGRESS_INTERVAL_SEC=${TRAIN_PROGRESS_INTERVAL_SEC}
+VALIDATION_PROGRESS_INTERVAL_SEC=${VALIDATION_PROGRESS_INTERVAL_SEC}
+PREDICT_PROGRESS_INTERVAL_SEC=${PREDICT_PROGRESS_INTERVAL_SEC}
+SCALER_PROGRESS_INTERVAL_SEC=${SCALER_PROGRESS_INTERVAL_SEC}
+FLAT_CACHE_PROGRESS_INTERVAL_SEC=${FLAT_CACHE_PROGRESS_INTERVAL_SEC}
 PROFILE=${PROFILE}
 PIN_MEMORY=${PIN_MEMORY}
 AMP=${AMP}
@@ -381,7 +399,8 @@ ATTENTION_MAPS_DEVICE=${ATTENTION_MAPS_DEVICE}
 SEED=${SEED}
 EOF
 
-echo "hetero_training_script_config speed_benchmark=${SPEED_BENCHMARK} waveform_encoder=${WAVEFORM_ENCODER} batch_size=${BATCH_SIZE} gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} prepare_fast_cache=${PREPARE_FAST_CACHE} training_data_format=${HETERO_TRAINING_DATA_FORMAT} final_eval_data_format=${FINAL_EVAL_DATA_FORMAT} checkpoint_milestones='${CHECKPOINT_MILESTONES}' checkpoint_milestone_full_eval=${CHECKPOINT_MILESTONE_FULL_EVAL} diagnostics=${DIAGNOSTICS} attention_maps=${ATTENTION_MAPS} feature_importance=${FEATURE_IMPORTANCE} profile=${PROFILE} pin_memory=${PIN_MEMORY} prefetch_factor=${PREFETCH_FACTOR} persistent_workers=${PERSISTENT_WORKERS} train_workers=${TRAIN_WORKERS}"
+echo "hetero_training_script_config speed_benchmark=${SPEED_BENCHMARK} waveform_encoder=${WAVEFORM_ENCODER} batch_size=${BATCH_SIZE} gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} prepare_fast_cache=${PREPARE_FAST_CACHE} training_data_format=${HETERO_TRAINING_DATA_FORMAT} final_eval_data_format=${FINAL_EVAL_DATA_FORMAT} checkpoint_milestones='${CHECKPOINT_MILESTONES}' checkpoint_milestone_full_eval=${CHECKPOINT_MILESTONE_FULL_EVAL} diagnostics=${DIAGNOSTICS} attention_maps=${ATTENTION_MAPS} feature_importance=${FEATURE_IMPORTANCE} profile=${PROFILE} pin_memory=${PIN_MEMORY} prefetch_factor=${PREFETCH_FACTOR} persistent_workers=${PERSISTENT_WORKERS} train_workers=${TRAIN_WORKERS} train_progress_interval_sec=${TRAIN_PROGRESS_INTERVAL_SEC} validation_progress_interval_sec=${VALIDATION_PROGRESS_INTERVAL_SEC} predict_progress_interval_sec=${PREDICT_PROGRESS_INTERVAL_SEC} scaler_progress_interval_sec=${SCALER_PROGRESS_INTERVAL_SEC} flat_cache_progress_interval_sec=${FLAT_CACHE_PROGRESS_INTERVAL_SEC} dataloader_timeout_sec=${DATALOADER_TIMEOUT_SEC} data_wait_warn_sec=${DATA_WAIT_WARN_SEC}"
+echo "hetero_postprocess_config diagnostics=${DIAGNOSTICS} attention_maps=${ATTENTION_MAPS} feature_importance=${FEATURE_IMPORTANCE}"
 
 cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli train-hetero
   --graphs "${GRAPH_INPUT}"
@@ -549,10 +568,19 @@ fi
   echo "checkpoint=${CHECKPOINT}"
   echo "metrics=${METRICS_PATH}"
   echo "diagnostics_dir=${CHECKPOINT}.diagnostics"
+  if [[ "${DIAGNOSTICS}" == "1" ]]; then
+    echo "stage=done diagnostics date=$(date) diagnostics_dir=${CHECKPOINT}.diagnostics"
+  else
+    echo "stage=skip diagnostics enabled=0 date=$(date)"
+  fi
   date
 } 2>&1 | tee "${LOG_PATH}"
 
-"${PYTHON_BIN}" scripts/summarize_metrics.py "${METRICS_PATH}" -o "${SUMMARY_DIR}/metrics_summary.csv"
+{
+  echo "stage=start metrics_summary date=$(date)"
+  "${PYTHON_BIN}" scripts/summarize_metrics.py "${METRICS_PATH}" -o "${SUMMARY_DIR}/metrics_summary.csv"
+  echo "stage=done metrics_summary date=$(date) summary_csv=${SUMMARY_DIR}/metrics_summary.csv"
+} 2>&1 | tee -a "${LOG_PATH}"
 FEATURE_IMPORTANCE_DIR="${CHECKPOINT}.diagnostics/feature_importance/${FEATURE_IMPORTANCE_SPLIT}"
 FEATURE_IMPORTANCE_SUMMARY="${FEATURE_IMPORTANCE_DIR}/feature_group_importance.json"
 if [[ "${FEATURE_IMPORTANCE}" == "1" ]]; then
@@ -579,6 +607,9 @@ if [[ "${FEATURE_IMPORTANCE}" == "1" ]]; then
     echo "feature_importance=${FEATURE_IMPORTANCE_SUMMARY}"
   } 2>&1 | tee -a "${LOG_PATH}"
 else
+  {
+    echo "stage=skip feature_importance enabled=0 date=$(date)"
+  } 2>&1 | tee -a "${LOG_PATH}"
   FEATURE_IMPORTANCE_SUMMARY=""
 fi
 
@@ -615,6 +646,9 @@ if [[ "${ATTENTION_MAPS}" == "1" ]]; then
     } 2>&1 | tee -a "${LOG_PATH}"
   fi
 else
+  {
+    echo "stage=skip attention_maps enabled=0 date=$(date)"
+  } 2>&1 | tee -a "${LOG_PATH}"
   ATTENTION_MAPS_SUMMARY=""
 fi
 

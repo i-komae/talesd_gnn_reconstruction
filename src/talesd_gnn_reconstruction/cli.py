@@ -4436,6 +4436,7 @@ def _cmd_convert_hetero_to_flat(args: argparse.Namespace) -> None:
         args.output,
         compression=args.compression,
         verify_samples=args.verify_samples,
+        progress_interval_sec=args.progress_interval_sec,
     )
     print(
         "hetero_flat_cache "
@@ -5114,6 +5115,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=5,
         help="変換後にgrouped/flat sampleを比較する件数。0なら無効",
+    )
+    convert_hetero_flat.add_argument(
+        "--progress-interval-sec",
+        type=float,
+        default=None,
+        help="flat cache変換のprogress log間隔。既定はHETERO_FLAT_CACHE_PROGRESS_INTERVAL_SECまたは60秒",
     )
     convert_hetero_flat.set_defaults(func=_cmd_convert_hetero_to_flat)
 

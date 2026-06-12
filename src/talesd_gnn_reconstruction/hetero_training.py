@@ -46,9 +46,27 @@ def _finite_rows(values: np.ndarray) -> np.ndarray:
     return values[np.all(np.isfinite(values), axis=1)]
 
 
-def fit_hetero_scalers(dataset: H5HeteroGraphDataset, indices: Sequence[int]) -> dict[str, StandardScaler]:
+def fit_hetero_scalers(
+    dataset: H5HeteroGraphDataset,
+    indices: Sequence[int],
+    *,
+    show_progress: bool = True,
+    progress_interval_sec: float | None = None,
+) -> dict[str, StandardScaler]:
     if not indices:
         raise ValueError("cannot fit hetero scalers with no training indices")
+    if progress_interval_sec is None:
+        progress_interval_sec = float(os.environ.get("TALESD_GNN_SCALER_PROGRESS_INTERVAL_SEC", "60"))
+    progress_interval_sec = float(progress_interval_sec)
+    start_time = time.monotonic()
+    last_progress = start_time
+    total = int(len(indices))
+    print(
+        "hetero_scaler_start "
+        f"train_graphs={total} "
+        f"progress_interval_sec={progress_interval_sec:.6g}",
+        flush=True,
+    )
     first = dataset.scaler_sample(int(indices[0]))
     detector_stats = RunningFeatureStats(int(first["detector_features"].shape[1]))
     detector_context_stats = RunningFeatureStats(int(first["detector_context_features"].shape[1]))
@@ -62,7 +80,7 @@ def fit_hetero_scalers(dataset: H5HeteroGraphDataset, indices: Sequence[int]) ->
         )
         for relation in EDGE_TYPE_BY_RELATION
     }
-    for index in indices:
+    for ordinal, index in enumerate(indices, start=1):
         sample = dataset.scaler_sample(int(index))
         detector_stats.update(_finite_rows(sample["detector_features"]))
         detector_context_stats.update(_finite_rows(sample["detector_context_features"]))
@@ -72,6 +90,25 @@ def fit_hetero_scalers(dataset: H5HeteroGraphDataset, indices: Sequence[int]) ->
         for relation, features in sample["edge_features_by_type"].items():
             if relation in edge_stats and features.shape[0] > 0 and features.shape[1] > 0:
                 edge_stats[relation].update(_finite_rows(features))
+        now = time.monotonic()
+        if (
+            show_progress
+            and progress_interval_sec > 0.0
+            and (now - last_progress) >= progress_interval_sec
+        ):
+            elapsed = now - start_time
+            rate = float(ordinal) / elapsed if elapsed > 0 else 0.0
+            remaining = max(total - ordinal, 0)
+            eta = float(remaining) / rate if rate > 0 else float("nan")
+            print(
+                "hetero_scaler_progress "
+                f"index={ordinal}/{total} "
+                f"graphs_per_sec={rate:.6g} "
+                f"elapsed={_format_duration(elapsed)} "
+                f"eta={_format_duration(eta) if np.isfinite(eta) else 'unknown'}",
+                flush=True,
+            )
+            last_progress = now
     if target_stats.count == 0:
         raise ValueError("training graphs have no MC targets")
     scalers = {
@@ -83,6 +120,14 @@ def fit_hetero_scalers(dataset: H5HeteroGraphDataset, indices: Sequence[int]) ->
     for relation, stats in edge_stats.items():
         if stats.mean.shape[0] > 0:
             scalers[f"edge:{relation}"] = stats.to_scaler()
+    elapsed = time.monotonic() - start_time
+    print(
+        "hetero_scaler_done "
+        f"train_graphs={total} "
+        f"elapsed={_format_duration(elapsed)} "
+        f"graphs_per_sec={float(total) / elapsed if elapsed > 0 else 0.0:.6g}",
+        flush=True,
+    )
     return scalers
 
 
@@ -592,6 +637,25 @@ def _batch_tensor(batch: Any, name: str) -> Any:
     return getattr(batch, name, None) if hasattr(batch, name) else batch[name]
 
 
+def _batch_num_graphs(batch: Any) -> int:
+    if isinstance(batch, dict):
+        if "num_graphs" in batch:
+            return int(batch["num_graphs"])
+        target = batch.get("target")
+        if target is not None and hasattr(target, "shape") and len(target.shape) > 0:
+            return int(target.shape[0])
+        detector = batch.get("detector")
+        if isinstance(detector, dict) and "batch" in detector and detector["batch"].numel() > 0:
+            return int(detector["batch"].max().item()) + 1
+        return 0
+    if hasattr(batch, "num_graphs"):
+        return int(batch.num_graphs)
+    target = getattr(batch, "target", None) if hasattr(batch, "target") else None
+    if target is not None and hasattr(target, "shape") and len(target.shape) > 0:
+        return int(target.shape[0])
+    return 0
+
+
 def _parse_relation_filter(value: str | None) -> set[str]:
     if value is None:
         value = os.environ.get("HETERO_RELATIONS", "all")
@@ -843,7 +907,7 @@ def _make_hetero_loader(
     context = os.environ.get("TALESD_GNN_DATALOADER_CONTEXT", "default").strip().lower()
     if context not in {"default", "fork", "forkserver", "spawn"}:
         raise ValueError("TALESD_GNN_DATALOADER_CONTEXT must be default, fork, forkserver, or spawn")
-    effective_timeout = 0.0 if worker_count <= 0 else float(timeout_sec if timeout_sec is not None else 300.0)
+    effective_timeout = 0.0 if worker_count <= 0 else float(timeout_sec if timeout_sec is not None else 120.0)
     kwargs: dict[str, Any] = {
         "batch_size": max(int(batch_size), 1),
         "shuffle": bool(shuffle),
@@ -876,6 +940,77 @@ def _make_hetero_loader(
     return DataLoader(Subset(dataset, list(indices)), **kwargs)
 
 
+class _DataWaitHeartbeat:
+    def __init__(
+        self,
+        *,
+        split_name: str,
+        epoch: int,
+        batch_index: int,
+        total_batches: int,
+        warn_sec: float,
+        timeout_sec: float,
+        num_workers: int,
+    ) -> None:
+        self.split_name = str(split_name)
+        self.epoch = int(epoch)
+        self.batch_index = int(batch_index)
+        self.total_batches = int(total_batches)
+        self.warn_sec = float(warn_sec)
+        self.timeout_sec = float(timeout_sec)
+        self.num_workers = int(num_workers)
+        self.start = 0.0
+        self._enabled = False
+        self._old_handler: Any = None
+
+    def __enter__(self) -> "_DataWaitHeartbeat":
+        if self.warn_sec <= 0.0:
+            return self
+        try:
+            import signal
+            import threading
+
+            if threading.current_thread() is not threading.main_thread():
+                return self
+            old_timer = signal.getitimer(signal.ITIMER_REAL)
+            if old_timer[0] > 0.0:
+                return self
+            self.start = time.monotonic()
+
+            def _handler(_signum: int, _frame: Any) -> None:
+                waiting = time.monotonic() - self.start
+                print(
+                    "hetero_data_wait_heartbeat "
+                    f"split={self.split_name} "
+                    f"epoch={self.epoch} "
+                    f"batch={self.batch_index}/{self.total_batches} "
+                    f"waiting_s={waiting:.6g} "
+                    f"warn_sec={self.warn_sec:.6g} "
+                    f"timeout_sec={self.timeout_sec:.6g} "
+                    f"num_workers={self.num_workers}",
+                    flush=True,
+                )
+
+            self._old_handler = signal.getsignal(signal.SIGALRM)
+            signal.signal(signal.SIGALRM, _handler)
+            signal.setitimer(signal.ITIMER_REAL, self.warn_sec, self.warn_sec)
+            self._enabled = True
+        except Exception:
+            self._enabled = False
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
+        if not self._enabled:
+            return
+        try:
+            import signal
+
+            signal.setitimer(signal.ITIMER_REAL, 0.0, 0.0)
+            signal.signal(signal.SIGALRM, self._old_handler)
+        except Exception:
+            pass
+
+
 def _next_loader_batch(
     iterator: Any,
     *,
@@ -890,7 +1025,16 @@ def _next_loader_batch(
 ) -> tuple[Any, float]:
     start = time.monotonic()
     try:
-        batch = next(iterator)
+        with _DataWaitHeartbeat(
+            split_name=split_name,
+            epoch=epoch,
+            batch_index=batch_index,
+            total_batches=total_batches,
+            warn_sec=warn_sec,
+            timeout_sec=timeout_sec,
+            num_workers=num_workers,
+        ):
+            batch = next(iterator)
     except Exception as exc:
         soft, hard = _nofile_limit()
         sharing_strategy = os.environ.get("TALESD_GNN_TORCH_SHARING_STRATEGY") or os.environ.get(
@@ -1087,10 +1231,28 @@ def _predict_hetero_numpy(
     enabled_relations: set[str] | None = None,
     max_neighbors: dict[str, int] | None = None,
     non_blocking: bool = False,
+    progress_interval_sec: float | None = None,
+    split_name: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     import torch
 
     model.eval()
+    if progress_interval_sec is None:
+        progress_interval_sec = float(os.environ.get("TALESD_GNN_PREDICT_PROGRESS_INTERVAL_SEC", "60"))
+    progress_interval_sec = float(progress_interval_sec)
+    split_label = str(split_name or desc).strip().replace(" ", "_")
+    total_batches = int(len(loader))
+    total_graphs = int(len(loader.dataset)) if hasattr(loader, "dataset") else 0
+    predict_start = time.monotonic()
+    last_progress = predict_start
+    print(
+        "hetero_predict_start "
+        f"split={split_label} "
+        f"desc={desc!r} "
+        f"batches={total_batches} "
+        f"graphs={total_graphs}",
+        flush=True,
+    )
     if len(loader) == 0:
         print(
             "hetero_split_warning "
@@ -1098,6 +1260,11 @@ def _predict_hetero_numpy(
             flush=True,
         )
         empty_target = np.zeros((0, int(target_dim)), dtype=np.float32)
+        print(
+            "hetero_predict_done "
+            f"split={split_label} elapsed={_format_duration(time.monotonic() - predict_start)} graphs_per_sec=0",
+            flush=True,
+        )
         return empty_target, empty_target, None, None, None, None
     pred_rows: list[np.ndarray] = []
     target_rows: list[np.ndarray] = []
@@ -1105,8 +1272,13 @@ def _predict_hetero_numpy(
     mass_label_rows: list[np.ndarray] = []
     quality_score_rows: list[np.ndarray] = []
     error_prediction_rows: list[np.ndarray] = []
+    graphs_seen = 0
     with torch.no_grad():
-        for batch in _progress(loader, desc=desc, total=len(loader), enabled=show_progress, leave=False):
+        for batch_index, batch in enumerate(
+            _progress(loader, desc=desc, total=total_batches, enabled=show_progress, leave=False),
+            start=1,
+        ):
+            graphs_seen += _batch_num_graphs(batch)
             batch = _filter_batch_relations(
                 batch,
                 enabled_relations=set(EDGE_TYPE_BY_RELATION) if enabled_relations is None else enabled_relations,
@@ -1140,6 +1312,26 @@ def _predict_hetero_numpy(
                     energy_scale=error_energy_scale,
                 )
                 error_prediction_rows.append(predicted_errors.detach().cpu().numpy())
+            now = time.monotonic()
+            if progress_interval_sec > 0.0 and (now - last_progress) >= progress_interval_sec:
+                elapsed = now - predict_start
+                rate = float(graphs_seen) / elapsed if elapsed > 0 else 0.0
+                remaining_batches = max(total_batches - batch_index, 0)
+                batch_rate = float(batch_index) / elapsed if elapsed > 0 else 0.0
+                eta = float(remaining_batches) / batch_rate if batch_rate > 0 else float("nan")
+                print(
+                    "hetero_predict_progress "
+                    f"split={split_label} "
+                    f"desc={desc!r} "
+                    f"batch={batch_index}/{total_batches} "
+                    f"graphs={graphs_seen}/{total_graphs} "
+                    f"elapsed={_format_duration(elapsed)} "
+                    f"rate={rate:.6g}/s "
+                    f"graphs_per_sec={rate:.6g} "
+                    f"eta={_format_duration(eta) if np.isfinite(eta) else 'unknown'}",
+                    flush=True,
+                )
+                last_progress = now
     if not pred_rows or not target_rows:
         print(
             "hetero_split_warning "
@@ -1147,7 +1339,22 @@ def _predict_hetero_numpy(
             flush=True,
         )
         empty_target = np.zeros((0, int(target_dim)), dtype=np.float32)
+        print(
+            "hetero_predict_done "
+            f"split={split_label} elapsed={_format_duration(time.monotonic() - predict_start)} graphs_per_sec=0",
+            flush=True,
+        )
         return empty_target, empty_target, None, None, None, None
+    elapsed = time.monotonic() - predict_start
+    print(
+        "hetero_predict_done "
+        f"split={split_label} "
+        f"batches={total_batches} "
+        f"graphs={graphs_seen}/{total_graphs} "
+        f"elapsed={_format_duration(elapsed)} "
+        f"graphs_per_sec={float(graphs_seen) / elapsed if elapsed > 0 else 0.0:.6g}",
+        flush=True,
+    )
     return (
         np.concatenate(pred_rows, axis=0),
         np.concatenate(target_rows, axis=0),
@@ -1307,9 +1514,14 @@ def train_hetero_model(
     enabled_relations = _parse_relation_filter(hetero_relations)
     max_neighbors = _max_neighbors_by_relation()
     if dataloader_timeout_sec is None:
-        dataloader_timeout_sec = float(os.environ.get("TALESD_GNN_DATALOADER_TIMEOUT_SEC", "300"))
+        dataloader_timeout_sec = float(os.environ.get("TALESD_GNN_DATALOADER_TIMEOUT_SEC", "120"))
     if data_wait_warn_sec is None:
         data_wait_warn_sec = float(os.environ.get("TALESD_GNN_DATA_WAIT_WARN_SEC", "30"))
+    train_progress_interval_sec = float(os.environ.get("TALESD_GNN_TRAIN_PROGRESS_INTERVAL_SEC", "60"))
+    validation_progress_interval_sec = float(os.environ.get("TALESD_GNN_VALIDATION_PROGRESS_INTERVAL_SEC", "60"))
+    predict_progress_interval_sec = float(os.environ.get("TALESD_GNN_PREDICT_PROGRESS_INTERVAL_SEC", "60"))
+    scaler_progress_interval_sec = float(os.environ.get("TALESD_GNN_SCALER_PROGRESS_INTERVAL_SEC", "60"))
+    flat_cache_progress_interval_sec = float(os.environ.get("HETERO_FLAT_CACHE_PROGRESS_INTERVAL_SEC", "60"))
     _raise_nofile_limit(context="main")
     pin_memory = device.startswith("cuda") if pin_memory is None else bool(pin_memory)
     loss_mode = str(loss_mode).lower()
@@ -1337,6 +1549,11 @@ def train_hetero_model(
     if loss_mode in {"physics-nll", "nll"} and not error_prediction:
         error_prediction = True
         error_loss_weight = 0.0
+    setup_step_start = time.perf_counter()
+    print(
+        "hetero_setup stage=dataset_init_start",
+        flush=True,
+    )
     base_dataset_class = hetero_dataset_class_for_paths(graphs_path)
     base_dataset = base_dataset_class(
         graphs_path,
@@ -1345,6 +1562,19 @@ def train_hetero_model(
     )
     if len(base_dataset) < 2:
         raise ValueError("hetero training needs at least two graphs with MC targets")
+    print(
+        "hetero_setup "
+        f"stage=dataset_init_done graphs={len(base_dataset)} "
+        f"dataset_class={base_dataset_class.__name__} "
+        f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
+        flush=True,
+    )
+    setup_step_start = time.perf_counter()
+    print(
+        "hetero_setup "
+        f"stage=split_start split_mode={split_mode} graphs={len(base_dataset)} split_workers={int(split_workers)}",
+        flush=True,
+    )
     split = _split_dataset(
         base_dataset,
         split_mode=split_mode,
@@ -1359,16 +1589,47 @@ def train_hetero_model(
     split = _limit_split_for_debug(split, max_graphs=max_graphs, seed=seed)
     train_indices = split["train"]
     val_indices = split["val"]
+    print(
+        "hetero_setup "
+        f"stage=split_done train_graphs={len(train_indices)} "
+        f"val_graphs={len(val_indices)} test_graphs={len(split['test'])} "
+        f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
+        flush=True,
+    )
     if max_val_graphs is not None and len(val_indices) > max_val_graphs:
         rng = random.Random(int(seed) + 2000003)
         val_indices_for_epoch = sorted(rng.sample(list(val_indices), int(max_val_graphs)))
     else:
         val_indices_for_epoch = list(val_indices)
+    setup_step_start = time.perf_counter()
+    print(
+        "hetero_setup "
+        f"stage=relation_stats_start max_samples={max(int(loader_memory_estimate_samples), 1)}",
+        flush=True,
+    )
     _log_relation_stats(base_dataset, train_indices, max_samples=max(int(loader_memory_estimate_samples), 1))
+    print(
+        "hetero_setup "
+        f"stage=relation_stats_done elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
+        flush=True,
+    )
+    setup_step_start = time.perf_counter()
+    print(
+        "hetero_setup "
+        f"stage=graph_byte_estimate_start max_samples={max(int(loader_memory_estimate_samples), 1)}",
+        flush=True,
+    )
     graph_byte_summary = _estimate_graph_bytes(
         base_dataset,
         train_indices,
         max_samples=max(int(loader_memory_estimate_samples), 1),
+    )
+    print(
+        "hetero_setup "
+        f"stage=graph_byte_estimate_done sampled_graphs={graph_byte_summary['sampled_graphs']} "
+        f"p95_graph_bytes={graph_byte_summary['p95_graph_bytes']} "
+        f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
+        flush=True,
     )
     loader_settings = _resolve_loader_settings(
         requested_workers=int(num_workers),
@@ -1430,29 +1691,96 @@ def train_hetero_model(
         f"full_eval={int(checkpoint_milestone_full_eval)}",
         flush=True,
     )
+    dataloader_timeout_effective = float(dataloader_timeout_sec) if int(num_workers) > 0 else 0.0
+    positive_intervals = [
+        value
+        for value in (
+            train_progress_interval_sec,
+            validation_progress_interval_sec,
+            predict_progress_interval_sec,
+            scaler_progress_interval_sec,
+            flat_cache_progress_interval_sec,
+            float(data_wait_warn_sec),
+            dataloader_timeout_effective,
+        )
+        if float(value) > 0.0
+    ]
+    expected_max_silent_sec = max(positive_intervals) if positive_intervals else 0.0
+    warning = ' warning="num_workers=0 may block without DataLoader timeout"' if int(num_workers) <= 0 else ""
+    print(
+        "hetero_logging_config "
+        f"train_progress_interval_sec={train_progress_interval_sec:.6g} "
+        f"validation_progress_interval_sec={validation_progress_interval_sec:.6g} "
+        f"predict_progress_interval_sec={predict_progress_interval_sec:.6g} "
+        f"scaler_progress_interval_sec={scaler_progress_interval_sec:.6g} "
+        f"flat_cache_progress_interval_sec={flat_cache_progress_interval_sec:.6g} "
+        f"dataloader_timeout_sec={float(dataloader_timeout_sec):.6g} "
+        f"dataloader_timeout_effective={dataloader_timeout_effective:.6g} "
+        f"data_wait_warn_sec={float(data_wait_warn_sec):.6g} "
+        f"expected_max_silent_sec={expected_max_silent_sec:.6g}"
+        f"{warning}",
+        flush=True,
+    )
+    setup_step_start = time.perf_counter()
+    print(
+        "hetero_setup stage=waveform_shape_start",
+        flush=True,
+    )
     _waveform_channels, resolved_waveform_length = _resolve_waveform_shape(
         base_dataset,
         train_indices,
         waveform_length=waveform_length,
     )
+    print(
+        "hetero_setup "
+        f"stage=waveform_shape_done channels={int(_waveform_channels)} "
+        f"waveform_length={int(resolved_waveform_length)} "
+        f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
+        flush=True,
+    )
     first = base_dataset.training_sample(train_indices[0])
     scaler_metadata = _scaler_cache_metadata(base_dataset, train_indices, first)
     scalers = None
+    scaler_cache_hit = False
+    setup_step_start = time.perf_counter()
+    print(
+        "hetero_setup "
+        f"stage=scaler_start cache_path={resolved_scaler_cache_path} reuse={int(reuse_scaler_cache)}",
+        flush=True,
+    )
     if resolved_scaler_cache_path is not None and reuse_scaler_cache:
         scalers = _read_scaler_cache(resolved_scaler_cache_path, scaler_metadata)
+        scaler_cache_hit = scalers is not None
     elif resolved_scaler_cache_path is not None:
         print(
             f"hetero_scaler_cache stage=disabled reuse=0 path={resolved_scaler_cache_path}",
             flush=True,
         )
     if scalers is None:
-        scalers = fit_hetero_scalers(base_dataset, train_indices)
+        scalers = fit_hetero_scalers(
+            base_dataset,
+            train_indices,
+            show_progress=show_progress,
+            progress_interval_sec=scaler_progress_interval_sec,
+        )
         if resolved_scaler_cache_path is not None:
             _write_scaler_cache(resolved_scaler_cache_path, scaler_metadata, scalers)
+    print(
+        "hetero_setup "
+        f"stage=scaler_done cache_hit={int(scaler_cache_hit)} "
+        f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
+        flush=True,
+    )
     target_dim = int(first["target"].shape[0])
     classification_dim = 1 if mass_classification else 0
     quality_dim = 1 if quality_prediction else 0
     error_dim = 3 if error_prediction else 0
+    setup_step_start = time.perf_counter()
+    print(
+        "hetero_setup "
+        f"stage=model_init_start architecture={model_architecture} waveform_encoder={waveform_encoder}",
+        flush=True,
+    )
     model = MinimalHeteroTaleSdGNN.from_sample(
         first,
         target_dim=target_dim,
@@ -1473,6 +1801,15 @@ def train_hetero_model(
         attention_heads=attention_heads,
         readout_heads=readout_heads,
     ).to(device)
+    total_parameters = sum(int(parameter.numel()) for parameter in model.parameters())
+    trainable_parameters = sum(int(parameter.numel()) for parameter in model.parameters() if parameter.requires_grad)
+    print(
+        "hetero_setup "
+        f"stage=model_init_done parameters={total_parameters} "
+        f"trainable_parameters={trainable_parameters} "
+        f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
+        flush=True,
+    )
     amp_enabled = bool(device.startswith("cuda") and amp_mode != "off")
     amp_dtype = torch.float16 if amp_mode == "fp16" else torch.bfloat16
     grad_scaler = torch.amp.GradScaler("cuda", enabled=bool(amp_enabled and amp_dtype is torch.float16))
@@ -1496,6 +1833,13 @@ def train_hetero_model(
         )
     base_dataset.close()
 
+    setup_step_start = time.perf_counter()
+    print(
+        "hetero_setup "
+        f"stage=dataloader_start training_data_format={training_data_format} "
+        f"final_eval_data_format={final_eval_data_format}",
+        flush=True,
+    )
     dataset_class: Any = H5TensorHeteroGraphDataset if training_data_format == "fast_tensor" else H5PyGHeteroGraphDataset
     train_dataset = dataset_class(
         graphs_path,
@@ -1565,10 +1909,17 @@ def train_hetero_model(
         timeout_sec=0.0,
         data_format=final_eval_data_format,
     )
+    print(
+        "hetero_setup "
+        f"stage=dataloader_done train_batches={len(train_loader)} "
+        f"val_batches={len(val_loader)} final_val_batches={len(final_val_loader)} "
+        f"test_batches={len(test_loader)} "
+        f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
+        flush=True,
+    )
     non_blocking_h2d = bool(pin_memory and str(device).startswith("cuda"))
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     history: list[dict[str, Any]] = []
-    train_progress_interval_sec = float(os.environ.get("TALESD_GNN_TRAIN_PROGRESS_INTERVAL_SEC", "60"))
     train_loader_batches = len(train_loader)
     output = Path(output_path).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1788,6 +2139,8 @@ def train_hetero_model(
             enabled_relations=enabled_relations,
             max_neighbors=max_neighbors,
             non_blocking=non_blocking_h2d,
+            progress_interval_sec=predict_progress_interval_sec,
+            split_name=f"validation_{desc_suffix}",
         )
         pred_test, target_test, mass_logit_test, mass_label_test, quality_test, error_test = _predict_hetero_numpy(
             model,
@@ -1806,6 +2159,8 @@ def train_hetero_model(
             enabled_relations=enabled_relations,
             max_neighbors=max_neighbors,
             non_blocking=non_blocking_h2d,
+            progress_interval_sec=predict_progress_interval_sec,
+            split_name=f"test_{desc_suffix}",
         )
 
         def _add_reconstruction_metric(split_name: str, pred: np.ndarray, target: np.ndarray) -> dict[str, Any] | None:
@@ -1936,6 +2291,7 @@ def train_hetero_model(
         profile_optim = 0.0
         profile_valid_waveforms = 0
         profile_detector_nodes = 0
+        train_graphs_seen = 0
         if profile_enabled and device.startswith("cuda"):
             torch.cuda.reset_peak_memory_stats()
         print(
@@ -1959,6 +2315,7 @@ def train_hetero_model(
             )
             if profile_enabled:
                 profile_data_wait += data_wait
+            train_graphs_seen += _batch_num_graphs(batch)
             h2d_start = time.perf_counter()
             batch = _filter_batch_relations(batch, enabled_relations=enabled_relations, max_neighbors=max_neighbors)
             batch = _batch_to_device(batch, device, non_blocking=non_blocking_h2d)
@@ -2063,7 +2420,7 @@ def train_hetero_model(
             ):
                 elapsed = now - epoch_start
                 rate = float(batch_index) / elapsed if elapsed > 0 else 0.0
-                graphs_seen = min(batch_index * max(int(batch_size), 1), len(train_indices))
+                graphs_seen = min(train_graphs_seen, len(train_indices))
                 graphs_per_sec = float(graphs_seen) / elapsed if elapsed > 0 else 0.0
                 remaining = max(train_loader_batches - batch_index, 0)
                 eta = float(remaining) / rate if rate > 0 else float("nan")
@@ -2102,6 +2459,8 @@ def train_hetero_model(
         run_validation = bool(validate_every_n_epochs > 0 and epoch % int(validate_every_n_epochs) == 0)
         if run_validation:
             val_batches = len(val_loader)
+            val_graphs_seen = 0
+            last_validation_progress = time.monotonic()
             print(
                 "hetero_validation_start "
                 f"epoch={epoch}/{int(epochs)} val_batches={val_batches} val_graphs={len(val_indices_for_epoch)}",
@@ -2121,6 +2480,7 @@ def train_hetero_model(
                         timeout_sec=float(dataloader_timeout_sec),
                         warn_sec=float(data_wait_warn_sec),
                     )
+                    val_graphs_seen += _batch_num_graphs(batch)
                     batch = _filter_batch_relations(
                         batch,
                         enabled_relations=enabled_relations,
@@ -2174,6 +2534,32 @@ def train_hetero_model(
                             val_component_counts[name] = 0
                         val_component_sums[name] = val_component_sums[name] + detached
                         val_component_counts[name] += 1
+                    now = time.monotonic()
+                    if (
+                        validation_progress_interval_sec > 0.0
+                        and (now - last_validation_progress) >= validation_progress_interval_sec
+                    ):
+                        elapsed = now - val_start
+                        graph_rate = float(val_graphs_seen) / elapsed if elapsed > 0 else 0.0
+                        batch_rate = float(val_batch_index) / elapsed if elapsed > 0 else 0.0
+                        eta = (
+                            float(max(val_batches - val_batch_index, 0)) / batch_rate
+                            if batch_rate > 0
+                            else float("nan")
+                        )
+                        print(
+                            "hetero_validation_progress "
+                            f"epoch={epoch}/{int(epochs)} "
+                            f"batch={val_batch_index}/{val_batches} "
+                            f"graphs={val_graphs_seen}/{len(val_indices_for_epoch)} "
+                            f"elapsed={_format_duration(elapsed)} "
+                            f"rate={graph_rate:.6g}/s "
+                            f"graphs_per_sec={graph_rate:.6g} "
+                            f"eta={_format_duration(eta) if np.isfinite(eta) else 'unknown'} "
+                            f"loss={_mean_tensor_value(val_loss_sum, val_loss_count):.6g}",
+                            flush=True,
+                        )
+                        last_validation_progress = now
         _profile_sync()
         validation_time = time.perf_counter() - val_start
         validation_graphs_per_sec = (

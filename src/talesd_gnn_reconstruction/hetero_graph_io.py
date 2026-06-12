@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from bisect import bisect_right
 from pathlib import Path
 from typing import Any
@@ -297,6 +299,66 @@ def _log_h5_layout(*, graph_path: Path, format_label: str, compression: str, n_e
     )
 
 
+def _format_duration(seconds: float) -> str:
+    seconds = max(float(seconds), 0.0)
+    if seconds < 60.0:
+        return f"{seconds:.0f}s"
+    minutes, sec = divmod(int(seconds), 60)
+    if minutes < 60:
+        return f"{minutes}m{sec:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
+
+
+def _progress_interval_from_env(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return float(default)
+    text = str(value).strip()
+    if not text:
+        return float(default)
+    return float(text)
+
+
+def _maybe_log_flat_cache_progress(
+    *,
+    stage: str,
+    index: int,
+    total: int,
+    start_time: float,
+    last_log_time: float,
+    interval_sec: float,
+    force: bool = False,
+    detector_nodes: int | None = None,
+    pulse_nodes: int | None = None,
+    edges: int | None = None,
+) -> float:
+    now = time.monotonic()
+    if not force and (interval_sec <= 0.0 or (now - last_log_time) < interval_sec):
+        return last_log_time
+    elapsed = max(now - start_time, 0.0)
+    rate = float(index) / elapsed if elapsed > 0.0 else 0.0
+    remaining = max(int(total) - int(index), 0)
+    eta = float(remaining) / rate if rate > 0.0 else float("nan")
+    extras = ""
+    if detector_nodes is not None:
+        extras += f" detector_nodes={int(detector_nodes)}"
+    if pulse_nodes is not None:
+        extras += f" pulse_nodes={int(pulse_nodes)}"
+    if edges is not None:
+        extras += f" edges={int(edges)}"
+    print(
+        "hetero_flat_cache_progress "
+        f"stage={stage} "
+        f"index={int(index)}/{int(total)} "
+        f"events_per_sec={rate:.6g}{extras} "
+        f"elapsed={_format_duration(elapsed)} "
+        f"eta={_format_duration(eta) if np.isfinite(eta) else 'unknown'}",
+        flush=True,
+    )
+    return now
+
+
 def hetero_dataset_class_for_paths(path: str | Path | Sequence[str | Path]) -> type:
     paths = [Path(path).expanduser()] if isinstance(path, (str, Path)) else [Path(item).expanduser() for item in path]
     formats = {hetero_h5_format(item) for item in paths}
@@ -346,13 +408,21 @@ def _verify_flat_cache_samples(
     flat_path: Path,
     *,
     verify_samples: int,
+    progress_interval_sec: float = 60.0,
 ) -> int:
     indices = _verification_indices(len(source), verify_samples)
     if not indices:
         return 0
     flat = H5FlatHeteroGraphDataset(flat_path, require_target=source.require_target, load_attrs=False)
     try:
-        for index in indices:
+        start = time.monotonic()
+        last_log = start
+        print(
+            "hetero_flat_cache_verify_start "
+            f"path={flat_path} samples={len(indices)} progress_interval_sec={float(progress_interval_sec):.6g}",
+            flush=True,
+        )
+        for ordinal, index in enumerate(indices, start=1):
             grouped = source[int(index)]
             cached = flat[int(index)]
             for key in (
@@ -394,9 +464,20 @@ def _verify_flat_cache_samples(
                 grouped_waveform,
                 cached_waveform[..., : grouped_waveform.shape[-1]],
             )
+            last_log = _maybe_log_flat_cache_progress(
+                stage="verify",
+                index=ordinal,
+                total=len(indices),
+                start_time=start,
+                last_log_time=last_log,
+                interval_sec=float(progress_interval_sec),
+                force=ordinal == len(indices),
+            )
         print(
             "hetero_flat_cache_verify "
-            f"samples={len(indices)} status=ok path={flat_path}",
+            f"samples={len(indices)} "
+            f"elapsed_sec={time.monotonic() - start:.6g} "
+            f"status=ok path={flat_path}",
             flush=True,
         )
         return len(indices)
@@ -428,11 +509,26 @@ def convert_hetero_to_flat_cache(
     *,
     compression: str | None = "lzf",
     verify_samples: int = 5,
+    progress_interval_sec: float | None = None,
 ) -> dict[str, Any]:
+    if progress_interval_sec is None:
+        progress_interval_sec = _progress_interval_from_env("HETERO_FLAT_CACHE_PROGRESS_INTERVAL_SEC", 60.0)
+    progress_interval_sec = float(progress_interval_sec)
+    output = Path(output_path).expanduser()
+    compression_label = "none" if compression in {None, "", "none"} else str(compression)
+    total_start = time.monotonic()
+    print(
+        "hetero_flat_cache_start "
+        f"input={input_paths} output={output} compression={compression_label} "
+        f"verify_samples={int(verify_samples)} "
+        f"progress_interval_sec={progress_interval_sec:.6g}",
+        flush=True,
+    )
     source = H5HeteroGraphDataset(input_paths, require_target=True, load_attrs=True)
     try:
         if len(source) == 0:
             raise ValueError("cannot convert empty hetero HDF5 dataset")
+        n_events = int(len(source))
         detector_total = 0
         pulse_total = 0
         edge_totals = {relation: 0 for relation in EDGE_RELATIONS}
@@ -443,7 +539,14 @@ def convert_hetero_to_flat_cache(
         detector_context_dim = 0
         pulse_dim = 0
         edge_dims = {relation: 0 for relation in EDGE_RELATIONS}
-        for index in range(len(source)):
+        count_start = time.monotonic()
+        last_count_log = count_start
+        print(
+            "hetero_flat_cache_count_start "
+            f"events={n_events}",
+            flush=True,
+        )
+        for index in range(n_events):
             sample = source[index]
             detector_total += int(sample["detector_features"].shape[0])
             pulse_total += int(sample["pulse_features"].shape[0])
@@ -456,13 +559,24 @@ def convert_hetero_to_flat_cache(
             for relation in EDGE_RELATIONS:
                 edge_totals[relation] += int(sample["edge_index_by_type"][relation].shape[1])
                 edge_dims[relation] = max(edge_dims[relation], int(sample["edge_features_by_type"][relation].shape[1]))
+            last_count_log = _maybe_log_flat_cache_progress(
+                stage="count",
+                index=index + 1,
+                total=n_events,
+                start_time=count_start,
+                last_log_time=last_count_log,
+                interval_sec=progress_interval_sec,
+                force=(index + 1) == n_events,
+                detector_nodes=detector_total,
+                pulse_nodes=pulse_total,
+                edges=sum(edge_totals.values()),
+            )
 
-        output = Path(output_path).expanduser()
         output.parent.mkdir(parents=True, exist_ok=True)
         filter_kwargs = {} if compression in {None, "", "none"} else {"compression": compression}
-        detector_offsets = np.zeros(len(source) + 1, dtype=np.int64)
-        pulse_offsets = np.zeros(len(source) + 1, dtype=np.int64)
-        edge_offsets = {relation: np.zeros(len(source) + 1, dtype=np.int64) for relation in EDGE_RELATIONS}
+        detector_offsets = np.zeros(n_events + 1, dtype=np.int64)
+        pulse_offsets = np.zeros(n_events + 1, dtype=np.int64)
+        edge_offsets = {relation: np.zeros(n_events + 1, dtype=np.int64) for relation in EDGE_RELATIONS}
         with h5py.File(output, "w") as handle:
             handle.attrs["format"] = FLAT_FORMAT_NAME
             handle.attrs["format_version"] = FORMAT_VERSION
@@ -493,8 +607,8 @@ def convert_hetero_to_flat_cache(
             arrays.create_dataset("pulse_lids", shape=(pulse_total,), dtype=np.int64, **filter_kwargs)
             arrays.create_dataset("pulse_detector_index", shape=(pulse_total,), dtype=np.int64, **filter_kwargs)
             arrays.create_dataset("pulse_bounds", shape=(pulse_total, 4), dtype=np.float32, **filter_kwargs)
-            arrays.create_dataset("target", shape=(len(source), target_dim), dtype=np.float32, **filter_kwargs)
-            arrays.create_dataset("particle_label", shape=(len(source),), dtype=np.float32, **filter_kwargs)
+            arrays.create_dataset("target", shape=(n_events, target_dim), dtype=np.float32, **filter_kwargs)
+            arrays.create_dataset("particle_label", shape=(n_events,), dtype=np.float32, **filter_kwargs)
             edge_index_group = arrays.create_group("edge_index_by_type")
             edge_feature_group = arrays.create_group("edge_features_by_type")
             for relation in EDGE_RELATIONS:
@@ -511,10 +625,10 @@ def convert_hetero_to_flat_cache(
                     **filter_kwargs,
                 )
             string_dtype = h5py.string_dtype(encoding="utf-8")
-            metadata.create_dataset("event_id", shape=(len(source),), dtype=string_dtype)
-            metadata.create_dataset("source_path", shape=(len(source),), dtype=string_dtype)
-            metadata.create_dataset("source_index", shape=(len(source),), dtype=np.int64)
-            metadata.create_dataset("metadata_json", shape=(len(source),), dtype=string_dtype)
+            metadata.create_dataset("event_id", shape=(n_events,), dtype=string_dtype)
+            metadata.create_dataset("source_path", shape=(n_events,), dtype=string_dtype)
+            metadata.create_dataset("source_index", shape=(n_events,), dtype=np.int64)
+            metadata.create_dataset("metadata_json", shape=(n_events,), dtype=string_dtype)
 
             # Root-level names are the public training-cache schema. The
             # arrays/offsets groups are kept as hard-link aliases so older
@@ -538,7 +652,15 @@ def convert_hetero_to_flat_cache(
             detector_cursor = 0
             pulse_cursor = 0
             edge_cursors = {relation: 0 for relation in EDGE_RELATIONS}
-            for index in range(len(source)):
+            write_start = time.monotonic()
+            last_write_log = write_start
+            print(
+                "hetero_flat_cache_write_start "
+                f"events={n_events} detector_nodes={int(detector_total)} "
+                f"pulse_nodes={int(pulse_total)} edges={int(sum(edge_totals.values()))}",
+                flush=True,
+            )
+            for index in range(n_events):
                 sample = source[index]
                 n_detector = int(sample["detector_features"].shape[0])
                 n_pulse = int(sample["pulse_features"].shape[0])
@@ -583,6 +705,18 @@ def convert_hetero_to_flat_cache(
                     source_index_value = source._metadata_value(path_index, local_index, "source_index")
                 metadata["source_index"][index] = -1 if source_index_value is None else int(source_index_value)
                 metadata["metadata_json"][index] = _metadata_json(metadata_dict)
+                last_write_log = _maybe_log_flat_cache_progress(
+                    stage="write",
+                    index=index + 1,
+                    total=n_events,
+                    start_time=write_start,
+                    last_log_time=last_write_log,
+                    interval_sec=progress_interval_sec,
+                    force=(index + 1) == n_events,
+                    detector_nodes=detector_cursor,
+                    pulse_nodes=pulse_cursor,
+                    edges=sum(edge_cursors.values()),
+                )
             offsets.create_dataset("detector", data=detector_offsets)
             offsets.create_dataset("pulse", data=pulse_offsets)
             edge_offsets_group = offsets.create_group("edge_by_type")
@@ -591,23 +725,39 @@ def convert_hetero_to_flat_cache(
             handle["detector_offsets"] = offsets["detector"]
             handle["pulse_offsets"] = offsets["pulse"]
             handle["edge_offsets_by_relation"] = edge_offsets_group
-        verified_samples = _verify_flat_cache_samples(source, output, verify_samples=int(verify_samples))
+        verified_samples = _verify_flat_cache_samples(
+            source,
+            output,
+            verify_samples=int(verify_samples),
+            progress_interval_sec=progress_interval_sec,
+        )
         _log_h5_layout(
             graph_path=output,
             format_label="flat_hdf5",
-            compression="none" if compression in {None, "", "none"} else str(compression),
-            n_events=int(len(source)),
+            compression=compression_label,
+            n_events=n_events,
+        )
+        elapsed_sec = time.monotonic() - total_start
+        print(
+            "hetero_flat_cache_done "
+            f"output={output} graphs={n_events} detector_nodes={int(detector_total)} "
+            f"pulse_nodes={int(pulse_total)} edges={int(sum(edge_totals.values()))} "
+            f"compression={compression_label} verified_samples={int(verified_samples)} "
+            f"elapsed_sec={elapsed_sec:.6g} events_per_sec={float(n_events) / elapsed_sec if elapsed_sec > 0 else 0.0:.6g}",
+            flush=True,
         )
         return {
             "output": str(output),
             "format": FLAT_FORMAT_NAME,
-            "graphs": int(len(source)),
+            "graphs": n_events,
             "detector_nodes": int(detector_total),
             "pulse_nodes": int(pulse_total),
             "waveform_channels": int(waveform_channels),
             "waveform_length": int(waveform_length),
-            "compression": "none" if compression in {None, "", "none"} else str(compression),
+            "compression": compression_label,
             "verified_samples": int(verified_samples),
+            "elapsed_sec": float(elapsed_sec),
+            "events_per_sec": float(n_events) / elapsed_sec if elapsed_sec > 0 else 0.0,
         }
     finally:
         source.close()
