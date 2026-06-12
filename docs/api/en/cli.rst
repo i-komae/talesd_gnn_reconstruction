@@ -115,22 +115,36 @@ Implementation path:
 Heterogeneous training
 ----------------------
 
-``train-hetero`` trains from HDF5 files written by ``export-hetero``.
-The training dataset converts each event sample to PyG ``HeteroData`` with
-``hetero_data.sample_to_hetero_data`` so ``torch_geometric.loader.DataLoader``
-can batch variable-size detector/pulse graphs. The model then converts the
-batched ``HeteroData`` back to the repository's explicit tensor dictionary with
-``hetero_data.hetero_data_to_tensors``.
+``train-hetero`` trains from HDF5 files written by ``export-hetero``.  For long
+production training, first convert the grouped event HDF5 into a single flat
+training cache.  The flat cache stores detector, pulse, waveform, edge, target,
+and label arrays contiguously with event offset tables, so each event is loaded
+by slicing large datasets instead of opening many small gzip-compressed
+datasets.
+
+.. code-block:: bash
+
+   .venv/bin/talesd-gnn convert-hetero-to-flat-cache \
+     --input /path/to/graphs/grouped_or_shards \
+     --output /path/to/graphs/hetero_flat_training_cache.h5 \
+     --compression lzf
+
+The training DataLoader defaults to the fast tensor dictionary path. PyG
+``HeteroData`` conversion remains available for compatibility and analysis, but
+it is not the preferred long training path.
 
 .. code-block:: bash
 
    .venv/bin/talesd-gnn train-hetero \
-     --graphs /path/to/graphs/hetero \
+     --graphs /path/to/graphs/hetero_flat_training_cache.h5 \
      -o /path/to/output/checkpoints/hetero_reco_mass.pt \
      --epochs 128 \
-     --batch-size 128 \
+     --batch-size 32 \
+     --gradient-accumulation-steps 4 \
      --model-architecture hetero_attention \
      --waveform-encoder transformer \
+     --waveform-transformer-max-tokens 128 \
+     --training-data-format fast_tensor \
      --loss-mode physics \
      --mass-classification \
      --split-mode source-stratified \
@@ -145,8 +159,8 @@ Implementation path:
    talesd-gnn train-hetero
      -> cli._cmd_train_hetero()
        -> hetero_training.train_hetero_model()
-         -> hetero_graph_io.H5HeteroGraphDataset
-         -> hetero_data.sample_to_hetero_data()
+         -> hetero_graph_io.H5FlatHeteroGraphDataset or H5HeteroGraphDataset
+         -> hetero_training.H5TensorHeteroGraphDataset
          -> hetero_model.MinimalHeteroTaleSdGNN
          -> metrics.py / diagnostics.py
 

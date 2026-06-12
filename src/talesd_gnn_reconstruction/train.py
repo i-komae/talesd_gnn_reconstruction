@@ -313,10 +313,15 @@ def _decode_h5_string(value: Any) -> str:
     return str(value)
 
 
+_FLAT_HETERO_FORMAT_NAME = "talesd_gnn_hetero_graphs_flat"
+
+
 def _stratified_source_scan_payloads(
     dataset: H5GraphDataset,
-) -> list[tuple[str, int, int, list[int] | None, list[str] | None]]:
-    payloads: list[tuple[str, int, int, list[int] | None, list[str] | None]] = []
+    *,
+    max_shard_events: int | None = None,
+) -> list[tuple[str, int, int, list[int] | None, list[str] | None, str, int]]:
+    payloads: list[tuple[str, int, int, list[int] | None, list[str] | None, str, int]] = []
     global_start = 0
     for path_index in range(len(dataset._path_lengths)):
         path = dataset.paths[path_index]
@@ -325,26 +330,98 @@ def _stratified_source_scan_payloads(
             continue
         selected = dataset._path_local_indices[path_index]
         key_list = dataset._path_key_lists[path_index]
-        payloads.append(
-            (
-                str(path),
-                global_start,
-                n_events,
-                None if selected is None else list(selected[:n_events]),
-                None if key_list is None else list(key_list),
+        with h5py.File(path, "r") as handle:
+            graph_format = str(handle.attrs.get("format", ""))
+        if graph_format == _FLAT_HETERO_FORMAT_NAME and max_shard_events is not None and int(max_shard_events) > 0:
+            chunk_size = max(int(max_shard_events), 1)
+            for local_start in range(0, n_events, chunk_size):
+                local_stop = min(local_start + chunk_size, n_events)
+                selected_chunk = None if selected is None else list(selected[local_start:local_stop])
+                payloads.append(
+                    (
+                        str(path),
+                        global_start + local_start,
+                        local_stop - local_start,
+                        selected_chunk,
+                        None if key_list is None else list(key_list),
+                        graph_format,
+                        local_start,
+                    )
+                )
+        else:
+            payloads.append(
+                (
+                    str(path),
+                    global_start,
+                    n_events,
+                    None if selected is None else list(selected[:n_events]),
+                    None if key_list is None else list(key_list),
+                    graph_format,
+                    0,
+                )
             )
-        )
         global_start += n_events
     return payloads
 
 
 def _scan_stratified_source_shard(
-    payload: tuple[str, int, int, list[int] | None, list[str] | None],
+    payload: tuple[str, int, int, list[int] | None, list[str] | None, str, int],
 ) -> tuple[int, dict[str, list[int]], dict[str, dict[str, Any]]]:
-    path, global_start, n_events, selected_local_indices, key_list = payload
+    path, global_start, n_events, selected_local_indices, key_list, graph_format, local_start = payload
     source_to_indices: dict[str, list[int]] = {}
     source_stats: dict[str, dict[str, Any]] = {}
     with h5py.File(path, "r") as h5:
+        if graph_format == _FLAT_HETERO_FORMAT_NAME:
+            metadata = h5.get("metadata")
+            source_dataset = metadata.get("source_path") if metadata is not None else None
+            label_dataset = h5.get("particle_label_all")
+            if label_dataset is None:
+                label_dataset = h5.get("arrays/particle_label")
+            target_dataset = h5.get("target_all")
+            if target_dataset is None:
+                target_dataset = h5.get("arrays/target")
+            for offset in range(n_events):
+                local_index = (
+                    int(selected_local_indices[offset])
+                    if selected_local_indices is not None
+                    else int(local_start) + offset
+                )
+                global_index = global_start + offset
+                source_path = ""
+                if source_dataset is not None and local_index < len(source_dataset):
+                    source_path = _decode_h5_string(source_dataset[local_index])
+                if not source_path:
+                    source_path = f"unknown:{global_index}"
+                source_group = source_group_key(source_path)
+                source_to_indices.setdefault(source_group, []).append(global_index)
+
+                particle_label = None
+                if label_dataset is not None and local_index < len(label_dataset):
+                    value = float(label_dataset[local_index])
+                    if np.isfinite(value):
+                        particle_label = value
+
+                stats = source_stats.setdefault(
+                    source_group,
+                    {
+                        "target_sum": None,
+                        "target_count": 0,
+                        "particle_label": particle_label,
+                    },
+                )
+                if target_dataset is not None and local_index < len(target_dataset):
+                    target = target_dataset[local_index]
+                    if target.shape[0] >= 6 and np.all(np.isfinite(target)):
+                        target_values = target.astype(np.float64)
+                        if stats["target_sum"] is None:
+                            stats["target_sum"] = np.zeros_like(target_values, dtype=np.float64)
+                        if stats["target_sum"].shape == target_values.shape:
+                            stats["target_sum"] += target_values
+                            stats["target_count"] += 1
+                if stats["particle_label"] is None:
+                    stats["particle_label"] = particle_label
+            return n_events, source_to_indices, source_stats
+
         events = h5["events"]
         metadata = h5.get("metadata")
         source_values = None
@@ -439,7 +516,9 @@ def _scan_stratified_source_paths_parallel(
 ) -> tuple[dict[str, list[int]], dict[str, dict[str, Any]]]:
     if show_progress:
         _progress_write(f"stage=start scan_stratified_source_paths payloads graphs={len(dataset)}")
-    payloads = _stratified_source_scan_payloads(dataset)
+    requested_workers = min(max(int(workers), 1), max(len(dataset), 1))
+    max_shard_events = max(int(math.ceil(len(dataset) / max(requested_workers * 4, 1))), 4096)
+    payloads = _stratified_source_scan_payloads(dataset, max_shard_events=max_shard_events)
     worker_count = min(max(int(workers), 1), max(len(payloads), 1))
     if show_progress:
         _progress_write(
@@ -562,7 +641,9 @@ def split_indices_by_stratified_source_path(
     del min_group_sources
     source_to_indices: dict[str, list[int]] = {}
     source_stats: dict[str, dict[str, Any]] = {}
-    if int(workers) > 1 and len(dataset) >= 1024 and len(dataset._path_lengths) > 1:
+    if int(workers) > 1 and len(dataset) >= 1024 and (
+        len(dataset._path_lengths) > 1 or bool(getattr(dataset, "_path_scan_chunkable", False))
+    ):
         source_to_indices, source_stats = _scan_stratified_source_paths_parallel(
             dataset,
             show_progress=show_progress,

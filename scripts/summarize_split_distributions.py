@@ -13,15 +13,19 @@ import numpy as np
 
 from talesd_gnn_reconstruction.cli import _expand_h5_graph_paths
 from talesd_gnn_reconstruction.dataset import H5GraphDataset
+from talesd_gnn_reconstruction.hetero_graph_io import FLAT_FORMAT_NAME as HETERO_FLAT_FORMAT_NAME
 from talesd_gnn_reconstruction.hetero_graph_io import FORMAT_NAME as HETERO_FORMAT_NAME
+from talesd_gnn_reconstruction.hetero_graph_io import EDGE_RELATIONS
+from talesd_gnn_reconstruction.hetero_graph_io import H5FlatHeteroGraphDataset
 from talesd_gnn_reconstruction.hetero_graph_io import H5HeteroGraphDataset
+from talesd_gnn_reconstruction.hetero_graph_io import hetero_dataset_class_for_paths
 from talesd_gnn_reconstruction.metrics import direction_columns_for_dim, direction_to_angles
 from talesd_gnn_reconstruction.progress import progress
 from talesd_gnn_reconstruction.progress import write as progress_write
 from talesd_gnn_reconstruction.train import source_group_key, split_indices_by_stratified_source_path
 
 
-GraphDataset = H5GraphDataset | H5HeteroGraphDataset
+GraphDataset = H5GraphDataset | H5HeteroGraphDataset | H5FlatHeteroGraphDataset
 
 
 def _finite(value: Any) -> float | None:
@@ -423,6 +427,18 @@ def redraw_split_distribution_plots(plot_data_json: Path, output_dir: Path | Non
 
 
 def _shape_counts(dataset: GraphDataset, index: int) -> tuple[int | None, int | None, int | None, int | None]:
+    if isinstance(dataset, H5FlatHeteroGraphDataset):
+        path_index, local_index = dataset._locate(index)  # noqa: SLF001 - summary script uses dataset internals for cheap shapes.
+        handle = dataset._handle(path_index)  # noqa: SLF001
+        detector_slice = dataset._slice_offsets(handle, "detector", local_index)  # noqa: SLF001
+        pulse_slice = dataset._slice_offsets(handle, "pulse", local_index)  # noqa: SLF001
+        n_detector_nodes = int(detector_slice.stop - detector_slice.start)
+        n_pulse_nodes = int(pulse_slice.stop - pulse_slice.start)
+        n_edges = 0
+        for relation in EDGE_RELATIONS:
+            offsets = dataset._edge_offset_dataset(handle, relation)  # noqa: SLF001
+            n_edges += int(offsets[local_index + 1] - offsets[local_index])
+        return n_detector_nodes + n_pulse_nodes, n_edges, n_detector_nodes, n_pulse_nodes
     path_index, _local_index, key = dataset._locate(index)  # noqa: SLF001 - summary script uses dataset internals for cheap shapes.
     group = dataset._handle(path_index)["events"][key]  # noqa: SLF001
     if isinstance(dataset, H5HeteroGraphDataset):
@@ -447,6 +463,29 @@ def _shape_counts(dataset: GraphDataset, index: int) -> tuple[int | None, int | 
 
 
 def _event_attrs(dataset: GraphDataset, index: int) -> dict[str, Any]:
+    if isinstance(dataset, H5FlatHeteroGraphDataset):
+        path_index, local_index = dataset._locate(index)  # noqa: SLF001 - summary script uses dataset internals for cheap attrs.
+        handle = dataset._handle(path_index)  # noqa: SLF001
+        metadata = handle.get("metadata")
+        attrs: dict[str, Any] = {}
+        if metadata is None:
+            return attrs
+        for name in ("event_id", "source_path", "source_index"):
+            if name in metadata and local_index < len(metadata[name]):
+                value = metadata[name][local_index]
+                if isinstance(value, bytes):
+                    value = value.decode("utf-8", errors="replace")
+                attrs[name] = value
+        if "metadata_json" in metadata and local_index < len(metadata["metadata_json"]):
+            metadata_json = metadata["metadata_json"][local_index]
+            if isinstance(metadata_json, bytes):
+                metadata_json = metadata_json.decode("utf-8", errors="replace")
+            if metadata_json:
+                try:
+                    attrs.update(json.loads(str(metadata_json)))
+                except json.JSONDecodeError:
+                    pass
+        return attrs
     path_index, _local_index, key = dataset._locate(index)  # noqa: SLF001 - summary script uses dataset internals for cheap attrs.
     group = dataset._handle(path_index)["events"][key]  # noqa: SLF001
     attrs = dict(group.attrs.items())
@@ -549,7 +588,13 @@ def summarize(
             "seed": int(seed),
             "energy_bin_width": float(energy_bin_width),
             "split_mode": "source-stratified",
-            "graph_format": "hetero" if isinstance(dataset, H5HeteroGraphDataset) else "homogeneous",
+            "graph_format": (
+                "hetero_flat"
+                if isinstance(dataset, H5FlatHeteroGraphDataset)
+                else "hetero"
+                if isinstance(dataset, H5HeteroGraphDataset)
+                else "homogeneous"
+            ),
             "plot_files": plot_files,
             "redraw_artifacts": (
                 {"split_distribution_plot_data_json": plot_result["plot_data_json"]}
@@ -597,11 +642,16 @@ def main() -> None:
     progress_write(f"stage=done split_distribution_summary expand_paths shards={len(paths)}")
     progress_write(f"stage=start split_distribution_summary detect_format first_path={paths[0]}")
     with h5py.File(paths[0], "r") as handle:
-        is_hetero = str(handle.attrs.get("format", "")) == HETERO_FORMAT_NAME
-    progress_write(f"stage=done split_distribution_summary detect_format hetero={int(is_hetero)}")
+        first_format = str(handle.attrs.get("format", ""))
+        is_hetero = first_format in {HETERO_FORMAT_NAME, HETERO_FLAT_FORMAT_NAME}
+    progress_write(
+        "stage=done split_distribution_summary detect_format "
+        f"hetero={int(is_hetero)} format={first_format}"
+    )
     progress_write("stage=start split_distribution_summary dataset_init")
     if is_hetero:
-        dataset: GraphDataset = H5HeteroGraphDataset(
+        dataset_class = hetero_dataset_class_for_paths(paths)
+        dataset: GraphDataset = dataset_class(
             paths,
             require_target=True,
             require_particle_label=True,

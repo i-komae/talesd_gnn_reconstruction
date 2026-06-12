@@ -119,21 +119,32 @@ Heterogeneous training
 ----------------------
 
 ``train-hetero`` は ``export-hetero`` で作成したHDF5を読みます。
-学習用 dataset は各 event sample を ``hetero_data.sample_to_hetero_data`` で
-PyG ``HeteroData`` に変換します。これにより
-``torch_geometric.loader.DataLoader`` が detector/pulse 数の違う graph を batch 化できます。
-model は batch 化された ``HeteroData`` を ``hetero_data.hetero_data_to_tensors`` で
-この repository の明示的な tensor dict に戻して処理します。
+本番の長い学習では、まず grouped event HDF5 を single-file flat training cache に変換します。
+flat cache は detector、pulse、waveform、edge、target、label を大きな連続datasetとして保存し、
+event offset table で1 event分をsliceして読むため、多数の小さいgzip datasetをランダムに開く経路を避けます。
+
+.. code-block:: bash
+
+   .venv/bin/talesd-gnn convert-hetero-to-flat-cache \
+     --input /path/to/graphs/grouped_or_shards \
+     --output /path/to/graphs/hetero_flat_training_cache.h5 \
+     --compression lzf
+
+学習 DataLoader の既定は fast tensor dict 経路です。
+PyG ``HeteroData`` への変換は互換性と解析用に残していますが、長い本番学習では推奨経路ではありません。
 
 .. code-block:: bash
 
    .venv/bin/talesd-gnn train-hetero \
-     --graphs /path/to/graphs/hetero \
+     --graphs /path/to/graphs/hetero_flat_training_cache.h5 \
      -o /path/to/output/checkpoints/hetero_reco_mass.pt \
      --epochs 128 \
-     --batch-size 128 \
+     --batch-size 32 \
+     --gradient-accumulation-steps 4 \
      --model-architecture hetero_attention \
      --waveform-encoder transformer \
+     --waveform-transformer-max-tokens 128 \
+     --training-data-format fast_tensor \
      --loss-mode physics \
      --mass-classification \
      --split-mode source-stratified \
@@ -148,8 +159,8 @@ model は batch 化された ``HeteroData`` を ``hetero_data.hetero_data_to_ten
    talesd-gnn train-hetero
      -> cli._cmd_train_hetero()
        -> hetero_training.train_hetero_model()
-         -> hetero_graph_io.H5HeteroGraphDataset
-         -> hetero_data.sample_to_hetero_data()
+         -> hetero_graph_io.H5FlatHeteroGraphDataset または H5HeteroGraphDataset
+         -> hetero_training.H5TensorHeteroGraphDataset
          -> hetero_model.MinimalHeteroTaleSdGNN
          -> metrics.py / diagnostics.py
 

@@ -292,6 +292,7 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 sample = flat[2]
                 self.assertEqual(sample["detector_features"].shape[1], DETECTOR_FEATURE_DIM)
                 self.assertEqual(sample["pulse_features"].shape[1], PULSE_FEATURE_DIM)
+                self.assertEqual(sample["metadata"]["date"], 260606)
             finally:
                 original.close()
                 flat.close()
@@ -317,6 +318,46 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             self.assertIn("hetero_graph_io format=flat_hdf5", cli_result.stdout)
             self.assertIn("hetero_flat_cache", cli_result.stdout)
             self.assertEqual(hetero_graph_count(cli_flat_path), 3)
+
+    def test_flat_split_distribution_summary_uses_flat_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            flat_path = Path(tmpdir) / "synthetic_hetero.flat.h5"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(1030):
+                    graph = _synthetic_graph(index)
+                    particle = "proton" if index % 2 == 0 else "iron"
+                    graph.particle_label = 0.0 if particle == "proton" else 1.0
+                    graph.metadata["source_path"] = f"/synthetic/{particle}/DAT{index:06d}16_gea_trg_000.dst.gz"
+                    graph.metadata["time"] = 120000 + (index % 60)
+                    graph.metadata["parttype"] = 14 if particle == "proton" else 5626
+                    write_hetero_graph(handle, index, graph)
+            convert_hetero_to_flat_cache(graph_path, flat_path, compression="none")
+            dataset = H5FlatHeteroGraphDataset(flat_path, require_target=True, require_particle_label=True)
+            try:
+                payload = summarize(
+                    dataset,
+                    val_fraction=0.20,
+                    test_fraction=0.20,
+                    source_val_fraction=0.20,
+                    source_test_fraction=0.20,
+                    seed=123,
+                    energy_bin_width=0.1,
+                    split_workers=0,
+                    show_progress=False,
+                    plot_dir=None,
+                )
+            finally:
+                dataset.close()
+
+        self.assertEqual(payload["config"]["graph_format"], "hetero_flat")
+        total_events = sum(split["events"] for split in payload["totals"].values())
+        self.assertEqual(total_events, 1030)
+        for split in payload["totals"].values():
+            self.assertEqual(split["sources"], split["independent_showers"])
+            self.assertGreater(split["detector_nodes"]["n"], 0)
+            self.assertGreater(split["pulse_nodes"]["n"], 0)
+            self.assertGreater(split["event_time_hour"]["n"], 0)
 
     def test_fast_tensor_batch_collates_and_relation_filtering(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

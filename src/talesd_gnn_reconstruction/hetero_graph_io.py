@@ -324,7 +324,7 @@ def convert_hetero_to_flat_cache(
     *,
     compression: str | None = "lzf",
 ) -> dict[str, Any]:
-    source = H5HeteroGraphDataset(input_paths, require_target=True, load_attrs=False)
+    source = H5HeteroGraphDataset(input_paths, require_target=True, load_attrs=True)
     try:
         if len(source) == 0:
             raise ValueError("cannot convert empty hetero HDF5 dataset")
@@ -409,6 +409,7 @@ def convert_hetero_to_flat_cache(
             metadata.create_dataset("event_id", shape=(len(source),), dtype=string_dtype)
             metadata.create_dataset("source_path", shape=(len(source),), dtype=string_dtype)
             metadata.create_dataset("source_index", shape=(len(source),), dtype=np.int64)
+            metadata.create_dataset("metadata_json", shape=(len(source),), dtype=string_dtype)
 
             # Root-level names are the public training-cache schema. The
             # arrays/offsets groups are kept as hard-link aliases so older
@@ -476,6 +477,7 @@ def convert_hetero_to_flat_cache(
                     path_index, local_index, _key = source._locate(index)
                     source_index_value = source._metadata_value(path_index, local_index, "source_index")
                 metadata["source_index"][index] = -1 if source_index_value is None else int(source_index_value)
+                metadata["metadata_json"][index] = _metadata_json(metadata_dict)
             offsets.create_dataset("detector", data=detector_offsets)
             offsets.create_dataset("pulse", data=pulse_offsets)
             edge_offsets_group = offsets.create_group("edge_by_type")
@@ -752,6 +754,9 @@ class H5FlatHeteroGraphDataset:
         self._handles: dict[int, h5py.File] = {}
         self._path_lengths: list[int] = []
         self._cumulative_lengths: list[int] = []
+        self._path_local_indices: list[list[int] | None] = []
+        self._path_key_lists: list[list[str] | None] = []
+        self._path_scan_chunkable = True
         self.columns_json = "{}"
         total = 0
         for path_index, graph_path in enumerate(self.paths):
@@ -775,6 +780,8 @@ class H5FlatHeteroGraphDataset:
             total += n_events
             self._path_lengths.append(n_events)
             self._cumulative_lengths.append(total)
+            self._path_local_indices.append(None)
+            self._path_key_lists.append(None)
 
     def __len__(self) -> int:
         return self._cumulative_lengths[-1] if self._cumulative_lengths else 0
@@ -939,11 +946,20 @@ class H5FlatHeteroGraphDataset:
             "particle_label": particle_label,
         }
         if self.load_attrs:
-            sample["metadata"] = {
+            metadata = {
                 "event_id": self._decode_text(handle["metadata/event_id"][local_index]),
                 "source_path": self._decode_text(handle["metadata/source_path"][local_index]),
                 "source_index": int(handle["metadata/source_index"][local_index]),
             }
+            if "metadata_json" in handle["metadata"]:
+                metadata_json = self._decode_text(handle["metadata/metadata_json"][local_index])
+                if metadata_json:
+                    try:
+                        metadata.update(json.loads(metadata_json))
+                    except json.JSONDecodeError:
+                        pass
+            sample["metadata"] = metadata
+            sample["attrs"] = dict(metadata)
         return sample
 
 
