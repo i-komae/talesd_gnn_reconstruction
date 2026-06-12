@@ -4388,6 +4388,11 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         checkpoint_milestones=args.checkpoint_milestones,
         checkpoint_milestone_full_eval=args.checkpoint_milestone_full_eval,
         allow_train_loss_checkpoint=args.allow_train_loss_checkpoint,
+        milestone_eval_epochs=args.milestone_eval_epochs,
+        milestone_eval_split=args.milestone_eval_split,
+        milestone_eval_max_graphs=args.milestone_eval_max_graphs,
+        milestone_eval_current_model=args.milestone_eval_current_model,
+        milestone_eval_best_model=args.milestone_eval_best_model,
         pin_memory=None if not args.no_pin_memory else False,
         loader_memory_budget_gib=args.loader_memory_budget_gib,
         loader_memory_estimate_samples=args.loader_memory_estimate_samples,
@@ -4424,6 +4429,34 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
             f"rmse_log10_energy={test.get('rmse_log10_energy', float('nan')):.6g} "
             f"core_68_km={test.get('core_68_km', float('nan')):.6g} "
             f"angular_68_deg={test.get('angular_68_deg', float('nan')):.6g}"
+        )
+
+
+def _cmd_evaluate_hetero_checkpoint(args: argparse.Namespace) -> None:
+    from .hetero_training import evaluate_hetero_checkpoint
+
+    graphs = _resolve_graph_args(args.graphs, args.graphs_list)
+    result = evaluate_hetero_checkpoint(
+        graphs_path=graphs,
+        checkpoint_path=args.checkpoint,
+        output_path=args.output,
+        split=args.split,
+        data_format=args.data_format,
+        max_graphs=args.max_graphs,
+        batch_size=args.batch_size,
+        device=args.device,
+        seed=args.seed,
+        show_progress=not args.no_progress,
+    )
+    print(f"checkpoint evaluation: {args.output}")
+    for split_name, payload in result.get("metrics_by_split", {}).items():
+        metrics = dict(payload.get("metrics", {}))
+        print(
+            f"{split_name}: "
+            f"n_events={metrics.get('n_events', 0)} "
+            f"rmse_log10_energy={metrics.get('rmse_log10_energy', float('nan'))} "
+            f"angular_68_deg={metrics.get('angular_68_deg', float('nan'))} "
+            f"core_68_km={metrics.get('core_68_km', float('nan'))}"
         )
 
 
@@ -5047,6 +5080,49 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="validationを実行しないepochでtrain lossによるbenchmark checkpoint更新を明示的に許可する",
     )
+    train_hetero.add_argument(
+        "--milestone-eval-epochs",
+        type=lambda value: [int(item) for item in str(value).split(",") if item.strip()],
+        default=None,
+        help="current model の軽量milestone評価を実行するepoch list。空文字なら無効。既定は8,16,32,64",
+    )
+    train_hetero.add_argument(
+        "--milestone-eval-split",
+        default=None,
+        help="milestone評価split。validation または validation,test。既定はvalidation",
+    )
+    train_hetero.add_argument(
+        "--milestone-eval-max-graphs",
+        type=int,
+        default=None,
+        help="milestone評価で使う最大graph数。0なら対象split全体",
+    )
+    train_hetero.add_argument(
+        "--milestone-eval-current-model",
+        dest="milestone_eval_current_model",
+        action="store_true",
+        default=None,
+        help="milestoneでそのepochのcurrent modelを評価する",
+    )
+    train_hetero.add_argument(
+        "--no-milestone-eval-current-model",
+        dest="milestone_eval_current_model",
+        action="store_false",
+        help="milestoneでcurrent modelを評価しない",
+    )
+    train_hetero.add_argument(
+        "--milestone-eval-best-model",
+        dest="milestone_eval_best_model",
+        action="store_true",
+        default=None,
+        help="milestoneでその時点のbest modelも評価する",
+    )
+    train_hetero.add_argument(
+        "--no-milestone-eval-best-model",
+        dest="milestone_eval_best_model",
+        action="store_false",
+        help="milestoneでbest modelを評価しない",
+    )
     train_hetero.add_argument("--no-pin-memory", action="store_true", help="CUDA転送用のpinned memoryを使わない")
     train_hetero.add_argument(
         "--loader-memory-budget-gib",
@@ -5099,6 +5175,28 @@ def build_parser() -> argparse.ArgumentParser:
     train_hetero.add_argument("--data-wait-warn-sec", type=float, default=None)
     train_hetero.add_argument("--no-progress", action="store_true")
     train_hetero.set_defaults(func=_cmd_train_hetero)
+
+    eval_hetero = sub.add_parser(
+        "evaluate-hetero-checkpoint",
+        help="hetero checkpointを保存済みsplitで軽量評価し、validation/test metrics JSONを書く",
+    )
+    eval_hetero.add_argument("--graphs", nargs="*", default=[], help="checkpoint作成時と同じhetero HDF5 graph/shard/directory")
+    eval_hetero.add_argument("--graphs-list", action="append", default=[], help="hetero HDF5 shard path list")
+    eval_hetero.add_argument("--checkpoint", required=True, help="train-heteroで作成したhetero checkpoint .pt")
+    eval_hetero.add_argument("-o", "--output", required=True, help="出力metrics JSON")
+    eval_hetero.add_argument("--split", default="validation", help="validation, test, または validation,test")
+    eval_hetero.add_argument(
+        "--data-format",
+        choices=["fast_tensor", "pyg"],
+        default="fast_tensor",
+        help="評価DataLoader形式。通常metricsはfast_tensorを使う",
+    )
+    eval_hetero.add_argument("--max-graphs", type=int, default=0, help="評価する最大graph数。0ならsplit全体")
+    eval_hetero.add_argument("--batch-size", type=int, default=128)
+    eval_hetero.add_argument("--device", default="auto")
+    eval_hetero.add_argument("--seed", type=int, default=12345)
+    eval_hetero.add_argument("--no-progress", action="store_true")
+    eval_hetero.set_defaults(func=_cmd_evaluate_hetero_checkpoint)
 
     convert_hetero_flat = sub.add_parser(
         "convert-hetero-to-flat-cache",

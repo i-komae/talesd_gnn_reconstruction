@@ -19,7 +19,7 @@ from .hetero_data import hetero_sample_to_training_tensors
 from .hetero_graph_io import H5HeteroGraphDataset, H5PyGHeteroGraphDataset, hetero_dataset_class_for_paths
 from .hetero_model import MinimalHeteroTaleSdGNN
 from .hetero_model import NODE_TYPE_BY_RELATION
-from .metrics import binary_classification_metrics, reconstruction_metrics
+from .metrics import angular_error_deg, binary_classification_metrics, reconstruction_metrics
 from .progress import progress as _progress
 from .train import (
     _error_prediction_loss,
@@ -1399,6 +1399,118 @@ def _append_component_mean(row: dict[str, Any], prefix: str, component_sums: dic
             row[f"{prefix}_{name}_loss"] = _mean_tensor_value(value_sum, count)
 
 
+def _parse_epoch_list(value: Sequence[int] | str | None, *, env_name: str, default: str) -> tuple[int, ...]:
+    if value is None:
+        value = os.environ.get(env_name, default)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ()
+        values = [item.strip() for item in text.split(",") if item.strip()]
+    else:
+        values = list(value)
+    return tuple(sorted({int(item) for item in values if int(item) > 0}))
+
+
+def _parse_milestone_splits(value: Sequence[str] | str | None) -> tuple[str, ...]:
+    if value is None:
+        value = os.environ.get("MILESTONE_EVAL_SPLIT", "validation")
+    if isinstance(value, str):
+        raw_values = [item.strip().lower() for item in value.split(",") if item.strip()]
+    else:
+        raw_values = [str(item).strip().lower() for item in value if str(item).strip()]
+    normalized: list[str] = []
+    for item in raw_values:
+        if item in {"val", "validation"}:
+            split_name = "validation"
+        elif item == "test":
+            split_name = "test"
+        else:
+            raise ValueError("milestone_eval_split must contain validation and optionally test")
+        if split_name not in normalized:
+            normalized.append(split_name)
+    return tuple(normalized)
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if np.isfinite(result) else None
+
+
+def _safe_correlation(left: np.ndarray, right: np.ndarray) -> float | None:
+    left = np.asarray(left, dtype=np.float64).reshape(-1)
+    right = np.asarray(right, dtype=np.float64).reshape(-1)
+    mask = np.isfinite(left) & np.isfinite(right)
+    if int(np.count_nonzero(mask)) < 2:
+        return None
+    left = left[mask]
+    right = right[mask]
+    if float(np.std(left)) <= 0.0 or float(np.std(right)) <= 0.0:
+        return None
+    return float(np.corrcoef(left, right)[0, 1])
+
+
+def _milestone_metric_summary(
+    pred: np.ndarray,
+    target: np.ndarray,
+    mass_logit: np.ndarray | None,
+    mass_label: np.ndarray | None,
+    quality_score: np.ndarray | None,
+    error_prediction: np.ndarray | None,
+) -> dict[str, Any]:
+    if int(pred.shape[0]) == 0 or int(target.shape[0]) == 0:
+        return {"n_events": 0}
+    metrics: dict[str, Any] = dict(reconstruction_metrics(pred, target))
+    metrics["n_events"] = int(pred.shape[0])
+    energy_delta = np.asarray(pred[:, 0] - target[:, 0], dtype=np.float64)
+    metrics["energy_bias_log10"] = _finite_float(np.mean(energy_delta))
+    if "relative_energy_central68_half_width" in metrics:
+        metrics["energy_resolution_fraction"] = metrics["relative_energy_central68_half_width"]
+        metrics["energy_resolution_percent"] = (
+            None
+            if metrics["relative_energy_central68_half_width"] is None
+            else 100.0 * float(metrics["relative_energy_central68_half_width"])
+        )
+
+    if mass_logit is not None and mass_label is not None and int(np.asarray(mass_logit).size) > 0:
+        mass_metrics = binary_classification_metrics(mass_logit, mass_label)
+        for key in ("auc", "accuracy", "balanced_accuracy"):
+            metrics[f"mass_{key}"] = _finite_float(mass_metrics.get(key))
+        logits = np.asarray(mass_logit, dtype=np.float64).reshape(-1)
+        labels = np.asarray(mass_label, dtype=np.float64).reshape(-1)
+        finite = np.isfinite(logits) & np.isfinite(labels)
+        proton = finite & (labels < 0.5)
+        iron = finite & (labels >= 0.5)
+        metrics["mass_logit_mean_proton"] = _finite_float(np.mean(logits[proton])) if np.any(proton) else None
+        metrics["mass_logit_mean_iron"] = _finite_float(np.mean(logits[iron])) if np.any(iron) else None
+
+    if quality_score is not None and int(np.asarray(quality_score).size) > 0:
+        quality = np.asarray(quality_score, dtype=np.float64).reshape(-1)
+        finite_quality = quality[np.isfinite(quality)]
+        metrics["quality_score_mean"] = _finite_float(np.mean(finite_quality)) if finite_quality.size else None
+        metrics["quality_score_std"] = _finite_float(np.std(finite_quality)) if finite_quality.size else None
+        core_error = np.linalg.norm(np.asarray(pred[:, 1:3] - target[:, 1:3], dtype=np.float64), axis=1)
+        angular_error = angular_error_deg(pred, target)
+        rough_error = np.abs(energy_delta) + core_error + angular_error
+        metrics["quality_vs_reconstruction_error_correlation"] = _safe_correlation(quality, rough_error)
+
+    if error_prediction is not None and int(np.asarray(error_prediction).size) > 0:
+        predicted = np.asarray(error_prediction, dtype=np.float64)
+        names = ("energy", "angular", "core")
+        for column, name in enumerate(names[: predicted.shape[1]]):
+            values = predicted[:, column]
+            finite_values = values[np.isfinite(values)]
+            metrics[f"predicted_{name}_error_mean"] = _finite_float(np.mean(finite_values)) if finite_values.size else None
+            metrics[f"predicted_{name}_error_median"] = (
+                _finite_float(np.median(finite_values)) if finite_values.size else None
+            )
+
+    return metrics
+
+
 def train_hetero_model(
     graphs_path: str | Path | Sequence[str | Path],
     output_path: str | Path,
@@ -1472,6 +1584,11 @@ def train_hetero_model(
     checkpoint_milestones: Sequence[int] | None = None,
     checkpoint_milestone_full_eval: bool | None = None,
     allow_train_loss_checkpoint: bool | None = None,
+    milestone_eval_epochs: Sequence[int] | str | None = None,
+    milestone_eval_split: Sequence[str] | str | None = None,
+    milestone_eval_max_graphs: int | None = None,
+    milestone_eval_current_model: bool | None = None,
+    milestone_eval_best_model: bool | None = None,
     pin_memory: bool | None = None,
     loader_memory_budget_gib: float | None = None,
     loader_memory_estimate_samples: int = 512,
@@ -1518,6 +1635,24 @@ def train_hetero_model(
     if allow_train_loss_checkpoint is None:
         allow_train_loss_checkpoint = _env_flag("ALLOW_TRAIN_LOSS_CHECKPOINT", False)
     allow_train_loss_checkpoint = bool(allow_train_loss_checkpoint)
+    milestone_eval_epochs_resolved = _parse_epoch_list(
+        milestone_eval_epochs,
+        env_name="MILESTONE_EVAL_EPOCHS",
+        default="8,16,32,64",
+    )
+    milestone_eval_splits = _parse_milestone_splits(milestone_eval_split)
+    if milestone_eval_max_graphs is None:
+        milestone_eval_max_graphs = int(os.environ.get("MILESTONE_EVAL_MAX_GRAPHS", "0") or 0)
+    milestone_eval_max_graphs = max(int(milestone_eval_max_graphs), 0)
+    if milestone_eval_current_model is None:
+        milestone_eval_current_model = _env_flag("MILESTONE_EVAL_CURRENT_MODEL", True)
+    milestone_eval_current_model = bool(milestone_eval_current_model)
+    if milestone_eval_best_model is None:
+        milestone_eval_best_model = _env_flag("MILESTONE_EVAL_BEST_MODEL", False)
+    milestone_eval_best_model = bool(milestone_eval_best_model)
+    milestone_eval_enabled = bool(
+        milestone_eval_epochs_resolved and milestone_eval_splits and (milestone_eval_current_model or milestone_eval_best_model)
+    )
     max_val_graphs = None if max_val_graphs is None or int(max_val_graphs) <= 0 else int(max_val_graphs)
     max_graphs = None if max_graphs is None or int(max_graphs) <= 0 else int(max_graphs)
     training_data_format = str(
@@ -1725,6 +1860,11 @@ def train_hetero_model(
         f"checkpoint_milestones={','.join(str(epoch) for epoch in milestone_epochs)} "
         f"checkpoint_milestone_full_eval={int(checkpoint_milestone_full_eval)} "
         f"allow_train_loss_checkpoint={int(allow_train_loss_checkpoint)} "
+        f"milestone_eval_epochs={','.join(str(epoch) for epoch in milestone_eval_epochs_resolved)} "
+        f"milestone_eval_splits={','.join(milestone_eval_splits)} "
+        f"milestone_eval_max_graphs={int(milestone_eval_max_graphs)} "
+        f"milestone_eval_current_model={int(milestone_eval_current_model)} "
+        f"milestone_eval_best_model={int(milestone_eval_best_model)} "
         f"val_graphs_per_epoch={len(val_indices_for_epoch)} "
         f"val_num_workers={int(val_num_workers)} "
         f"final_eval_data_format={final_eval_data_format} "
@@ -1737,6 +1877,17 @@ def train_hetero_model(
         f"enabled={int(bool(milestone_epochs))} "
         f"milestones={','.join(str(epoch) for epoch in milestone_epochs)} "
         f"full_eval={int(checkpoint_milestone_full_eval)}",
+        flush=True,
+    )
+    print(
+        "hetero_milestone_eval_config "
+        f"enabled={int(milestone_eval_enabled)} "
+        f"epochs={','.join(str(epoch) for epoch in milestone_eval_epochs_resolved)} "
+        f"splits={','.join(milestone_eval_splits)} "
+        f"current_model={int(milestone_eval_current_model)} "
+        f"best_model={int(milestone_eval_best_model)} "
+        f"max_graphs={int(milestone_eval_max_graphs)} "
+        "diagnostics=0 attention_maps=0 feature_importance=0",
         flush=True,
     )
     dataloader_timeout_effective = float(dataloader_timeout_sec) if int(num_workers) > 0 else 0.0
@@ -1983,6 +2134,7 @@ def train_hetero_model(
     output = Path(output_path).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
     metrics_path = Path(f"{output}.metrics.json")
+    milestone_metrics_jsonl_path = Path(f"{output}.milestone_metrics.jsonl")
 
     def _split_payload() -> dict[str, Any]:
         return {
@@ -2080,6 +2232,11 @@ def train_hetero_model(
             "checkpoint_milestones": [int(epoch) for epoch in milestone_epochs],
             "checkpoint_milestone_full_eval": bool(checkpoint_milestone_full_eval),
             "allow_train_loss_checkpoint": bool(allow_train_loss_checkpoint),
+            "milestone_eval_epochs": [int(epoch) for epoch in milestone_eval_epochs_resolved],
+            "milestone_eval_splits": list(milestone_eval_splits),
+            "milestone_eval_max_graphs": int(milestone_eval_max_graphs),
+            "milestone_eval_current_model": bool(milestone_eval_current_model),
+            "milestone_eval_best_model": bool(milestone_eval_best_model),
             "final_eval_data_format": str(final_eval_data_format),
             "data_loader": {
                 **loader_settings,
@@ -2101,6 +2258,11 @@ def train_hetero_model(
                 "checkpoint_milestones": [int(epoch) for epoch in milestone_epochs],
                 "checkpoint_milestone_full_eval": bool(checkpoint_milestone_full_eval),
                 "allow_train_loss_checkpoint": bool(allow_train_loss_checkpoint),
+                "milestone_eval_epochs": [int(epoch) for epoch in milestone_eval_epochs_resolved],
+                "milestone_eval_splits": list(milestone_eval_splits),
+                "milestone_eval_max_graphs": int(milestone_eval_max_graphs),
+                "milestone_eval_current_model": bool(milestone_eval_current_model),
+                "milestone_eval_best_model": bool(milestone_eval_best_model),
                 "final_eval_data_format": str(final_eval_data_format),
                 "val_num_workers": int(val_num_workers),
                 "dataloader_timeout_sec": float(dataloader_timeout_sec),
@@ -2248,6 +2410,157 @@ def train_hetero_model(
             (pred_val, target_val, mass_logit_val, mass_label_val, quality_val, error_val),
             (pred_test, target_test, mass_logit_test, mass_label_test, quality_test, error_test),
         )
+
+    def _milestone_loader(split_name: str, *, epoch: int, model_kind: str) -> tuple[Any, int]:
+        if split_name == "validation":
+            indices = list(val_indices)
+            default_loader = final_val_loader
+        elif split_name == "test":
+            indices = list(split["test"])
+            default_loader = test_loader
+        else:
+            raise ValueError(f"unsupported milestone split: {split_name}")
+        if milestone_eval_max_graphs <= 0 or len(indices) <= milestone_eval_max_graphs:
+            return default_loader, len(indices)
+        limited_indices = indices[: int(milestone_eval_max_graphs)]
+        loader = _make_hetero_loader(
+            eval_dataset,
+            limited_indices,
+            batch_size=max(int(batch_size), 1),
+            shuffle=False,
+            num_workers=0,
+            prefetch_factor=prefetch_factor,
+            pin_memory=pin_memory,
+            persistent_workers=False,
+            split_name=f"{split_name}_milestone_epoch{int(epoch):04d}_{model_kind}",
+            timeout_sec=0.0,
+            data_format=final_eval_data_format,
+        )
+        return loader, len(limited_indices)
+
+    def _milestone_log_metrics(metrics: dict[str, Any]) -> str:
+        keys = [
+            "rmse_log10_energy",
+            "energy_bias_log10",
+            "angular_68_deg",
+            "core_68_km",
+            "mass_auc",
+            "mass_balanced_accuracy",
+            "quality_score_mean",
+        ]
+        parts: list[str] = []
+        for key in keys:
+            value = metrics.get(key)
+            if value is None:
+                continue
+            try:
+                value_float = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(value_float):
+                parts.append(f"{key}={value_float:.6g}")
+        return " ".join(parts)
+
+    def _write_milestone_record(record: dict[str, Any]) -> None:
+        milestone_metrics_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        with milestone_metrics_jsonl_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True, default=_json_default))
+            handle.write("\n")
+        epoch = int(record["epoch"])
+        split_name = str(record["split"])
+        model_kind = str(record["model_kind"])
+        json_path = output.with_name(f"{output.stem}.milestone_epoch{epoch:04d}.{model_kind}.{split_name}.json")
+        _write_json_atomic(json_path, record)
+
+    def _evaluate_milestone_model(*, epoch: int, model_kind: str, loss_row: dict[str, Any]) -> None:
+        if model_kind == "best" and best_state is None:
+            print(
+                "hetero_milestone_eval_skip "
+                f"epoch={int(epoch)} model=best reason=no_best_checkpoint",
+                flush=True,
+            )
+            return
+        print(
+            "hetero_milestone_eval_start "
+            f"epoch={int(epoch)} splits={','.join(milestone_eval_splits)} model={model_kind}",
+            flush=True,
+        )
+        current_state: dict[str, torch.Tensor] | None = None
+        if model_kind == "best":
+            current_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+            model.load_state_dict({key: value.to(device) for key, value in best_state.items()})
+        try:
+            for split_name in milestone_eval_splits:
+                loader, graph_count = _milestone_loader(split_name, epoch=epoch, model_kind=model_kind)
+                start = time.monotonic()
+                pred, target, mass_logit, mass_label, quality_score, error_pred = _predict_hetero_numpy(
+                    model,
+                    loader,
+                    scalers,
+                    device,
+                    target_dim=target_dim,
+                    mass_classification=mass_classification,
+                    quality_prediction=quality_prediction,
+                    error_prediction=error_prediction,
+                    error_angular_scale_deg=error_angular_scale_deg,
+                    error_core_scale_km=error_core_scale_km,
+                    error_energy_scale=error_energy_scale,
+                    desc=f"hetero milestone {split_name} epoch {int(epoch)} {model_kind}",
+                    show_progress=False,
+                    enabled_relations=enabled_relations,
+                    max_neighbors=max_neighbors,
+                    non_blocking=non_blocking_h2d,
+                    progress_interval_sec=predict_progress_interval_sec,
+                    split_name=f"{split_name}_milestone_epoch{int(epoch):04d}_{model_kind}",
+                )
+                elapsed = time.monotonic() - start
+                metrics_payload = _milestone_metric_summary(pred, target, mass_logit, mass_label, quality_score, error_pred)
+                runtime_payload = {
+                    "elapsed_sec": float(elapsed),
+                    "graphs": int(graph_count),
+                    "graphs_per_sec": float(graph_count) / elapsed if elapsed > 0.0 else 0.0,
+                    "final_eval_data_format": str(final_eval_data_format),
+                    "max_graphs": int(milestone_eval_max_graphs),
+                    "diagnostics": False,
+                    "attention_maps": False,
+                    "feature_importance": False,
+                }
+                record = {
+                    "epoch": int(epoch),
+                    "model_kind": model_kind,
+                    "split": split_name,
+                    "metrics": metrics_payload,
+                    "loss": dict(loss_row),
+                    "runtime": runtime_payload,
+                }
+                _write_milestone_record(record)
+                print(
+                    "hetero_milestone_eval_done "
+                    f"epoch={int(epoch)} split={split_name} "
+                    f"model={model_kind} "
+                    f"elapsed={_format_duration(elapsed)} "
+                    f"graphs={int(graph_count)} "
+                    f"graphs_per_sec={runtime_payload['graphs_per_sec']:.6g}",
+                    flush=True,
+                )
+                print(
+                    "hetero_milestone_metrics "
+                    f"epoch={int(epoch)} split={split_name} model={model_kind} "
+                    f"n_events={int(metrics_payload.get('n_events', 0))} "
+                    f"{_milestone_log_metrics(metrics_payload)}",
+                    flush=True,
+                )
+        finally:
+            if current_state is not None:
+                model.load_state_dict({key: value.to(device) for key, value in current_state.items()})
+
+    def _run_milestone_evaluation(epoch: int, loss_row: dict[str, Any]) -> None:
+        if not milestone_eval_enabled or int(epoch) not in milestone_eval_epochs_resolved:
+            return
+        if milestone_eval_current_model:
+            _evaluate_milestone_model(epoch=int(epoch), model_kind="current", loss_row=loss_row)
+        if milestone_eval_best_model:
+            _evaluate_milestone_model(epoch=int(epoch), model_kind="best", loss_row=loss_row)
 
     def _save_milestone_checkpoint(epoch: int) -> None:
         if best_state is None or best_epoch <= 0:
@@ -2739,6 +3052,7 @@ def train_hetero_model(
                 f"val_loss={val_loss:.6g}",
                 flush=True,
             )
+        _run_milestone_evaluation(int(epoch), epoch_row)
         if int(epoch) in milestone_epochs:
             _save_milestone_checkpoint(int(epoch))
         if (
@@ -2813,8 +3127,135 @@ def train_hetero_model(
     return {
         "checkpoint": str(output),
         "metrics_json": str(metrics_path),
+        "milestone_metrics_jsonl": str(milestone_metrics_jsonl_path),
         "history": history,
         "metrics": metrics,
         "diagnostics": diagnostics,
         "split": checkpoint["split"],
     }
+
+
+def evaluate_hetero_checkpoint(
+    graphs_path: str | Path | Sequence[str | Path],
+    checkpoint_path: str | Path,
+    output_path: str | Path,
+    *,
+    split: str = "validation",
+    data_format: str = "fast_tensor",
+    max_graphs: int = 0,
+    batch_size: int = 128,
+    device: str = "auto",
+    seed: int = 12345,
+    show_progress: bool = True,
+) -> dict[str, Any]:
+    import torch
+
+    device = resolve_device(device)
+    checkpoint_file = Path(checkpoint_path).expanduser()
+    checkpoint = torch.load(checkpoint_file, map_location=device, weights_only=False)
+    model_config = dict(checkpoint["model_config"])
+    architecture = str(model_config.pop("architecture", ""))
+    if architecture not in {"minimal_hetero", "hetero_attention"}:
+        raise ValueError(f"checkpoint architecture {architecture!r} is not supported for hetero checkpoint evaluation")
+    model = MinimalHeteroTaleSdGNN(architecture=architecture, **model_config).to(device)
+    model.load_state_dict(checkpoint["model_state"])
+    model.eval()
+    scalers = _scalers_from_dict(dict(checkpoint["hetero_scalers"]))
+    runtime = dict(checkpoint.get("runtime", {}))
+    target_dim = int(model_config.get("target_dim", 6))
+    mass_classification = int(model_config.get("classification_dim", 0)) > 0
+    quality_prediction = int(model_config.get("quality_dim", 0)) > 0
+    error_prediction = int(model_config.get("error_dim", 0)) > 0
+    waveform_length = int(model_config.get("waveform_length", runtime.get("waveform_length", 0)) or 0)
+    if waveform_length <= 0:
+        raise ValueError("checkpoint model_config has no valid waveform_length")
+    data_format = str(data_format or "fast_tensor").strip()
+    if data_format not in {"fast_tensor", "pyg"}:
+        raise ValueError("data_format must be fast_tensor or pyg")
+    dataset_class: Any = H5TensorHeteroGraphDataset if data_format == "fast_tensor" else H5PyGHeteroGraphDataset
+    dataset = dataset_class(
+        graphs_path,
+        require_target=True,
+        require_particle_label=mass_classification,
+        scalers=scalers,
+        waveform_length=waveform_length,
+    )
+    try:
+        split_info = dict(checkpoint.get("split", {}))
+        split_names = _parse_milestone_splits(split)
+        metrics_by_split: dict[str, Any] = {}
+        output = Path(output_path).expanduser()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        for split_name in split_names:
+            key = "val_indices" if split_name == "validation" else "test_indices"
+            if key not in split_info:
+                raise ValueError(f"checkpoint split has no {key}")
+            indices = [int(value) for value in np.asarray(split_info[key]).reshape(-1)]
+            if int(max_graphs) > 0 and len(indices) > int(max_graphs):
+                rng = random.Random(int(seed))
+                indices = sorted(rng.sample(indices, int(max_graphs)))
+            loader = _make_hetero_loader(
+                dataset,
+                indices,
+                batch_size=max(int(batch_size), 1),
+                shuffle=False,
+                num_workers=0,
+                prefetch_factor=1,
+                pin_memory=False,
+                persistent_workers=False,
+                split_name=f"{split_name}_checkpoint_eval",
+                timeout_sec=0.0,
+                data_format=data_format,
+            )
+            start = time.monotonic()
+            pred, target, mass_logit, mass_label, quality_score, error_pred = _predict_hetero_numpy(
+                model,
+                loader,
+                scalers,
+                device,
+                target_dim=target_dim,
+                mass_classification=mass_classification,
+                quality_prediction=quality_prediction,
+                error_prediction=error_prediction,
+                error_angular_scale_deg=float(runtime.get("error_angular_scale_deg", runtime.get("quality_angular_scale_deg", 1.0))),
+                error_core_scale_km=float(runtime.get("error_core_scale_km", runtime.get("quality_core_scale_km", 0.05))),
+                error_energy_scale=float(runtime.get("error_energy_scale", runtime.get("quality_energy_scale", 0.10))),
+                desc=f"hetero checkpoint eval {split_name}",
+                show_progress=show_progress,
+                enabled_relations=set(runtime.get("enabled_relations") or EDGE_TYPE_BY_RELATION),
+                max_neighbors={},
+                non_blocking=False,
+                progress_interval_sec=float(os.environ.get("TALESD_GNN_PREDICT_PROGRESS_INTERVAL_SEC", "60")),
+                split_name=f"{split_name}_checkpoint_eval",
+            )
+            elapsed = time.monotonic() - start
+            metrics = _milestone_metric_summary(pred, target, mass_logit, mass_label, quality_score, error_pred)
+            metrics_by_split[split_name] = {
+                "metrics": metrics,
+                "runtime": {
+                    "elapsed_sec": float(elapsed),
+                    "graphs": int(len(indices)),
+                    "graphs_per_sec": float(len(indices)) / elapsed if elapsed > 0.0 else 0.0,
+                    "data_format": data_format,
+                    "max_graphs": int(max_graphs),
+                },
+            }
+        payload = {
+            "checkpoint": str(checkpoint_file),
+            "graphs": [str(path) for path in getattr(dataset, "paths", [graphs_path])],
+            "split": str(split),
+            "metrics_by_split": metrics_by_split,
+            "runtime": {
+                "model_architecture": architecture,
+                "target_dim": int(target_dim),
+                "mass_classification": bool(mass_classification),
+                "quality_prediction": bool(quality_prediction),
+                "error_prediction": bool(error_prediction),
+                "data_format": data_format,
+            },
+        }
+        _write_json_atomic(output, payload)
+        print(f"hetero_checkpoint_eval output={output}", flush=True)
+        return payload
+    finally:
+        dataset.close()

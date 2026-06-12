@@ -902,6 +902,88 @@ def _energy_particle_bias_loss(
     return torch.stack(losses).mean()
 
 
+def _reconstruction_loss_with_components(
+    pred_scaled: Any,
+    target_scaled: Any,
+    *,
+    mode: str,
+    target_mean: Any,
+    target_std: Any,
+    energy_weight: float,
+    core_weight: float,
+    direction_weight: float,
+    core_scale_km: float,
+    angular_loss_scale_deg: float,
+) -> tuple[Any, dict[str, Any]]:
+    import torch
+    import torch.nn.functional as F
+
+    if mode == "scaled-mse":
+        delta = pred_scaled - target_scaled
+        direction_slice = direction_columns_for_dim(delta.shape[1])
+        energy_loss = torch.mean(delta[:, 0] * delta[:, 0])
+        core_loss = torch.mean(torch.sum(delta[:, 1:3] * delta[:, 1:3], dim=1))
+        direction_loss = torch.mean(torch.sum(delta[:, direction_slice] * delta[:, direction_slice], dim=1))
+        total_loss = F.mse_loss(pred_scaled, target_scaled)
+        return total_loss, {
+            "energy": energy_loss,
+            "core": core_loss,
+            "direction": direction_loss,
+        }
+    if mode == "weighted-scaled-mse":
+        delta = pred_scaled - target_scaled
+        direction_slice = direction_columns_for_dim(delta.shape[1])
+        energy_loss = torch.mean(delta[:, 0] * delta[:, 0])
+        core_loss = torch.mean(torch.sum(delta[:, 1:3] * delta[:, 1:3], dim=1))
+        direction_loss = torch.mean(torch.sum(delta[:, direction_slice] * delta[:, direction_slice], dim=1))
+        total_loss = (
+            float(energy_weight) * energy_loss
+            + float(core_weight) * core_loss
+            + float(direction_weight) * direction_loss
+        ) / max(float(energy_weight) + float(core_weight) + float(direction_weight), 1.0e-12)
+        return total_loss, {
+            "energy": energy_loss,
+            "core": core_loss,
+            "direction": direction_loss,
+        }
+
+    pred = _inverse_scaled_target_with_unit_direction(pred_scaled, target_mean, target_std)
+    target = _inverse_scaled_target_with_unit_direction(target_scaled, target_mean, target_std)
+    if mode == "hybrid-angle":
+        delta = pred_scaled - target_scaled
+        energy_loss = torch.mean(delta[:, 0] * delta[:, 0])
+        core_loss = torch.mean(torch.sum(delta[:, 1:3] * delta[:, 1:3], dim=1))
+        direction_loss = _angular_loss_from_vectors(pred, target, angular_loss_scale_deg=angular_loss_scale_deg)
+        total_loss = (
+            float(energy_weight) * energy_loss
+            + float(core_weight) * core_loss
+            + float(direction_weight) * direction_loss
+        ) / max(float(energy_weight) + float(core_weight) + float(direction_weight), 1.0e-12)
+        return total_loss, {
+            "energy": energy_loss,
+            "core": core_loss,
+            "direction": direction_loss,
+        }
+    if mode != "physics":
+        raise ValueError("loss_mode must be 'scaled-mse', 'weighted-scaled-mse', 'hybrid-angle', or 'physics'")
+
+    energy_loss = F.smooth_l1_loss(pred[:, 0] - target[:, 0], torch.zeros_like(target[:, 0]), beta=0.05)
+    core_scale = max(float(core_scale_km), 1.0e-6)
+    core_delta = (pred[:, 1:3] - target[:, 1:3]) / core_scale
+    core_loss = torch.mean(torch.sum(core_delta * core_delta, dim=1))
+    direction_loss = _angular_loss_from_vectors(pred, target, angular_loss_scale_deg=angular_loss_scale_deg)
+    total_loss = (
+        float(energy_weight) * energy_loss
+        + float(core_weight) * core_loss
+        + float(direction_weight) * direction_loss
+    )
+    return total_loss, {
+        "energy": energy_loss,
+        "core": core_loss,
+        "direction": direction_loss,
+    }
+
+
 def _reconstruction_loss(
     pred_scaled: Any,
     target_scaled: Any,
@@ -915,48 +997,19 @@ def _reconstruction_loss(
     core_scale_km: float,
     angular_loss_scale_deg: float,
 ) -> Any:
-    import torch
-    import torch.nn.functional as F
-
-    if mode == "scaled-mse":
-        return F.mse_loss(pred_scaled, target_scaled)
-    if mode == "weighted-scaled-mse":
-        delta = pred_scaled - target_scaled
-        direction_slice = direction_columns_for_dim(delta.shape[1])
-        energy_loss = torch.mean(delta[:, 0] * delta[:, 0])
-        core_loss = torch.mean(torch.sum(delta[:, 1:3] * delta[:, 1:3], dim=1))
-        direction_loss = torch.mean(torch.sum(delta[:, direction_slice] * delta[:, direction_slice], dim=1))
-        return (
-            float(energy_weight) * energy_loss
-            + float(core_weight) * core_loss
-            + float(direction_weight) * direction_loss
-        ) / max(float(energy_weight) + float(core_weight) + float(direction_weight), 1.0e-12)
-
-    pred = _inverse_scaled_target_with_unit_direction(pred_scaled, target_mean, target_std)
-    target = _inverse_scaled_target_with_unit_direction(target_scaled, target_mean, target_std)
-    if mode == "hybrid-angle":
-        delta = pred_scaled - target_scaled
-        energy_loss = torch.mean(delta[:, 0] * delta[:, 0])
-        core_loss = torch.mean(torch.sum(delta[:, 1:3] * delta[:, 1:3], dim=1))
-        direction_loss = _angular_loss_from_vectors(pred, target, angular_loss_scale_deg=angular_loss_scale_deg)
-        return (
-            float(energy_weight) * energy_loss
-            + float(core_weight) * core_loss
-            + float(direction_weight) * direction_loss
-        ) / max(float(energy_weight) + float(core_weight) + float(direction_weight), 1.0e-12)
-    if mode != "physics":
-        raise ValueError("loss_mode must be 'scaled-mse', 'weighted-scaled-mse', 'hybrid-angle', or 'physics'")
-
-    energy_loss = F.smooth_l1_loss(pred[:, 0] - target[:, 0], torch.zeros_like(target[:, 0]), beta=0.05)
-    core_scale = max(float(core_scale_km), 1.0e-6)
-    core_delta = (pred[:, 1:3] - target[:, 1:3]) / core_scale
-    core_loss = torch.mean(torch.sum(core_delta * core_delta, dim=1))
-    direction_loss = _angular_loss_from_vectors(pred, target, angular_loss_scale_deg=angular_loss_scale_deg)
-    return (
-        float(energy_weight) * energy_loss
-        + float(core_weight) * core_loss
-        + float(direction_weight) * direction_loss
+    loss, _components = _reconstruction_loss_with_components(
+        pred_scaled,
+        target_scaled,
+        mode=mode,
+        target_mean=target_mean,
+        target_std=target_std,
+        energy_weight=energy_weight,
+        core_weight=core_weight,
+        direction_weight=direction_weight,
+        core_scale_km=core_scale_km,
+        angular_loss_scale_deg=angular_loss_scale_deg,
     )
+    return loss
 
 
 def _gaussian_reconstruction_nll(
@@ -1064,7 +1117,7 @@ def _reconstruction_training_loss(
         loss = nll_loss
         components["nll"] = nll_loss
     elif mode == "physics-nll":
-        physics_loss = _reconstruction_loss(
+        physics_loss, physics_components = _reconstruction_loss_with_components(
             pred_scaled,
             target_scaled,
             mode="physics",
@@ -1093,10 +1146,11 @@ def _reconstruction_training_loss(
             sigma_core_floor_km=nll_sigma_core_floor_km,
         )
         loss = physics_loss + float(nll_loss_weight) * nll_loss
+        components.update(physics_components)
         components["physics"] = physics_loss
         components["nll"] = nll_loss
     else:
-        loss = _reconstruction_loss(
+        loss, reco_components = _reconstruction_loss_with_components(
             pred_scaled,
             target_scaled,
             mode=mode,
@@ -1108,6 +1162,7 @@ def _reconstruction_training_loss(
             core_scale_km=core_scale_km,
             angular_loss_scale_deg=angular_loss_scale_deg,
         )
+        components.update(reco_components)
     if float(energy_bias_loss_weight) > 0.0:
         pred = _inverse_scaled_target_with_unit_direction(pred_scaled, target_mean, target_std)
         target = _inverse_scaled_target_with_unit_direction(target_scaled, target_mean, target_std)

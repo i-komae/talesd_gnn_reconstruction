@@ -48,6 +48,7 @@ if [[ "${SPEED_BENCHMARK}" == "1" ]]; then
   PROFILE="${PROFILE:-1}"
   TALESD_GNN_PROFILE="${TALESD_GNN_PROFILE:-1}"
   CHECKPOINT_MILESTONES="${CHECKPOINT_MILESTONES:-}"
+  MILESTONE_EVAL_EPOCHS="${MILESTONE_EVAL_EPOCHS:-}"
   HETERO_TRAINING_DATA_FORMAT="${HETERO_TRAINING_DATA_FORMAT:-fast_tensor}"
   PREFETCH_FACTOR="${PREFETCH_FACTOR:-1}"
   PERSISTENT_WORKERS="${PERSISTENT_WORKERS:-1}"
@@ -128,6 +129,17 @@ EARLY_STOPPING_MIN_EPOCHS="${EARLY_STOPPING_MIN_EPOCHS:-32}"
 CHECKPOINT_MILESTONES="${CHECKPOINT_MILESTONES:-}"
 CHECKPOINT_MILESTONE_FULL_EVAL="${CHECKPOINT_MILESTONE_FULL_EVAL:-0}"
 ALLOW_TRAIN_LOSS_CHECKPOINT="${ALLOW_TRAIN_LOSS_CHECKPOINT:-0}"
+if [[ -z "${MILESTONE_EVAL_EPOCHS+x}" ]]; then
+  if [[ "${SPEED_BENCHMARK}" == "1" ]]; then
+    MILESTONE_EVAL_EPOCHS=""
+  else
+    MILESTONE_EVAL_EPOCHS="8,16,32,64"
+  fi
+fi
+MILESTONE_EVAL_SPLIT="${MILESTONE_EVAL_SPLIT:-validation}"
+MILESTONE_EVAL_MAX_GRAPHS="${MILESTONE_EVAL_MAX_GRAPHS:-0}"
+MILESTONE_EVAL_CURRENT_MODEL="${MILESTONE_EVAL_CURRENT_MODEL:-1}"
+MILESTONE_EVAL_BEST_MODEL="${MILESTONE_EVAL_BEST_MODEL:-0}"
 HETERO_TRAINING_DATA_FORMAT="${HETERO_TRAINING_DATA_FORMAT:-fast_tensor}"
 FINAL_EVAL_DATA_FORMAT="${FINAL_EVAL_DATA_FORMAT:-${HETERO_TRAINING_DATA_FORMAT}}"
 HETERO_RELATIONS="${HETERO_RELATIONS:-all}"
@@ -206,7 +218,7 @@ print("flat_hdf5" if fmt == "talesd_gnn_hetero_graphs_flat" else ("grouped_hdf5"
 GRAPH_INPUT_FORMAT="$(detect_hetero_graph_format "${GRAPH_INPUT}")"
 
 if [[ "${SPEED_BENCHMARK}" == "1" ]]; then
-  echo "hetero_speed_benchmark enabled=1 train_epochs=${TRAIN_EPOCHS} max_graphs=${MAX_GRAPHS} max_val_graphs=${MAX_VAL_GRAPHS} profile=${PROFILE} milestones='${CHECKPOINT_MILESTONES}' prepare_fast_cache=${PREPARE_FAST_CACHE}"
+  echo "hetero_speed_benchmark enabled=1 train_epochs=${TRAIN_EPOCHS} max_graphs=${MAX_GRAPHS} max_val_graphs=${MAX_VAL_GRAPHS} profile=${PROFILE} checkpoint_milestones='${CHECKPOINT_MILESTONES}' milestone_eval_epochs='${MILESTONE_EVAL_EPOCHS}' prepare_fast_cache=${PREPARE_FAST_CACHE}"
 fi
 if [[ "${WAVEFORM_ENCODER}" == "transformer" && "${BATCH_SIZE}" =~ ^[0-9]+$ && "${BATCH_SIZE}" -lt 16 ]]; then
   echo "WARNING: BATCH_SIZE is small for optimized transformer path; consider BATCH_SIZE=32 or 64" >&2
@@ -374,6 +386,11 @@ EARLY_STOPPING_MIN_EPOCHS=${EARLY_STOPPING_MIN_EPOCHS}
 CHECKPOINT_MILESTONES=${CHECKPOINT_MILESTONES}
 CHECKPOINT_MILESTONE_FULL_EVAL=${CHECKPOINT_MILESTONE_FULL_EVAL}
 ALLOW_TRAIN_LOSS_CHECKPOINT=${ALLOW_TRAIN_LOSS_CHECKPOINT}
+MILESTONE_EVAL_EPOCHS=${MILESTONE_EVAL_EPOCHS}
+MILESTONE_EVAL_SPLIT=${MILESTONE_EVAL_SPLIT}
+MILESTONE_EVAL_MAX_GRAPHS=${MILESTONE_EVAL_MAX_GRAPHS}
+MILESTONE_EVAL_CURRENT_MODEL=${MILESTONE_EVAL_CURRENT_MODEL}
+MILESTONE_EVAL_BEST_MODEL=${MILESTONE_EVAL_BEST_MODEL}
 HETERO_TRAINING_DATA_FORMAT=${HETERO_TRAINING_DATA_FORMAT}
 FINAL_EVAL_DATA_FORMAT=${FINAL_EVAL_DATA_FORMAT}
 HETERO_RELATIONS=${HETERO_RELATIONS}
@@ -403,7 +420,8 @@ ATTENTION_MAPS_DEVICE=${ATTENTION_MAPS_DEVICE}
 SEED=${SEED}
 EOF
 
-echo "hetero_training_script_config speed_benchmark=${SPEED_BENCHMARK} waveform_encoder=${WAVEFORM_ENCODER} batch_size=${BATCH_SIZE} gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} prepare_fast_cache=${PREPARE_FAST_CACHE} training_data_format=${HETERO_TRAINING_DATA_FORMAT} final_eval_data_format=${FINAL_EVAL_DATA_FORMAT} checkpoint_milestones='${CHECKPOINT_MILESTONES}' checkpoint_milestone_full_eval=${CHECKPOINT_MILESTONE_FULL_EVAL} diagnostics=${DIAGNOSTICS} attention_maps=${ATTENTION_MAPS} feature_importance=${FEATURE_IMPORTANCE} profile=${PROFILE} pin_memory=${PIN_MEMORY} prefetch_factor=${PREFETCH_FACTOR} persistent_workers=${PERSISTENT_WORKERS} train_workers=${TRAIN_WORKERS} train_progress_interval_sec=${TRAIN_PROGRESS_INTERVAL_SEC} validation_progress_interval_sec=${VALIDATION_PROGRESS_INTERVAL_SEC} predict_progress_interval_sec=${PREDICT_PROGRESS_INTERVAL_SEC} scaler_progress_interval_sec=${SCALER_PROGRESS_INTERVAL_SEC} flat_cache_progress_interval_sec=${FLAT_CACHE_PROGRESS_INTERVAL_SEC} dataloader_timeout_sec=${DATALOADER_TIMEOUT_SEC} data_wait_warn_sec=${DATA_WAIT_WARN_SEC}"
+echo "hetero_training_script_config speed_benchmark=${SPEED_BENCHMARK} waveform_encoder=${WAVEFORM_ENCODER} batch_size=${BATCH_SIZE} gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} prepare_fast_cache=${PREPARE_FAST_CACHE} training_data_format=${HETERO_TRAINING_DATA_FORMAT} final_eval_data_format=${FINAL_EVAL_DATA_FORMAT} checkpoint_milestones='${CHECKPOINT_MILESTONES}' checkpoint_milestone_full_eval=${CHECKPOINT_MILESTONE_FULL_EVAL} milestone_eval_epochs='${MILESTONE_EVAL_EPOCHS}' milestone_eval_split='${MILESTONE_EVAL_SPLIT}' milestone_eval_max_graphs=${MILESTONE_EVAL_MAX_GRAPHS} milestone_eval_current_model=${MILESTONE_EVAL_CURRENT_MODEL} milestone_eval_best_model=${MILESTONE_EVAL_BEST_MODEL} diagnostics=${DIAGNOSTICS} attention_maps=${ATTENTION_MAPS} feature_importance=${FEATURE_IMPORTANCE} profile=${PROFILE} pin_memory=${PIN_MEMORY} prefetch_factor=${PREFETCH_FACTOR} persistent_workers=${PERSISTENT_WORKERS} train_workers=${TRAIN_WORKERS} train_progress_interval_sec=${TRAIN_PROGRESS_INTERVAL_SEC} validation_progress_interval_sec=${VALIDATION_PROGRESS_INTERVAL_SEC} predict_progress_interval_sec=${PREDICT_PROGRESS_INTERVAL_SEC} scaler_progress_interval_sec=${SCALER_PROGRESS_INTERVAL_SEC} flat_cache_progress_interval_sec=${FLAT_CACHE_PROGRESS_INTERVAL_SEC} dataloader_timeout_sec=${DATALOADER_TIMEOUT_SEC} data_wait_warn_sec=${DATA_WAIT_WARN_SEC}"
+echo "hetero_milestone_eval_config enabled=$([[ -n "${MILESTONE_EVAL_EPOCHS}" ]] && echo 1 || echo 0) epochs=${MILESTONE_EVAL_EPOCHS} splits=${MILESTONE_EVAL_SPLIT} current_model=${MILESTONE_EVAL_CURRENT_MODEL} best_model=${MILESTONE_EVAL_BEST_MODEL} max_graphs=${MILESTONE_EVAL_MAX_GRAPHS} diagnostics=0 attention_maps=0 feature_importance=0"
 echo "hetero_logging_config train_progress_interval_sec=${TRAIN_PROGRESS_INTERVAL_SEC} validation_progress_interval_sec=${VALIDATION_PROGRESS_INTERVAL_SEC} predict_progress_interval_sec=${PREDICT_PROGRESS_INTERVAL_SEC} scaler_progress_interval_sec=${SCALER_PROGRESS_INTERVAL_SEC} flat_cache_progress_interval_sec=${FLAT_CACHE_PROGRESS_INTERVAL_SEC} dataloader_timeout_sec=${DATALOADER_TIMEOUT_SEC} data_wait_warn_sec=${DATA_WAIT_WARN_SEC} expected_max_silent_sec=${DATALOADER_TIMEOUT_SEC}"
 echo "hetero_scaler_cache default_scope=run_local reuse_across_runs=0 path=${SCALER_CACHE}"
 echo "hetero_scaler_cache recommendation='set SCALER_CACHE=/path/to/shared/hetero_scalers.json for cross-run reuse'"
@@ -471,6 +489,9 @@ cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli train-hetero
   --early-stopping-patience "${EARLY_STOPPING_PATIENCE}"
   --early-stopping-min-epochs "${EARLY_STOPPING_MIN_EPOCHS}"
   --checkpoint-milestones "${CHECKPOINT_MILESTONES}"
+  --milestone-eval-epochs "${MILESTONE_EVAL_EPOCHS}"
+  --milestone-eval-split "${MILESTONE_EVAL_SPLIT}"
+  --milestone-eval-max-graphs "${MILESTONE_EVAL_MAX_GRAPHS}"
   --amp "${AMP}"
   --loader-memory-estimate-samples "${TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES}"
   --training-data-format "${HETERO_TRAINING_DATA_FORMAT}"
@@ -505,6 +526,16 @@ if [[ "${CHECKPOINT_MILESTONE_FULL_EVAL}" == "1" ]]; then
 fi
 if [[ "${ALLOW_TRAIN_LOSS_CHECKPOINT}" == "1" ]]; then
   cmd+=(--allow-train-loss-checkpoint)
+fi
+if [[ "${MILESTONE_EVAL_CURRENT_MODEL}" == "1" ]]; then
+  cmd+=(--milestone-eval-current-model)
+else
+  cmd+=(--no-milestone-eval-current-model)
+fi
+if [[ "${MILESTONE_EVAL_BEST_MODEL}" == "1" ]]; then
+  cmd+=(--milestone-eval-best-model)
+else
+  cmd+=(--no-milestone-eval-best-model)
 fi
 if [[ "${REUSE_SCALER_CACHE}" == "1" ]]; then
   cmd+=(--reuse-scaler-cache)

@@ -52,6 +52,7 @@ from talesd_gnn_reconstruction.hetero_training import (
     _filter_batch_relations,
     _resolve_loader_settings,
     _split_dataset,
+    evaluate_hetero_checkpoint,
     train_hetero_model,
 )
 from talesd_gnn_reconstruction.cli import (
@@ -1294,6 +1295,10 @@ class HeteroGraphIoTest(unittest.TestCase):
                     num_workers=0,
                     checkpoint_milestones=(1,),
                     checkpoint_milestone_full_eval=True,
+                    milestone_eval_epochs=(1,),
+                    milestone_eval_split="validation",
+                    milestone_eval_current_model=True,
+                    milestone_eval_best_model=False,
                     show_progress=False,
                 )
             train_log = output.getvalue()
@@ -1301,9 +1306,12 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertIn("hetero_predict_done", train_log)
             self.assertIn("rows=", train_log)
             self.assertIn("hetero_logging_warning num_workers=0", train_log)
+            self.assertIn("hetero_milestone_eval_start epoch=1", train_log)
+            self.assertIn("hetero_milestone_metrics epoch=1 split=validation model=current", train_log)
 
             self.assertEqual(result["checkpoint"], str(checkpoint_path))
             self.assertEqual(result["metrics_json"], str(checkpoint_path) + ".metrics.json")
+            self.assertEqual(result["milestone_metrics_jsonl"], str(checkpoint_path) + ".milestone_metrics.jsonl")
             checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
             self.assertEqual(checkpoint["model_config"]["architecture"], "hetero_attention")
             self.assertEqual(checkpoint["runtime"]["model_architecture"], "hetero_attention")
@@ -1321,10 +1329,46 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertIn("metrics", checkpoint)
             self.assertIn("test", checkpoint["metrics"])
             self.assertEqual(len(checkpoint["history"]), 1)
+            self.assertIn("train_energy_loss", checkpoint["history"][0])
+            self.assertIn("train_core_loss", checkpoint["history"][0])
+            self.assertIn("train_direction_loss", checkpoint["history"][0])
+            self.assertIn("val_energy_loss", checkpoint["history"][0])
+            self.assertIn("val_core_loss", checkpoint["history"][0])
+            self.assertIn("val_direction_loss", checkpoint["history"][0])
             self.assertIn("train_quality_loss", checkpoint["history"][0])
             self.assertTrue(checkpoint["runtime"]["quality_prediction"])
             self.assertFalse(checkpoint["runtime"]["error_prediction"])
+            self.assertEqual(checkpoint["runtime"]["milestone_eval_epochs"], [1])
+            self.assertEqual(checkpoint["runtime"]["milestone_eval_splits"], ["validation"])
             self.assertTrue((Path(str(checkpoint_path) + ".metrics.json")).exists())
+            milestone_jsonl = Path(str(checkpoint_path) + ".milestone_metrics.jsonl")
+            milestone_json = checkpoint_path.with_name("checkpoint.milestone_epoch0001.current.validation.json")
+            self.assertTrue(milestone_jsonl.exists())
+            self.assertTrue(milestone_json.exists())
+            milestone_record = json.loads(milestone_json.read_text())
+            self.assertEqual(milestone_record["epoch"], 1)
+            self.assertEqual(milestone_record["model_kind"], "current")
+            self.assertEqual(milestone_record["split"], "validation")
+            self.assertIn("rmse_log10_energy", milestone_record["metrics"])
+            self.assertIn("core_68_km", milestone_record["metrics"])
+            self.assertIn("angular_68_deg", milestone_record["metrics"])
+            self.assertIn("mass_auc", milestone_record["metrics"])
+            self.assertIn("val_core_loss", milestone_record["loss"])
+            eval_path = Path(tmpdir) / "checkpoint_eval.json"
+            eval_payload = evaluate_hetero_checkpoint(
+                graph_path,
+                checkpoint_path,
+                eval_path,
+                split="validation",
+                data_format="fast_tensor",
+                max_graphs=0,
+                batch_size=2,
+                device="cpu",
+                show_progress=False,
+            )
+            self.assertTrue(eval_path.exists())
+            self.assertIn("validation", eval_payload["metrics_by_split"])
+            self.assertIn("rmse_log10_energy", eval_payload["metrics_by_split"]["validation"]["metrics"])
             milestone_path = checkpoint_path.with_name(f"{checkpoint_path.stem}.best_through_epoch0001.pt")
             milestone_metrics = Path(f"{milestone_path}.metrics.json")
             self.assertTrue(milestone_path.exists())
