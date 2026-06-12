@@ -71,6 +71,37 @@ class QualityModelTest(unittest.TestCase):
         self.assertTrue(torch.allclose(baseline[[0, 2]], sliced, atol=1.0e-6, rtol=1.0e-6))
         self.assertTrue(torch.allclose(baseline, repeated, atol=1.0e-6, rtol=1.0e-6))
 
+    def test_waveform_valid_mask_accepts_autocast_dtype_output(self) -> None:
+        encoder = WaveformEncoder(
+            waveform_channels=2,
+            waveform_length=16,
+            embedding_dim=8,
+            mode="cnn",
+            dropout=0.0,
+        )
+
+        def _half_output(waveform: torch.Tensor, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+            del dtype
+            return torch.ones(waveform.shape[0], encoder.output_dim, dtype=torch.float16, device=device)
+
+        encoder._encode_valid_waveforms = _half_output  # type: ignore[method-assign]
+        waveform = torch.randn(3, 2, 16)
+        valid_mask = torch.tensor([1.0, 0.0, 1.0])
+
+        with torch.no_grad():
+            output = encoder(
+                waveform,
+                num_nodes=3,
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+                valid_mask=valid_mask,
+            )
+
+        self.assertEqual(output.dtype, torch.float32)
+        self.assertTrue(torch.allclose(output[0], torch.ones_like(output[0])))
+        self.assertTrue(torch.allclose(output[1], torch.zeros_like(output[1])))
+        self.assertTrue(torch.allclose(output[2], torch.ones_like(output[2])))
+
     def test_physics_model_outputs_reconstruction_mass_and_quality(self) -> None:
         model = PhysicsTaleSdGNN(
             node_dim=5,

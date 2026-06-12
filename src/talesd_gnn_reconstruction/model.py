@@ -526,7 +526,8 @@ class WaveformEncoder(nn.Module):
             raise ValueError("valid_mask length does not match waveform_x")
         output = torch.zeros(num_nodes, self.output_dim, dtype=dtype, device=device)
         if bool(valid.any()):
-            output[valid] = self._encode_valid_waveforms(waveform[valid], device=device, dtype=dtype)
+            encoded = self._encode_valid_waveforms(waveform[valid], device=device, dtype=dtype)
+            output[valid] = encoded.to(dtype=output.dtype)
         return output
 
 

@@ -506,7 +506,7 @@ copy_runtime_source_to_local() {
   fi
   echo "local_runtime_copy_tool_effective=\${copy_tool}"
   if [[ "\${copy_tool}" == "rsync" ]]; then
-    rsync -a --delete \
+    rsync -a --info=progress2 --stats --delete \
       --exclude .git \
       --exclude .mypy_cache \
       --exclude .pytest_cache \
