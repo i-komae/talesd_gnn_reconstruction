@@ -1757,6 +1757,67 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertIn("validation", milestone_payload["metrics"])
             self.assertIn("test", milestone_payload["metrics"])
 
+    def test_generate_diagnostics_from_hetero_checkpoint_uses_hetero_loader(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            checkpoint_path = Path(tmpdir) / "checkpoint.pt"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(8):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            train_hetero_model(
+                graph_path,
+                checkpoint_path,
+                epochs=1,
+                batch_size=2,
+                gradient_accumulation_steps=2,
+                hidden_dim=16,
+                num_layers=1,
+                dropout=0.0,
+                waveform_embedding_dim=8,
+                mass_classification=True,
+                quality_prediction=True,
+                split_mode="event",
+                device="cpu",
+                num_workers=0,
+                show_progress=False,
+            )
+
+            script = Path(__file__).resolve().parents[1] / "scripts" / "generate_diagnostics_from_checkpoint.py"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--checkpoint",
+                    str(checkpoint_path),
+                    "--graphs",
+                    str(graph_path),
+                    "--refresh-prediction-cache",
+                    "--batch-size",
+                    "2",
+                    "--num-workers",
+                    "0",
+                    "--device",
+                    "cpu",
+                    "--hetero-data-format",
+                    "fast_tensor",
+                    "--diagnostic-min-bin-count",
+                    "1",
+                    "--no-progress",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertIn("hetero_diagnostics", completed.stdout)
+            self.assertIn("data_format=fast_tensor", completed.stdout)
+            diagnostics_dir = Path(str(checkpoint_path) + ".diagnostics")
+            self.assertTrue((diagnostics_dir / "learning_curve.pdf").exists())
+            self.assertTrue((diagnostics_dir / "loss_component_curves.pdf").exists())
+            self.assertTrue((diagnostics_dir / "prediction_cache.npz").exists())
+
     def test_validation_skip_does_not_update_best_without_explicit_train_loss_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             graph_path = Path(tmpdir) / "synthetic_hetero.h5"
