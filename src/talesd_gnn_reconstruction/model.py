@@ -155,7 +155,7 @@ def _scatter_softmax(scores: torch.Tensor, batch: torch.Tensor, num_graphs: int)
         scores = scores[:, None]
     max_values = _scatter_max(scores, batch, num_graphs)
     stable = scores - max_values[batch]
-    weights = torch.exp(torch.clamp(stable, min=-80.0, max=40.0))
+    weights = torch.exp(torch.clamp(stable, min=-80.0, max=40.0)).to(dtype=scores.dtype)
     denom = torch.zeros(num_graphs, scores.shape[1], dtype=scores.dtype, device=scores.device)
     denom.index_add_(0, batch, weights)
     return weights / denom[batch].clamp_min(1.0e-12)
@@ -180,7 +180,7 @@ class EdgeMessageLayer(nn.Module):
             aggregate = torch.zeros_like(node)
         else:
             message_input = torch.cat([node[src], node[dst], edge_attr], dim=-1)
-            messages = self.message(message_input)
+            messages = self.message(message_input).to(dtype=node.dtype)
             aggregate = torch.zeros_like(node)
             aggregate.index_add_(0, dst, messages)
             aggregate = aggregate / degree.clamp_min(1.0)
@@ -220,7 +220,7 @@ class GatedEdgeMessageLayer(nn.Module):
             max_aggregate = torch.zeros_like(node)
         else:
             message_input = torch.cat([node[src], node[dst], edge_attr], dim=-1)
-            messages = self.message(message_input) * torch.sigmoid(self.gate(message_input))
+            messages = (self.message(message_input) * torch.sigmoid(self.gate(message_input))).to(dtype=node.dtype)
             mean_aggregate = torch.zeros_like(node)
             mean_aggregate.index_add_(0, dst, messages)
             mean_aggregate = mean_aggregate / degree.clamp_min(1.0)
@@ -266,7 +266,7 @@ class EdgeTimeDeltaEncoder(nn.Module):
         if self.encoder is None or self.norm is None or dst is None or edge_attr.numel() == 0:
             return node
         time_attr = edge_attr[:, self.start_index : self.start_index + self.width]
-        messages = self.encoder(time_attr)
+        messages = self.encoder(time_attr).to(dtype=node.dtype)
         aggregate = torch.zeros_like(node)
         aggregate.index_add_(0, dst, messages)
         if degree is None:
@@ -289,7 +289,7 @@ class AttentiveReadout(nn.Module):
         for head in range(self.heads):
             weighted = node * weights[:, head : head + 1]
             pooled = torch.zeros(num_graphs, node.shape[1], dtype=node.dtype, device=node.device)
-            pooled.index_add_(0, batch, weighted)
+            pooled.index_add_(0, batch, weighted.to(dtype=pooled.dtype))
             outputs.append(pooled)
         return torch.cat(outputs, dim=-1)
 

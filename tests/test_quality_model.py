@@ -5,8 +5,8 @@ import unittest
 
 import torch
 
-from talesd_gnn_reconstruction.hetero_model import HeteroAttentionMessageLayer
-from talesd_gnn_reconstruction.model import PhysicsTaleSdGNN, WaveformEncoder, build_model_from_config
+from talesd_gnn_reconstruction.hetero_model import HeteroAttentionMessageLayer, HeteroAttentiveReadout
+from talesd_gnn_reconstruction.model import PhysicsTaleSdGNN, WaveformEncoder, _scatter_softmax, build_model_from_config
 from talesd_gnn_reconstruction.train import (
     _angular_loss_from_vectors,
     _energy_bin_bias_loss,
@@ -127,6 +127,28 @@ class QualityModelTest(unittest.TestCase):
         self.assertEqual(output["pulse"].dtype, torch.float32)
         self.assertEqual(tuple(output["detector"].shape), (3, 8))
         self.assertEqual(tuple(output["pulse"].shape), (4, 8))
+
+    def test_scatter_softmax_preserves_score_dtype(self) -> None:
+        scores = torch.tensor([[0.0, 1.0], [0.5, -0.5], [1.0, 0.0]], dtype=torch.float16)
+        batch = torch.tensor([0, 0, 1], dtype=torch.long)
+
+        weights = _scatter_softmax(scores, batch, num_graphs=2)
+
+        self.assertEqual(weights.dtype, torch.float16)
+        self.assertEqual(tuple(weights.shape), (3, 2))
+        self.assertTrue(torch.allclose(weights[:2, 0].sum().float(), torch.tensor(1.0), atol=1.0e-3))
+
+    def test_hetero_attentive_readout_accepts_autocast_scores(self) -> None:
+        readout = HeteroAttentiveReadout(hidden_dim=8, heads=2)
+        readout.eval()
+        state = torch.randn(5, 8, dtype=torch.float32)
+        batch = torch.tensor([0, 0, 1, 1, 1], dtype=torch.long)
+
+        with torch.no_grad(), torch.autocast(device_type="cpu", dtype=torch.float16):
+            output = readout(state, batch, num_graphs=2)
+
+        self.assertEqual(output.dtype, torch.float32)
+        self.assertEqual(tuple(output.shape), (2, 32))
 
     def test_physics_model_outputs_reconstruction_mass_and_quality(self) -> None:
         model = PhysicsTaleSdGNN(
