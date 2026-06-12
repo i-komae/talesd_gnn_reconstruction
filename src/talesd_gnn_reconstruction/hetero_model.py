@@ -73,11 +73,12 @@ class HeteroMessageLayer(nn.Module):
                 dim=-1,
             )
             messages = message_mlp(message_input)
+            messages = messages.to(dtype=aggregates[dst_type].dtype)
             aggregates[dst_type].index_add_(0, dst_index, messages)
             counts[dst_type].index_add_(
                 0,
                 dst_index,
-                torch.ones(dst_index.shape[0], 1, dtype=messages.dtype, device=messages.device),
+                torch.ones(dst_index.shape[0], 1, dtype=counts[dst_type].dtype, device=counts[dst_type].device),
             )
         detector_aggregate = aggregates["detector"] / counts["detector"].clamp_min(1.0)
         pulse_aggregate = aggregates["pulse"] / counts["pulse"].clamp_min(1.0)
@@ -172,6 +173,7 @@ class HeteroAttentionMessageLayer(nn.Module):
                 }
             messages = (value * weights[:, :, None]).reshape(-1, self.hidden_dim)
             messages = self.dropout(self.relation_output[relation](messages))
+            messages = messages.to(dtype=aggregates[dst_type].dtype)
             aggregates[dst_type].index_add_(0, dst_index, messages)
 
             present = torch.zeros(dst_state.shape[0], 1, dtype=dst_state.dtype, device=dst_state.device)
@@ -217,7 +219,7 @@ class HeteroAttentiveReadout(nn.Module):
         for head in range(self.heads):
             weighted = state * weights[:, head : head + 1]
             out = torch.zeros(num_graphs, state.shape[1], dtype=state.dtype, device=state.device)
-            out.index_add_(0, batch, weighted)
+            out.index_add_(0, batch, weighted.to(dtype=out.dtype))
             pooled.append(out)
         output = torch.cat(pooled, dim=-1)
         if return_attention:

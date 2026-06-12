@@ -5,6 +5,7 @@ import unittest
 
 import torch
 
+from talesd_gnn_reconstruction.hetero_model import HeteroAttentionMessageLayer
 from talesd_gnn_reconstruction.model import PhysicsTaleSdGNN, WaveformEncoder, build_model_from_config
 from talesd_gnn_reconstruction.train import (
     _angular_loss_from_vectors,
@@ -101,6 +102,31 @@ class QualityModelTest(unittest.TestCase):
         self.assertTrue(torch.allclose(output[0], torch.ones_like(output[0])))
         self.assertTrue(torch.allclose(output[1], torch.zeros_like(output[1])))
         self.assertTrue(torch.allclose(output[2], torch.ones_like(output[2])))
+
+    def test_hetero_attention_message_layer_accepts_autocast_outputs(self) -> None:
+        layer = HeteroAttentionMessageLayer(
+            hidden_dim=8,
+            edge_dims={"detector__observes__pulse": 0},
+            dropout=0.0,
+            attention_heads=2,
+        )
+        layer.eval()
+        node_states = {
+            "detector": torch.randn(3, 8),
+            "pulse": torch.randn(4, 8),
+        }
+        edge_index_by_type = {
+            "detector__observes__pulse": torch.tensor([[0, 1, 2, 1], [0, 1, 2, 3]], dtype=torch.long)
+        }
+        edge_features_by_type = {"detector__observes__pulse": torch.zeros(4, 0)}
+
+        with torch.no_grad(), torch.autocast(device_type="cpu", dtype=torch.float16):
+            output = layer(node_states, edge_index_by_type, edge_features_by_type)
+
+        self.assertEqual(output["detector"].dtype, torch.float32)
+        self.assertEqual(output["pulse"].dtype, torch.float32)
+        self.assertEqual(tuple(output["detector"].shape), (3, 8))
+        self.assertEqual(tuple(output["pulse"].shape), (4, 8))
 
     def test_physics_model_outputs_reconstruction_mass_and_quality(self) -> None:
         model = PhysicsTaleSdGNN(
