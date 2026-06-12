@@ -4,6 +4,7 @@ import os
 import random
 import json
 import time
+import hashlib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from .dataset import RunningFeatureStats, StandardScaler
 from .diagnostics import save_training_diagnostics
 from .hetero_data import EDGE_TYPE_BY_RELATION
 from .hetero_data import hetero_sample_to_tensors
+from .hetero_data import hetero_sample_to_training_tensors
 from .hetero_graph_io import H5HeteroGraphDataset, H5PyGHeteroGraphDataset, hetero_dataset_class_for_paths
 from .hetero_model import MinimalHeteroTaleSdGNN
 from .hetero_model import NODE_TYPE_BY_RELATION
@@ -121,6 +123,85 @@ def _resolve_waveform_shape(
 
 def _scalers_to_dict(scalers: dict[str, StandardScaler]) -> dict[str, Any]:
     return {name: scaler.to_dict() for name, scaler in scalers.items()}
+
+
+def _scalers_from_dict(payload: dict[str, Any]) -> dict[str, StandardScaler]:
+    return {
+        name: StandardScaler(
+            mean=np.asarray(value["mean"], dtype=np.float32),
+            std=np.asarray(value["std"], dtype=np.float32),
+        )
+        for name, value in payload.items()
+    }
+
+
+def _split_indices_hash(indices: Sequence[int]) -> str:
+    digest = hashlib.sha256()
+    for index in indices:
+        digest.update(int(index).to_bytes(8, byteorder="little", signed=True))
+    return digest.hexdigest()
+
+
+def _dataset_format_label(dataset: Any) -> str:
+    return "flat_hdf5" if dataset.__class__.__name__ == "H5FlatHeteroGraphDataset" else "grouped_hdf5"
+
+
+def _scaler_cache_metadata(dataset: Any, indices: Sequence[int], first_sample: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "graph_input_paths": [str(Path(path).expanduser()) for path in getattr(dataset, "paths", [])],
+        "graph_format": _dataset_format_label(dataset),
+        "split_indices_hash": _split_indices_hash(indices),
+        "train_graph_count": int(len(indices)),
+        "detector_dim": int(first_sample["detector_features"].shape[1]),
+        "detector_context_dim": int(first_sample["detector_context_features"].shape[1]),
+        "pulse_dim": int(first_sample["pulse_features"].shape[1]),
+        "target_dim": int(first_sample["target"].shape[0]) if first_sample.get("target") is not None else 0,
+        "edge_dims": {
+            relation: int(first_sample["edge_features_by_type"][relation].shape[1])
+            if relation in first_sample["edge_features_by_type"]
+            else 0
+            for relation in EDGE_TYPE_BY_RELATION
+        },
+    }
+
+
+def _read_scaler_cache(path: Path, expected_metadata: dict[str, Any]) -> dict[str, StandardScaler] | None:
+    if not path.exists():
+        print(f"hetero_scaler_cache stage=miss reason=not_found path={path}", flush=True)
+        return None
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"hetero_scaler_cache stage=miss reason=read_failed error={exc} path={path}", flush=True)
+        return None
+    metadata = payload.get("metadata", {})
+    mismatched = [key for key, value in expected_metadata.items() if metadata.get(key) != value]
+    if mismatched:
+        print(
+            "hetero_scaler_cache "
+            f"stage=miss reason=metadata_mismatch keys={','.join(mismatched)} path={path}",
+            flush=True,
+        )
+        return None
+    scalers_payload = payload.get("scalers")
+    if not isinstance(scalers_payload, dict):
+        print(f"hetero_scaler_cache stage=miss reason=missing_scalers path={path}", flush=True)
+        return None
+    print(f"hetero_scaler_cache stage=hit path={path}", flush=True)
+    return _scalers_from_dict(scalers_payload)
+
+
+def _write_scaler_cache(path: Path, metadata: dict[str, Any], scalers: dict[str, StandardScaler]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json_atomic(
+        path,
+        {
+            "metadata": metadata,
+            "scalers": _scalers_to_dict(scalers),
+        },
+    )
+    print(f"hetero_scaler_cache stage=write path={path}", flush=True)
 
 
 def _json_default(value: Any) -> Any:
@@ -385,29 +466,11 @@ class H5TensorHeteroGraphDataset:
         self.base.close()
 
     def __getitem__(self, index: int) -> dict[str, Any]:
-        tensors = hetero_sample_to_tensors(
-            self.base[int(index)],
+        return hetero_sample_to_training_tensors(
+            self.base.training_sample(int(index)),
             scalers=self.scalers,
             waveform_length=self.waveform_length,
         )
-        # Keep only tensors used by training forward/loss. Diagnostics and
-        # attention maps continue to use the PyG path with full metadata.
-        return {
-            "detector": {
-                "x": tensors["detector"]["x"],
-                "context": tensors["detector"]["context"],
-                "waveform": tensors["detector"]["waveform"],
-                "waveform_valid": tensors["detector"]["waveform_valid"],
-            },
-            "pulse": {
-                "x": tensors["pulse"]["x"],
-            },
-            "edge_index_by_type": tensors["edge_index_by_type"],
-            "edge_features_by_type": tensors["edge_features_by_type"],
-            "target": tensors["target"],
-            "particle_label": tensors["particle_label"],
-            "num_graphs": 1,
-        }
 
 
 def _empty_edge_features(samples: Sequence[dict[str, Any]], relation: str) -> torch.Tensor:
@@ -1190,6 +1253,8 @@ def train_hetero_model(
     max_graphs: int | None = None,
     training_data_format: str | None = None,
     final_eval_data_format: str | None = None,
+    scaler_cache_path: str | Path | None = None,
+    reuse_scaler_cache: bool | None = None,
     hetero_relations: str | None = None,
     dataloader_timeout_sec: float | None = None,
     data_wait_warn_sec: float | None = None,
@@ -1232,6 +1297,13 @@ def train_hetero_model(
     ).strip()
     if final_eval_data_format not in {"fast_tensor", "pyg"}:
         raise ValueError("final_eval_data_format must be fast_tensor or pyg")
+    if scaler_cache_path is None:
+        env_scaler_cache = os.environ.get("HETERO_SCALER_CACHE", os.environ.get("SCALER_CACHE", "")).strip()
+        scaler_cache_path = env_scaler_cache or None
+    resolved_scaler_cache_path = None if scaler_cache_path is None else Path(scaler_cache_path).expanduser()
+    if reuse_scaler_cache is None:
+        reuse_scaler_cache = _env_flag("REUSE_SCALER_CACHE", True)
+    reuse_scaler_cache = bool(reuse_scaler_cache)
     enabled_relations = _parse_relation_filter(hetero_relations)
     max_neighbors = _max_neighbors_by_relation()
     if dataloader_timeout_sec is None:
@@ -1363,8 +1435,20 @@ def train_hetero_model(
         train_indices,
         waveform_length=waveform_length,
     )
-    scalers = fit_hetero_scalers(base_dataset, train_indices)
-    first = base_dataset[train_indices[0]]
+    first = base_dataset.training_sample(train_indices[0])
+    scaler_metadata = _scaler_cache_metadata(base_dataset, train_indices, first)
+    scalers = None
+    if resolved_scaler_cache_path is not None and reuse_scaler_cache:
+        scalers = _read_scaler_cache(resolved_scaler_cache_path, scaler_metadata)
+    elif resolved_scaler_cache_path is not None:
+        print(
+            f"hetero_scaler_cache stage=disabled reuse=0 path={resolved_scaler_cache_path}",
+            flush=True,
+        )
+    if scalers is None:
+        scalers = fit_hetero_scalers(base_dataset, train_indices)
+        if resolved_scaler_cache_path is not None:
+            _write_scaler_cache(resolved_scaler_cache_path, scaler_metadata, scalers)
     target_dim = int(first["target"].shape[0])
     classification_dim = 1 if mass_classification else 0
     quality_dim = 1 if quality_prediction else 0
@@ -1979,15 +2063,18 @@ def train_hetero_model(
             ):
                 elapsed = now - epoch_start
                 rate = float(batch_index) / elapsed if elapsed > 0 else 0.0
+                graphs_seen = min(batch_index * max(int(batch_size), 1), len(train_indices))
+                graphs_per_sec = float(graphs_seen) / elapsed if elapsed > 0 else 0.0
                 remaining = max(train_loader_batches - batch_index, 0)
                 eta = float(remaining) / rate if rate > 0 else float("nan")
                 print(
                     "hetero_train_progress "
                     f"epoch={epoch}/{int(epochs)} "
                     f"batch={batch_index}/{train_loader_batches} "
-                    f"graphs={min(batch_index * max(int(batch_size), 1), len(train_indices))}/{len(train_indices)} "
+                    f"graphs={graphs_seen}/{len(train_indices)} "
                     f"elapsed={_format_duration(elapsed)} "
                     f"rate={rate:.3g}/s "
+                    f"graphs_per_sec={graphs_per_sec:.6g} "
                     f"eta={_format_duration(eta) if np.isfinite(eta) else 'unknown'} "
                     f"loss={_mean_tensor_value(train_loss_sum, train_loss_count):.6g}"
                 )
@@ -2089,11 +2176,17 @@ def train_hetero_model(
                         val_component_counts[name] += 1
         _profile_sync()
         validation_time = time.perf_counter() - val_start
+        validation_graphs_per_sec = (
+            float(len(val_indices_for_epoch)) / validation_time
+            if run_validation and validation_time > 0
+            else 0.0
+        )
         print(
             "hetero_validation_done "
             f"epoch={epoch}/{int(epochs)} ran={int(run_validation)} "
             f"elapsed={_format_duration(validation_time)} "
-            f"val_batches={val_loss_count}",
+            f"val_batches={val_loss_count} "
+            f"val_graphs_per_sec={validation_graphs_per_sec:.6g}",
             flush=True,
         )
         epoch_row = {
@@ -2105,10 +2198,12 @@ def train_hetero_model(
         _append_component_mean(epoch_row, "val", val_component_sums, val_component_counts)
         history.append(epoch_row)
         epoch_elapsed = time.monotonic() - epoch_start
+        train_graphs_per_sec = float(len(train_indices)) / epoch_elapsed if epoch_elapsed > 0 else 0.0
         print(
             "hetero_train_epoch "
             f"stage=done epoch={epoch}/{int(epochs)} "
             f"elapsed={_format_duration(epoch_elapsed)} "
+            f"train_graphs_per_sec={train_graphs_per_sec:.6g} "
             f"train_loss={epoch_row['train_loss']:.6g} "
             f"val_loss={epoch_row['val_loss']:.6g}"
         )
@@ -2133,6 +2228,8 @@ def train_hetero_model(
                 f"optim_s={profile_optim:.6g} "
                 f"val_s={validation_time:.6g} "
                 f"train_epoch_total_s={epoch_elapsed:.6g} "
+                f"train_graphs_per_sec={train_graphs_per_sec:.6g} "
+                f"val_graphs_per_sec={validation_graphs_per_sec:.6g} "
                 f"valid_waveforms={profile_valid_waveforms} "
                 f"detector_waveforms={profile_detector_nodes} "
                 f"valid_waveform_fraction={valid_fraction:.6g} "

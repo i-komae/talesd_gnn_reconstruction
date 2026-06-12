@@ -33,6 +33,10 @@ WAVEFORM_TRANSFORMER_LAYERS="${WAVEFORM_TRANSFORMER_LAYERS:-1}"
 WAVEFORM_TRANSFORMER_MAX_TOKENS="${WAVEFORM_TRANSFORMER_MAX_TOKENS:-128}"
 WAVEFORM_TRANSFORMER_DOWNSAMPLE="${WAVEFORM_TRANSFORMER_DOWNSAMPLE:-adaptive_avg}"
 SPEED_BENCHMARK="${SPEED_BENCHMARK:-0}"
+PREPARE_FAST_CACHE_WAS_SET=0
+if [[ -n "${PREPARE_FAST_CACHE:-}" ]]; then
+  PREPARE_FAST_CACHE_WAS_SET=1
+fi
 if [[ "${SPEED_BENCHMARK}" == "1" ]]; then
   TRAIN_EPOCHS="${TRAIN_EPOCHS:-2}"
   MAX_GRAPHS="${MAX_GRAPHS:-4096}"
@@ -146,37 +150,72 @@ if [[ -z "${AMP:-}" ]]; then
 fi
 TRAIN_LOADER_MEMORY_BUDGET_GIB="${TRAIN_LOADER_MEMORY_BUDGET_GIB:-}"
 TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES="${TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES:-512}"
-DIAGNOSTICS="${DIAGNOSTICS:-1}"
+if [[ "${WAVEFORM_ENCODER}" == "transformer" ]]; then
+  DIAGNOSTICS="${DIAGNOSTICS:-0}"
+else
+  DIAGNOSTICS="${DIAGNOSTICS:-1}"
+fi
 DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT:-1000}"
 FEATURE_IMPORTANCE="${FEATURE_IMPORTANCE:-0}"
 FEATURE_IMPORTANCE_SPLIT="${FEATURE_IMPORTANCE_SPLIT:-validation}"
 FEATURE_IMPORTANCE_MAX_GRAPHS="${FEATURE_IMPORTANCE_MAX_GRAPHS:-50000}"
 FEATURE_IMPORTANCE_BATCH_SIZE="${FEATURE_IMPORTANCE_BATCH_SIZE:-256}"
 FEATURE_IMPORTANCE_DEVICE="${FEATURE_IMPORTANCE_DEVICE:-${DEVICE}}"
-ATTENTION_MAPS="${ATTENTION_MAPS:-1}"
+if [[ "${WAVEFORM_ENCODER}" == "transformer" ]]; then
+  ATTENTION_MAPS="${ATTENTION_MAPS:-0}"
+else
+  ATTENTION_MAPS="${ATTENTION_MAPS:-1}"
+fi
 ATTENTION_MAPS_SPLIT="${ATTENTION_MAPS_SPLIT:-validation}"
 ATTENTION_MAPS_MAX_GRAPHS="${ATTENTION_MAPS_MAX_GRAPHS:-16}"
 ATTENTION_MAPS_DEVICE="${ATTENTION_MAPS_DEVICE:-${DEVICE}}"
 SEED="${SEED:-12345}"
 PYTHON_BIN="${PYTHON_BIN:-.venv/bin/python}"
-PREPARE_FAST_CACHE="${PREPARE_FAST_CACHE:-0}"
+if [[ -z "${PREPARE_FAST_CACHE:-}" ]]; then
+  if [[ "${SPEED_BENCHMARK}" == "1" || "${WAVEFORM_ENCODER}" == "transformer" ]]; then
+    PREPARE_FAST_CACHE=1
+  else
+    PREPARE_FAST_CACHE=0
+  fi
+fi
 FAST_CACHE_COMPRESSION="${FAST_CACHE_COMPRESSION:-lzf}"
 FAST_CACHE_VERIFY_SAMPLES="${FAST_CACHE_VERIFY_SAMPLES:-5}"
+SCALER_CACHE="${SCALER_CACHE:-${RUN_DIR}/cache/${RUN_NAME}.scalers.json}"
+REUSE_SCALER_CACHE="${REUSE_SCALER_CACHE:-1}"
+
+detect_hetero_graph_format() {
+  "${PYTHON_BIN}" -c 'import sys, pathlib, h5py
+p = pathlib.Path(sys.argv[1]).expanduser()
+if p.is_dir():
+    files = sorted(p.rglob("*.h5"))
+    if not files:
+        print("none")
+        raise SystemExit(0)
+    p = files[0]
+with h5py.File(p, "r") as handle:
+    fmt = str(handle.attrs.get("format", ""))
+print("flat_hdf5" if fmt == "talesd_gnn_hetero_graphs_flat" else ("grouped_hdf5" if fmt == "talesd_gnn_hetero_graphs" else (fmt or "unknown")))' "$1" 2>/dev/null || echo "unknown"
+}
+GRAPH_INPUT_FORMAT="$(detect_hetero_graph_format "${GRAPH_INPUT}")"
 
 if [[ "${SPEED_BENCHMARK}" == "1" ]]; then
-  echo "hetero_speed_benchmark enabled=1 train_epochs=${TRAIN_EPOCHS} max_graphs=${MAX_GRAPHS} max_val_graphs=${MAX_VAL_GRAPHS} profile=${PROFILE} milestones='${CHECKPOINT_MILESTONES}'"
+  echo "hetero_speed_benchmark enabled=1 train_epochs=${TRAIN_EPOCHS} max_graphs=${MAX_GRAPHS} max_val_graphs=${MAX_VAL_GRAPHS} profile=${PROFILE} milestones='${CHECKPOINT_MILESTONES}' prepare_fast_cache=${PREPARE_FAST_CACHE}"
 fi
 if [[ "${WAVEFORM_ENCODER}" == "transformer" && "${BATCH_SIZE}" =~ ^[0-9]+$ && "${BATCH_SIZE}" -lt 16 ]]; then
   echo "WARNING: BATCH_SIZE is small for optimized transformer path; consider BATCH_SIZE=32 or 64" >&2
 fi
-if [[ "${PREPARE_FAST_CACHE}" != "1" ]]; then
+if [[ "${GRAPH_INPUT_FORMAT}" == "grouped_hdf5" && "${PREPARE_FAST_CACHE}" != "1" ]]; then
   echo "WARNING: grouped gzip HDF5 may be slow for production training; set PREPARE_FAST_CACHE=1" >&2
+elif [[ "${GRAPH_INPUT_FORMAT}" == "flat_hdf5" ]]; then
+  echo "hetero_graph_input format=flat_hdf5 prepare_fast_cache=${PREPARE_FAST_CACHE} action=use_existing_flat_cache"
+else
+  echo "WARNING: could not confirm hetero HDF5 format for GRAPH_INPUT=${GRAPH_INPUT}; long production runs should use flat_hdf5" >&2
 fi
 cat <<'EOF'
 recommended_speed_benchmark:
   SPEED_BENCHMARK=1 WAVEFORM_ENCODER=transformer PREPARE_FAST_CACHE=1 DEVICE=cuda scripts/submit_server_hetero_reco_mass_quality_training.sh
 recommended_production_start:
-  WAVEFORM_ENCODER=transformer WAVEFORM_TRANSFORMER_MAX_TOKENS=128 BATCH_SIZE=32 GRADIENT_ACCUMULATION_STEPS=4 AMP=fp16 PREPARE_FAST_CACHE=1 HETERO_TRAINING_DATA_FORMAT=fast_tensor PERSISTENT_WORKERS=1 PREFETCH_FACTOR=1 TRAIN_WORKERS=4 PIN_MEMORY=0 scripts/submit_server_hetero_reco_mass_quality_training.sh
+  WAVEFORM_ENCODER=transformer WAVEFORM_TRANSFORMER_MAX_TOKENS=128 BATCH_SIZE=32 GRADIENT_ACCUMULATION_STEPS=4 AMP=fp16 PREPARE_FAST_CACHE=1 HETERO_TRAINING_DATA_FORMAT=fast_tensor FINAL_EVAL_DATA_FORMAT=fast_tensor PERSISTENT_WORKERS=1 PREFETCH_FACTOR=1 TRAIN_WORKERS=4 PIN_MEMORY=0 FEATURE_IMPORTANCE=0 ATTENTION_MAPS=0 DIAGNOSTICS=0 scripts/submit_server_hetero_reco_mass_quality_training.sh
 EOF
 
 if [[ "${LOSS_MODE}" == "physics-nll" || "${LOSS_MODE}" == "nll" ]]; then
@@ -205,7 +244,10 @@ METRICS_PATH="${CHECKPOINT}.metrics.json"
 
 mkdir -p "${CHECKPOINT_DIR}" "${LOG_DIR}" "${SUMMARY_DIR}" "${CONFIG_DIR}"
 
-if [[ "${PREPARE_FAST_CACHE}" == "1" && "${DRY_RUN:-0}" != "1" ]]; then
+if [[ "${PREPARE_FAST_CACHE}" == "1" && "${GRAPH_INPUT_FORMAT}" == "flat_hdf5" ]]; then
+  FAST_CACHE_PATH="${GRAPH_INPUT}"
+  echo "stage=skip prepare_hetero_fast_cache reason=input_already_flat path=${GRAPH_INPUT}"
+elif [[ "${PREPARE_FAST_CACHE}" == "1" && "${DRY_RUN:-0}" != "1" ]]; then
   FAST_CACHE_PATH="${RUN_DIR}/cache/${RUN_NAME}.flat.h5"
   mkdir -p "$(dirname "${FAST_CACHE_PATH}")"
   {
@@ -227,6 +269,13 @@ elif [[ "${PREPARE_FAST_CACHE}" == "1" ]]; then
   FAST_CACHE_PATH="${RUN_DIR}/cache/${RUN_NAME}.flat.h5"
 fi
 
+if [[ "${SPEED_BENCHMARK}" == "1" ]]; then
+  echo "hetero_speed_benchmark prepare_fast_cache=${PREPARE_FAST_CACHE} graph_input_original=${GRAPH_INPUT_ORIGINAL} graph_input_effective=${GRAPH_INPUT}"
+else
+  echo "hetero_training_input prepare_fast_cache=${PREPARE_FAST_CACHE} graph_input_original=${GRAPH_INPUT_ORIGINAL} graph_input_effective=${GRAPH_INPUT}"
+fi
+mkdir -p "$(dirname "${SCALER_CACHE}")"
+
 cat > "${CONFIG_DIR}/train.env" <<EOF
 RUN_ID=${RUN_ID}
 RUN_NAME=${RUN_NAME}
@@ -236,6 +285,9 @@ GRAPH_INPUT_ORIGINAL=${GRAPH_INPUT_ORIGINAL}
 PREPARE_FAST_CACHE=${PREPARE_FAST_CACHE}
 FAST_CACHE_COMPRESSION=${FAST_CACHE_COMPRESSION}
 FAST_CACHE_VERIFY_SAMPLES=${FAST_CACHE_VERIFY_SAMPLES}
+GRAPH_INPUT_FORMAT=${GRAPH_INPUT_FORMAT}
+SCALER_CACHE=${SCALER_CACHE}
+REUSE_SCALER_CACHE=${REUSE_SCALER_CACHE}
 SPEED_BENCHMARK=${SPEED_BENCHMARK}
 CONFIG_NAME=${CONFIG_NAME}
 HIDDEN_DIM=${HIDDEN_DIM}
@@ -397,6 +449,7 @@ cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli train-hetero
   --loader-memory-estimate-samples "${TRAIN_LOADER_MEMORY_ESTIMATE_SAMPLES}"
   --training-data-format "${HETERO_TRAINING_DATA_FORMAT}"
   --final-eval-data-format "${FINAL_EVAL_DATA_FORMAT}"
+  --scaler-cache "${SCALER_CACHE}"
   --hetero-relations "${HETERO_RELATIONS}"
   --dataloader-timeout-sec "${DATALOADER_TIMEOUT_SEC}"
   --data-wait-warn-sec "${DATA_WAIT_WARN_SEC}"
@@ -426,6 +479,11 @@ if [[ "${CHECKPOINT_MILESTONE_FULL_EVAL}" == "1" ]]; then
 fi
 if [[ "${ALLOW_TRAIN_LOSS_CHECKPOINT}" == "1" ]]; then
   cmd+=(--allow-train-loss-checkpoint)
+fi
+if [[ "${REUSE_SCALER_CACHE}" == "1" ]]; then
+  cmd+=(--reuse-scaler-cache)
+else
+  cmd+=(--no-reuse-scaler-cache)
 fi
 if [[ -n "${WAVEFORM_LENGTH}" ]]; then
   cmd+=(--waveform-length "${WAVEFORM_LENGTH}")

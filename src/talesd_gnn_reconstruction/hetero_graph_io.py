@@ -404,6 +404,24 @@ def _verify_flat_cache_samples(
         flat.close()
 
 
+def _dataset_axis_nbytes(dataset: h5py.Dataset, *, axis: int, count: int) -> int:
+    count = max(int(count), 0)
+    shape = list(dataset.shape)
+    if not shape:
+        return int(np.dtype(dataset.dtype).itemsize)
+    axis = int(axis)
+    if axis < 0:
+        axis += len(shape)
+    if axis < 0 or axis >= len(shape):
+        raise ValueError(f"axis {axis} is out of bounds for dataset shape={tuple(shape)}")
+    shape[axis] = count
+    return int(np.prod(shape, dtype=np.int64)) * int(np.dtype(dataset.dtype).itemsize)
+
+
+def _dataset_rows_nbytes(dataset: h5py.Dataset, rows: int) -> int:
+    return _dataset_axis_nbytes(dataset, axis=0, count=int(rows))
+
+
 def convert_hetero_to_flat_cache(
     input_paths: str | Path | Sequence[str | Path],
     output_path: str | Path,
@@ -792,6 +810,26 @@ class H5HeteroGraphDataset:
             "particle_label": particle_label,
         }
 
+    def training_sample(self, index: int) -> dict[str, Any]:
+        path_index, _local_index, key = self._locate(index)
+        group = self._handle(path_index)["events"][key]
+        target = group["target"][()].astype(np.float32) if "target" in group else None
+        if self.require_target and target is None:
+            raise ValueError(f"graph has no target: {self.paths[path_index]}::{key}")
+        particle_label = self.particle_label(index)
+        if self.require_particle_label and particle_label is None:
+            raise ValueError(f"graph has no particle label: {self.paths[path_index]}::{key}")
+        return {
+            "detector_features": group["detector_features"][()].astype(np.float32),
+            "detector_context_features": group["detector_context_features"][()].astype(np.float32),
+            "detector_waveforms": group["detector_waveforms"][()].astype(np.float32),
+            "pulse_features": group["pulse_features"][()].astype(np.float32),
+            "edge_index_by_type": self._read_edge_group(group["edge_index_by_type"]),
+            "edge_features_by_type": self._read_edge_group(group["edge_features_by_type"]),
+            "target": target,
+            "particle_label": particle_label,
+        }
+
     def __getitem__(self, index: int) -> dict[str, Any]:
         path_index, _local_index, key = self._locate(index)
         group = self._handle(path_index)["events"][key]
@@ -975,13 +1013,37 @@ class H5FlatHeteroGraphDataset:
         return (n_detector, int(waveform.shape[1]), int(waveform.shape[2]))
 
     def graph_nbytes(self, index: int) -> int:
-        sample = self[index]
+        path_index, local_index = self._locate(index)
+        handle = self._handle(path_index)
+        detector_slice = self._slice_offsets(handle, "detector", local_index)
+        pulse_slice = self._slice_offsets(handle, "pulse", local_index)
+        n_detector = int(detector_slice.stop - detector_slice.start)
+        n_pulse = int(pulse_slice.stop - pulse_slice.start)
         total = 0
-        for key, value in sample.items():
-            if isinstance(value, np.ndarray):
-                total += int(value.nbytes)
-            elif isinstance(value, dict):
-                total += sum(int(item.nbytes) for item in value.values() if isinstance(item, np.ndarray))
+        for name, rows in (
+            ("detector_features", n_detector),
+            ("detector_context_features", n_detector),
+            ("detector_positions_km", n_detector),
+            ("detector_lids", n_detector),
+            ("detector_waveforms", n_detector),
+            ("pulse_features", n_pulse),
+            ("pulse_positions_km", n_pulse),
+            ("pulse_lids", n_pulse),
+            ("pulse_detector_index", n_pulse),
+            ("pulse_bounds", n_pulse),
+        ):
+            dataset = self._array_dataset(handle, name)
+            total += _dataset_rows_nbytes(dataset, rows)
+        arrays = handle.get("arrays")
+        if "target_all" in handle or (arrays is not None and "target" in arrays):
+            total += _dataset_rows_nbytes(self._array_dataset(handle, "target"), 1)
+        if "particle_label_all" in handle or (arrays is not None and "particle_label" in arrays):
+            total += _dataset_rows_nbytes(self._array_dataset(handle, "particle_label"), 1)
+        for relation in EDGE_RELATIONS:
+            offsets = self._edge_offset_dataset(handle, relation)
+            n_edges = int(offsets[local_index + 1] - offsets[local_index])
+            total += _dataset_axis_nbytes(self._edge_index_dataset(handle, relation), axis=1, count=n_edges)
+            total += _dataset_rows_nbytes(self._edge_feature_dataset(handle, relation), n_edges)
         return int(total)
 
     def scaler_sample(self, index: int) -> dict[str, Any]:
@@ -1009,6 +1071,40 @@ class H5FlatHeteroGraphDataset:
             "detector_features": self._array_dataset(handle, "detector_features")[detector_slice].astype(np.float32),
             "detector_context_features": self._array_dataset(handle, "detector_context_features")[detector_slice].astype(np.float32),
             "pulse_features": self._array_dataset(handle, "pulse_features")[pulse_slice].astype(np.float32),
+            "edge_features_by_type": edge_features_by_type,
+            "target": target,
+            "particle_label": particle_label,
+        }
+
+    def training_sample(self, index: int) -> dict[str, Any]:
+        path_index, local_index = self._locate(index)
+        handle = self._handle(path_index)
+        detector_slice = self._slice_offsets(handle, "detector", local_index)
+        pulse_slice = self._slice_offsets(handle, "pulse", local_index)
+        edge_index_by_type = {}
+        edge_features_by_type = {}
+        for relation in EDGE_RELATIONS:
+            offsets = self._edge_offset_dataset(handle, relation)
+            edge_slice = slice(int(offsets[local_index]), int(offsets[local_index + 1]))
+            edge_index_by_type[relation] = self._edge_index_dataset(handle, relation)[:, edge_slice].astype(np.int64)
+            edge_features_by_type[relation] = self._edge_feature_dataset(handle, relation)[edge_slice].astype(np.float32)
+        arrays = handle.get("arrays")
+        target = (
+            self._array_dataset(handle, "target")[local_index].astype(np.float32)
+            if "target_all" in handle or (arrays is not None and "target" in arrays)
+            else None
+        )
+        particle_label = self.particle_label(index)
+        if self.require_target and target is None:
+            raise ValueError(f"graph has no target: {self.paths[path_index]}::{local_index}")
+        if self.require_particle_label and particle_label is None:
+            raise ValueError(f"graph has no particle label: {self.paths[path_index]}::{local_index}")
+        return {
+            "detector_features": self._array_dataset(handle, "detector_features")[detector_slice].astype(np.float32),
+            "detector_context_features": self._array_dataset(handle, "detector_context_features")[detector_slice].astype(np.float32),
+            "detector_waveforms": self._array_dataset(handle, "detector_waveforms")[detector_slice].astype(np.float32),
+            "pulse_features": self._array_dataset(handle, "pulse_features")[pulse_slice].astype(np.float32),
+            "edge_index_by_type": edge_index_by_type,
             "edge_features_by_type": edge_features_by_type,
             "target": target,
             "particle_label": particle_label,

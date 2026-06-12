@@ -29,6 +29,10 @@ fi
 
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 SPEED_BENCHMARK="${SPEED_BENCHMARK:-0}"
+PREPARE_FAST_CACHE_WAS_SET=0
+if [[ -n "${PREPARE_FAST_CACHE:-}" ]]; then
+  PREPARE_FAST_CACHE_WAS_SET=1
+fi
 if [[ "${SPEED_BENCHMARK}" == "1" ]]; then
   TRAIN_EPOCHS="${TRAIN_EPOCHS:-2}"
 else
@@ -89,10 +93,19 @@ fi
 if [[ -z "${PREFETCH_FACTOR:-}" && "${WAVEFORM_ENCODER}" == "transformer" ]]; then
   export PREFETCH_FACTOR=1
 fi
+if [[ -z "${TRAIN_WORKERS:-}" && "${WAVEFORM_ENCODER}" == "transformer" ]]; then
+  export TRAIN_WORKERS=4
+fi
+if [[ "${PREPARE_FAST_CACHE_WAS_SET}" == "0" && ( "${SPEED_BENCHMARK}" == "1" || "${WAVEFORM_ENCODER}" == "transformer" ) ]]; then
+  export PREPARE_FAST_CACHE=1
+else
+  export PREPARE_FAST_CACHE="${PREPARE_FAST_CACHE:-0}"
+fi
 export PERSISTENT_WORKERS="${PERSISTENT_WORKERS:-1}"
 export VAL_NUM_WORKERS="${VAL_NUM_WORKERS:-0}"
 export VALIDATE_EVERY_N_EPOCHS="${VALIDATE_EVERY_N_EPOCHS:-1}"
 export HETERO_TRAINING_DATA_FORMAT="${HETERO_TRAINING_DATA_FORMAT:-fast_tensor}"
+export FINAL_EVAL_DATA_FORMAT="${FINAL_EVAL_DATA_FORMAT:-${HETERO_TRAINING_DATA_FORMAT}}"
 export HETERO_RELATIONS="${HETERO_RELATIONS:-all}"
 export DATALOADER_TIMEOUT_SEC="${DATALOADER_TIMEOUT_SEC:-300}"
 export DATA_WAIT_WARN_SEC="${DATA_WAIT_WARN_SEC:-30}"
@@ -127,8 +140,16 @@ if [[ "${SPEED_BENCHMARK}" == "1" ]]; then
   export MAX_VAL_GRAPHS="${MAX_VAL_GRAPHS:-512}"
   export VALIDATE_EVERY_N_EPOCHS="${VALIDATE_EVERY_N_EPOCHS:-1}"
 else
-  export ATTENTION_MAPS="${ATTENTION_MAPS:-1}"
-  export DIAGNOSTICS="${DIAGNOSTICS:-1}"
+  if [[ "${WAVEFORM_ENCODER}" == "transformer" ]]; then
+    export ATTENTION_MAPS="${ATTENTION_MAPS:-0}"
+    export DIAGNOSTICS="${DIAGNOSTICS:-0}"
+  else
+    export ATTENTION_MAPS="${ATTENTION_MAPS:-1}"
+    export DIAGNOSTICS="${DIAGNOSTICS:-1}"
+  fi
+fi
+if [[ "${PREPARE_FAST_CACHE}" == "0" && "${WAVEFORM_ENCODER}" == "transformer" ]]; then
+  echo "WARNING: transformer hetero production training should use PREPARE_FAST_CACHE=1 unless GRAPH_INPUT is already flat_hdf5" >&2
 fi
 export ATTENTION_MAPS_SPLIT="${ATTENTION_MAPS_SPLIT:-validation}"
 export ATTENTION_MAPS_MAX_GRAPHS="${ATTENTION_MAPS_MAX_GRAPHS:-16}"

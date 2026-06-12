@@ -4397,6 +4397,8 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         max_graphs=args.max_graphs,
         training_data_format=args.training_data_format,
         final_eval_data_format=args.final_eval_data_format,
+        scaler_cache_path=args.scaler_cache,
+        reuse_scaler_cache=args.reuse_scaler_cache,
         hetero_relations=args.hetero_relations,
         dataloader_timeout_sec=args.dataloader_timeout_sec,
         data_wait_warn_sec=args.data_wait_warn_sec,
@@ -5068,6 +5070,24 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["fast_tensor", "pyg"],
         default=None,
         help="final validation/test metrics用DataLoader形式。既定はtraining-data-formatと同じ",
+    )
+    train_hetero.add_argument(
+        "--scaler-cache",
+        default=None,
+        help="hetero scaler統計量のJSON cache。split/input metadataが一致する時だけ再利用する",
+    )
+    train_hetero.add_argument(
+        "--reuse-scaler-cache",
+        dest="reuse_scaler_cache",
+        action="store_true",
+        default=None,
+        help="--scaler-cache が一致すれば再利用する",
+    )
+    train_hetero.add_argument(
+        "--no-reuse-scaler-cache",
+        dest="reuse_scaler_cache",
+        action="store_false",
+        help="--scaler-cache を読み込まず、fit後に上書きする",
     )
     train_hetero.add_argument("--hetero-relations", default=None, help="使用relationのcomma list。既定はHETERO_RELATIONSまたはall")
     train_hetero.add_argument("--dataloader-timeout-sec", type=float, default=None)

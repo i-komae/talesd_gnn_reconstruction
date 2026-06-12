@@ -167,6 +167,75 @@ def hetero_sample_to_tensors(
     }
 
 
+def hetero_sample_to_training_tensors(
+    sample: Mapping[str, Any],
+    *,
+    device: torch.device | str | None = None,
+    scalers: Mapping[str, Any] | None = None,
+    waveform_length: int | None = None,
+) -> dict[str, Any]:
+    """Convert a minimal HDF5 sample to the tensor dict used for training.
+
+    This path intentionally does not require positions, lids, pulse bounds, or
+    metadata. Attention maps and visual diagnostics use hetero_sample_to_tensors.
+    """
+
+    resolved_device = torch.device(device) if device is not None else None
+    detector_features = _tensor(sample["detector_features"], dtype=torch.float32, device=resolved_device)
+    waveform_valid_index = detector_feature_index(DETECTOR_WAVEFORM_VALID_COLUMN)
+    if waveform_valid_index is not None and waveform_valid_index < detector_features.shape[1]:
+        detector_waveform_valid = detector_features[:, waveform_valid_index].clamp(0.0, 1.0)
+    else:
+        detector_waveform_valid = torch.ones(detector_features.shape[0], dtype=torch.float32, device=resolved_device)
+    detector_features = _scale_tensor(detector_features, _scaler_for(scalers, "detector", "detector_features"))
+    detector_context = _scale_tensor(
+        _tensor(sample["detector_context_features"], dtype=torch.float32, device=resolved_device),
+        _scaler_for(scalers, "detector_context", "detector_context_features"),
+    )
+    pulse_features = _scale_tensor(
+        _tensor(sample["pulse_features"], dtype=torch.float32, device=resolved_device),
+        _scaler_for(scalers, "pulse", "pulse_features"),
+    )
+    edge_index_by_type = {
+        relation: _long_tensor(edge_index, device=resolved_device)
+        for relation, edge_index in sample["edge_index_by_type"].items()
+    }
+    edge_features_by_type = {
+        relation: _scale_tensor(
+            _tensor(edge_features, dtype=torch.float32, device=resolved_device),
+            _scaler_for(scalers, f"edge:{relation}", relation),
+        )
+        for relation, edge_features in sample["edge_features_by_type"].items()
+    }
+    target = sample.get("target")
+    target_tensor = None
+    if target is not None:
+        target_tensor = _tensor(target, dtype=torch.float32, device=resolved_device).reshape(1, -1)
+        target_tensor = _scale_tensor(target_tensor, _scaler_for(scalers, "target"))
+    particle_label = sample.get("particle_label")
+    return {
+        "detector": {
+            "x": detector_features,
+            "context": detector_context,
+            "waveform": normalize_detector_waveforms(
+                _tensor(sample["detector_waveforms"], dtype=torch.float32, device=resolved_device),
+                waveform_length,
+            ),
+            "waveform_valid": detector_waveform_valid,
+        },
+        "pulse": {
+            "x": pulse_features,
+        },
+        "edge_index_by_type": edge_index_by_type,
+        "edge_features_by_type": edge_features_by_type,
+        "target": target_tensor,
+        "particle_label": None
+        if particle_label is None
+        else _tensor([particle_label], dtype=torch.float32, device=resolved_device),
+        "num_graphs": 1,
+    }
+
+
 def _scaler_for(scalers: Mapping[str, Any] | None, *keys: str) -> Any:
     if scalers is None:
         return None
