@@ -11,6 +11,12 @@ from typing import Any
 
 import numpy as np
 
+from .core_coordinates import coordinate_mode_summary
+from .core_coordinates import inverse_transform_core_target
+from .core_coordinates import normalize_coordinate_feature_mode
+from .core_coordinates import normalize_core_target_mode
+from .core_coordinates import parse_columns_json
+from .core_coordinates import target_columns_for_mode
 from .dataset import RunningFeatureStats, StandardScaler
 from .diagnostics import save_training_diagnostics
 from .hetero_data import EDGE_TYPE_BY_RELATION
@@ -190,12 +196,22 @@ def _dataset_format_label(dataset: Any) -> str:
     return "flat_hdf5" if dataset.__class__.__name__ == "H5FlatHeteroGraphDataset" else "grouped_hdf5"
 
 
-def _scaler_cache_metadata(dataset: Any, indices: Sequence[int], first_sample: dict[str, Any]) -> dict[str, Any]:
+def _scaler_cache_metadata(
+    dataset: Any,
+    indices: Sequence[int],
+    first_sample: dict[str, Any],
+    *,
+    core_target_mode: str,
+    coordinate_feature_mode: str,
+) -> dict[str, Any]:
     return {
         "version": 1,
         "graph_input_paths": [str(Path(path).expanduser()) for path in getattr(dataset, "paths", [])],
         "graph_format": _dataset_format_label(dataset),
         "split_indices_hash": _split_indices_hash(indices),
+        "core_target_mode": normalize_core_target_mode(core_target_mode),
+        "coordinate_feature_mode": normalize_coordinate_feature_mode(coordinate_feature_mode),
+        "target_columns": list(target_columns_for_mode(core_target_mode)),
         "train_graph_count": int(len(indices)),
         "detector_dim": int(first_sample["detector_features"].shape[1]),
         "detector_context_dim": int(first_sample["detector_context_features"].shape[1]),
@@ -555,6 +571,7 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
     pulse_x_rows = []
     pulse_batch_rows = []
     target_rows = []
+    core_anchor_rows = []
     label_rows = []
     edge_index_by_type = {relation: [] for relation in EDGE_TYPE_BY_RELATION}
     edge_features_by_type = {relation: [] for relation in EDGE_TYPE_BY_RELATION}
@@ -573,6 +590,9 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
         pulse_batch_rows.append(torch.full((n_pulse,), int(graph_index), dtype=torch.long))
         if sample["target"] is not None:
             target_rows.append(sample["target"].reshape(1, -1))
+        core_anchor = sample.get("core_anchor")
+        if core_anchor is not None:
+            core_anchor_rows.append(core_anchor.reshape(1, -1)[:, :2])
         if sample["particle_label"] is not None:
             label_rows.append(sample["particle_label"].reshape(-1))
         for relation in EDGE_TYPE_BY_RELATION:
@@ -614,6 +634,7 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
         "edge_index_by_type": collated_edges,
         "edge_features_by_type": collated_edge_features,
         "target": torch.cat(target_rows, dim=0) if target_rows else None,
+        "core_anchor": torch.cat(core_anchor_rows, dim=0) if core_anchor_rows else None,
         "particle_label": torch.cat(label_rows, dim=0) if label_rows else None,
         "num_graphs": int(len(samples)),
     }
@@ -1247,6 +1268,7 @@ def _predict_hetero_numpy(
     non_blocking: bool = False,
     progress_interval_sec: float | None = None,
     split_name: str | None = None,
+    core_target_mode: str = "absolute",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     import torch
 
@@ -1309,11 +1331,15 @@ def _predict_hetero_numpy(
                 quality_prediction=quality_prediction,
                 error_prediction=error_prediction,
             )
-            pred_rows.append(scalers["target"].inverse_transform(pred_scaled.detach().cpu().numpy()))
+            anchor_value = _batch_tensor(batch, "core_anchor")
+            core_anchor = None if anchor_value is None else anchor_value.detach().cpu().numpy()
+            pred_unscaled = scalers["target"].inverse_transform(pred_scaled.detach().cpu().numpy())
             target_value = _batch_tensor(batch, "target")
             if target_value is None:
                 raise ValueError("hetero prediction batch has no target")
-            target_rows.append(scalers["target"].inverse_transform(target_value.detach().cpu().numpy()))
+            target_unscaled = scalers["target"].inverse_transform(target_value.detach().cpu().numpy())
+            pred_rows.append(inverse_transform_core_target(pred_unscaled, core_anchor, core_target_mode))
+            target_rows.append(inverse_transform_core_target(target_unscaled, core_anchor, core_target_mode))
             label_value = _batch_tensor(batch, "particle_label")
             if mass_classification and mass_logit is not None and label_value is not None:
                 mass_logit_rows.append(mass_logit.detach().cpu().numpy())
@@ -1598,6 +1624,8 @@ def train_hetero_model(
     max_graphs: int | None = None,
     training_data_format: str | None = None,
     final_eval_data_format: str | None = None,
+    core_target_mode: str | None = None,
+    coordinate_feature_mode: str | None = None,
     scaler_cache_path: str | Path | None = None,
     reuse_scaler_cache: bool | None = None,
     hetero_relations: str | None = None,
@@ -1665,6 +1693,12 @@ def train_hetero_model(
     ).strip()
     if final_eval_data_format not in {"fast_tensor", "pyg"}:
         raise ValueError("final_eval_data_format must be fast_tensor or pyg")
+    core_target_mode = normalize_core_target_mode(
+        core_target_mode or os.environ.get("CORE_TARGET_MODE", "signal_bary_relative")
+    )
+    coordinate_feature_mode = normalize_coordinate_feature_mode(
+        coordinate_feature_mode or os.environ.get("COORDINATE_FEATURE_MODE", "relative_only")
+    )
     if scaler_cache_path is None:
         env_scaler_cache = os.environ.get("HETERO_SCALER_CACHE", os.environ.get("SCALER_CACHE", "")).strip()
         scaler_cache_path = env_scaler_cache or None
@@ -1737,6 +1771,8 @@ def train_hetero_model(
         graphs_path,
         require_target=True,
         require_particle_label=mass_classification,
+        core_target_mode=core_target_mode,
+        coordinate_feature_mode=coordinate_feature_mode,
     )
     if len(base_dataset) < 2:
         raise ValueError("hetero training needs at least two graphs with MC targets")
@@ -1748,6 +1784,30 @@ def train_hetero_model(
         f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
         flush=True,
     )
+    coordinate_summary = coordinate_mode_summary(
+        columns=parse_columns_json(getattr(base_dataset, "columns_json", "{}")),
+        core_target_mode=core_target_mode,
+        coordinate_feature_mode=coordinate_feature_mode,
+    )
+    print(
+        "hetero_coordinate_config "
+        f"core_target_mode={core_target_mode} "
+        f"core_anchor_mode={getattr(base_dataset, 'core_anchor_mode', core_target_mode)} "
+        f"coordinate_feature_mode={coordinate_feature_mode} "
+        f"target_columns={','.join(coordinate_summary['target_columns'])} "
+        f"has_detector_absolute_scalar_xyz={int(coordinate_summary['has_detector_absolute_scalar_xyz'])} "
+        f"has_pulse_absolute_scalar_xyz={int(coordinate_summary['has_pulse_absolute_scalar_xyz'])} "
+        f"has_detector_relative_scalar_xyz={int(coordinate_summary['has_detector_relative_scalar_xyz'])} "
+        f"has_pulse_relative_scalar_xyz={int(coordinate_summary['has_pulse_relative_scalar_xyz'])}",
+        flush=True,
+    )
+    if core_target_mode == "absolute" and not (
+        coordinate_summary["has_detector_absolute_scalar_xyz"] or coordinate_summary["has_pulse_absolute_scalar_xyz"]
+    ):
+        print(
+            "WARNING: hetero_coordinate_config absolute_core_target_without_absolute_scalar_coordinates=1",
+            flush=True,
+        )
     setup_step_start = time.perf_counter()
     print(
         "hetero_train_setup "
@@ -1868,6 +1928,8 @@ def train_hetero_model(
         f"val_graphs_per_epoch={len(val_indices_for_epoch)} "
         f"val_num_workers={int(val_num_workers)} "
         f"final_eval_data_format={final_eval_data_format} "
+        f"core_target_mode={core_target_mode} "
+        f"coordinate_feature_mode={coordinate_feature_mode} "
         f"dataloader_timeout_sec={float(dataloader_timeout_sec):.6g} "
         f"data_wait_warn_sec={float(data_wait_warn_sec):.6g}",
         flush=True,
@@ -1943,7 +2005,13 @@ def train_hetero_model(
         flush=True,
     )
     first = base_dataset.training_sample(train_indices[0])
-    scaler_metadata = _scaler_cache_metadata(base_dataset, train_indices, first)
+    scaler_metadata = _scaler_cache_metadata(
+        base_dataset,
+        train_indices,
+        first,
+        core_target_mode=core_target_mode,
+        coordinate_feature_mode=coordinate_feature_mode,
+    )
     scalers = None
     scaler_cache_hit = False
     setup_step_start = time.perf_counter()
@@ -2055,6 +2123,8 @@ def train_hetero_model(
         graphs_path,
         require_target=True,
         require_particle_label=mass_classification,
+        core_target_mode=core_target_mode,
+        coordinate_feature_mode=coordinate_feature_mode,
         scalers=scalers,
         waveform_length=resolved_waveform_length,
     )
@@ -2090,6 +2160,8 @@ def train_hetero_model(
         graphs_path,
         require_target=True,
         require_particle_label=mass_classification,
+        core_target_mode=core_target_mode,
+        coordinate_feature_mode=coordinate_feature_mode,
         scalers=scalers,
         waveform_length=resolved_waveform_length,
     )
@@ -2238,6 +2310,12 @@ def train_hetero_model(
             "milestone_eval_current_model": bool(milestone_eval_current_model),
             "milestone_eval_best_model": bool(milestone_eval_best_model),
             "final_eval_data_format": str(final_eval_data_format),
+            "core_target_mode": str(core_target_mode),
+            "core_anchor_mode": str(getattr(base_dataset, "core_anchor_mode", core_target_mode)),
+            "coordinate_feature_mode": str(coordinate_feature_mode),
+            "target_columns": list(target_columns_for_mode(core_target_mode)),
+            "core_prediction_output": "delta_core_xy_km" if core_target_mode != "absolute" else "absolute_core_xy_km",
+            "metrics_core_coordinates": "absolute_core_xy_km",
             "data_loader": {
                 **loader_settings,
                 **graph_byte_summary,
@@ -2264,6 +2342,8 @@ def train_hetero_model(
                 "milestone_eval_current_model": bool(milestone_eval_current_model),
                 "milestone_eval_best_model": bool(milestone_eval_best_model),
                 "final_eval_data_format": str(final_eval_data_format),
+                "core_target_mode": str(core_target_mode),
+                "coordinate_feature_mode": str(coordinate_feature_mode),
                 "val_num_workers": int(val_num_workers),
                 "dataloader_timeout_sec": float(dataloader_timeout_sec),
                 "data_wait_warn_sec": float(data_wait_warn_sec),
@@ -2362,6 +2442,7 @@ def train_hetero_model(
             non_blocking=non_blocking_h2d,
             progress_interval_sec=predict_progress_interval_sec,
             split_name=f"validation_{desc_suffix}",
+            core_target_mode=core_target_mode,
         )
         pred_test, target_test, mass_logit_test, mass_label_test, quality_test, error_test = _predict_hetero_numpy(
             model,
@@ -2382,6 +2463,7 @@ def train_hetero_model(
             non_blocking=non_blocking_h2d,
             progress_interval_sec=predict_progress_interval_sec,
             split_name=f"test_{desc_suffix}",
+            core_target_mode=core_target_mode,
         )
 
         def _add_reconstruction_metric(split_name: str, pred: np.ndarray, target: np.ndarray) -> dict[str, Any] | None:
@@ -2512,6 +2594,7 @@ def train_hetero_model(
                     non_blocking=non_blocking_h2d,
                     progress_interval_sec=predict_progress_interval_sec,
                     split_name=f"{split_name}_milestone_epoch{int(epoch):04d}_{model_kind}",
+                    core_target_mode=core_target_mode,
                 )
                 elapsed = time.monotonic() - start
                 metrics_payload = _milestone_metric_summary(pred, target, mass_logit, mass_label, quality_score, error_pred)
@@ -3162,6 +3245,10 @@ def evaluate_hetero_checkpoint(
     model.eval()
     scalers = _scalers_from_dict(dict(checkpoint["hetero_scalers"]))
     runtime = dict(checkpoint.get("runtime", {}))
+    core_target_mode = normalize_core_target_mode(runtime.get("core_target_mode", "absolute"))
+    coordinate_feature_mode = normalize_coordinate_feature_mode(
+        runtime.get("coordinate_feature_mode", "absolute_and_relative")
+    )
     target_dim = int(model_config.get("target_dim", 6))
     mass_classification = int(model_config.get("classification_dim", 0)) > 0
     quality_prediction = int(model_config.get("quality_dim", 0)) > 0
@@ -3177,6 +3264,8 @@ def evaluate_hetero_checkpoint(
         graphs_path,
         require_target=True,
         require_particle_label=mass_classification,
+        core_target_mode=core_target_mode,
+        coordinate_feature_mode=coordinate_feature_mode,
         scalers=scalers,
         waveform_length=waveform_length,
     )
@@ -3227,6 +3316,7 @@ def evaluate_hetero_checkpoint(
                 non_blocking=False,
                 progress_interval_sec=float(os.environ.get("TALESD_GNN_PREDICT_PROGRESS_INTERVAL_SEC", "60")),
                 split_name=f"{split_name}_checkpoint_eval",
+                core_target_mode=core_target_mode,
             )
             elapsed = time.monotonic() - start
             metrics = _milestone_metric_summary(pred, target, mass_logit, mass_label, quality_score, error_pred)
@@ -3252,6 +3342,8 @@ def evaluate_hetero_checkpoint(
                 "quality_prediction": bool(quality_prediction),
                 "error_prediction": bool(error_prediction),
                 "data_format": data_format,
+                "core_target_mode": core_target_mode,
+                "coordinate_feature_mode": coordinate_feature_mode,
             },
         }
         _write_json_atomic(output, payload)

@@ -55,6 +55,16 @@ def detector_feature_index(name: str) -> int | None:
         return None
 
 
+def _detector_feature_index_from_sample(sample: Mapping[str, Any], name: str) -> int | None:
+    columns = sample.get("detector_feature_columns")
+    if columns is not None:
+        try:
+            return int([str(column) for column in columns].index(str(name)))
+        except ValueError:
+            return None
+    return detector_feature_index(name)
+
+
 class TorchGeometricUnavailableError(ImportError):
     """Raised when PyG conversion is requested without torch_geometric installed."""
 
@@ -102,7 +112,7 @@ def hetero_sample_to_tensors(
 ) -> dict[str, Any]:
     resolved_device = torch.device(device) if device is not None else None
     detector_features = _tensor(sample["detector_features"], dtype=torch.float32, device=resolved_device)
-    waveform_valid_index = detector_feature_index(DETECTOR_WAVEFORM_VALID_COLUMN)
+    waveform_valid_index = _detector_feature_index_from_sample(sample, DETECTOR_WAVEFORM_VALID_COLUMN)
     if waveform_valid_index is not None and waveform_valid_index < detector_features.shape[1]:
         detector_waveform_valid = detector_features[:, waveform_valid_index].clamp(0.0, 1.0)
     else:
@@ -135,6 +145,7 @@ def hetero_sample_to_tensors(
         target_tensor = _tensor(target, dtype=torch.float32, device=resolved_device).reshape(1, -1)
         target_tensor = _scale_tensor(target_tensor, _scaler_for(scalers, "target"))
     particle_label = sample.get("particle_label")
+    core_anchor = sample.get("core_anchor")
     return {
         "detector": {
             "x": detector_features,
@@ -159,6 +170,9 @@ def hetero_sample_to_tensors(
         "edge_index_by_type": edge_index_by_type,
         "edge_features_by_type": edge_features_by_type,
         "target": target_tensor,
+        "core_anchor": None
+        if core_anchor is None
+        else _tensor(core_anchor, dtype=torch.float32, device=resolved_device).reshape(1, -1)[:, :2],
         "particle_label": None
         if particle_label is None
         else _tensor([particle_label], dtype=torch.float32, device=resolved_device),
@@ -182,7 +196,7 @@ def hetero_sample_to_training_tensors(
 
     resolved_device = torch.device(device) if device is not None else None
     detector_features = _tensor(sample["detector_features"], dtype=torch.float32, device=resolved_device)
-    waveform_valid_index = detector_feature_index(DETECTOR_WAVEFORM_VALID_COLUMN)
+    waveform_valid_index = _detector_feature_index_from_sample(sample, DETECTOR_WAVEFORM_VALID_COLUMN)
     if waveform_valid_index is not None and waveform_valid_index < detector_features.shape[1]:
         detector_waveform_valid = detector_features[:, waveform_valid_index].clamp(0.0, 1.0)
     else:
@@ -213,6 +227,7 @@ def hetero_sample_to_training_tensors(
         target_tensor = _tensor(target, dtype=torch.float32, device=resolved_device).reshape(1, -1)
         target_tensor = _scale_tensor(target_tensor, _scaler_for(scalers, "target"))
     particle_label = sample.get("particle_label")
+    core_anchor = sample.get("core_anchor")
     return {
         "detector": {
             "x": detector_features,
@@ -229,6 +244,9 @@ def hetero_sample_to_training_tensors(
         "edge_index_by_type": edge_index_by_type,
         "edge_features_by_type": edge_features_by_type,
         "target": target_tensor,
+        "core_anchor": None
+        if core_anchor is None
+        else _tensor(core_anchor, dtype=torch.float32, device=resolved_device).reshape(1, -1)[:, :2],
         "particle_label": None
         if particle_label is None
         else _tensor([particle_label], dtype=torch.float32, device=resolved_device),
@@ -306,6 +324,8 @@ def sample_to_hetero_data(
     if tensors["target"] is not None:
         data.target = tensors["target"]
         data.y = tensors["target"]
+    if tensors.get("core_anchor") is not None:
+        data.core_anchor = tensors["core_anchor"]
     if tensors["particle_label"] is not None:
         data.particle_label = tensors["particle_label"]
     data.metadata = tensors["metadata"]
@@ -338,6 +358,7 @@ def hetero_data_to_tensors(data: Any) -> dict[str, Any]:
             )
         edge_features_by_type[relation] = edge_attr.to(dtype=torch.float32)
     target = data["target"] if "target" in data else None
+    core_anchor = data["core_anchor"] if "core_anchor" in data else None
     particle_label = data["particle_label"] if "particle_label" in data else None
     return {
         "detector": {
@@ -362,6 +383,7 @@ def hetero_data_to_tensors(data: Any) -> dict[str, Any]:
         "edge_index_by_type": edge_index_by_type,
         "edge_features_by_type": edge_features_by_type,
         "target": target.to(dtype=torch.float32) if target is not None else None,
+        "core_anchor": core_anchor.to(dtype=torch.float32) if core_anchor is not None else None,
         "particle_label": particle_label.to(dtype=torch.float32) if particle_label is not None else None,
         "metadata": data["metadata"] if "metadata" in data else {},
         "num_graphs": int(getattr(data, "num_graphs", 1)),

@@ -4402,6 +4402,8 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         max_graphs=args.max_graphs,
         training_data_format=args.training_data_format,
         final_eval_data_format=args.final_eval_data_format,
+        core_target_mode=args.core_target_mode,
+        coordinate_feature_mode=args.coordinate_feature_mode,
         scaler_cache_path=args.scaler_cache,
         reuse_scaler_cache=args.reuse_scaler_cache,
         hetero_relations=args.hetero_relations,
@@ -4469,6 +4471,7 @@ def _cmd_convert_hetero_to_flat(args: argparse.Namespace) -> None:
         args.output,
         compression=args.compression,
         cache_mode=args.cache_mode,
+        core_anchor_mode=args.core_anchor_mode,
         max_graphs=args.max_graphs,
         verify_samples=args.verify_samples,
         progress_interval_sec=args.progress_interval_sec,
@@ -4483,6 +4486,7 @@ def _cmd_convert_hetero_to_flat(args: argparse.Namespace) -> None:
         f"waveform_shape={summary['waveform_channels']}x{summary['waveform_length']} "
         f"compression={summary['compression']} "
         f"cache_mode={summary.get('cache_mode', 'unknown')} "
+        f"core_anchor_mode={summary.get('core_anchor_mode', 'unknown')} "
         f"verified_samples={summary.get('verified_samples', 0)}"
     )
 
@@ -5153,6 +5157,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="final validation/test metrics用DataLoader形式。既定はtraining-data-formatと同じ",
     )
     train_hetero.add_argument(
+        "--core-target-mode",
+        choices=["absolute", "signal_bary_relative", "fit_core_relative"],
+        default=None,
+        help="core target coordinate mode。既定はCORE_TARGET_MODEまたはsignal_bary_relative",
+    )
+    train_hetero.add_argument(
+        "--coordinate-feature-mode",
+        choices=["absolute_and_relative", "relative_only", "absolute_only"],
+        default=None,
+        help="scalar coordinate feature filtering mode。既定はCOORDINATE_FEATURE_MODEまたはrelative_only",
+    )
+    train_hetero.add_argument(
         "--scaler-cache",
         default=None,
         help="hetero scaler統計量のJSON cache。split/input metadataが一致する時だけ再利用する",
@@ -5217,6 +5233,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="training",
         choices=["training", "full"],
         help="training は fast_tensor 学習用の最小配列だけを書く。full はPyG/可視化用metadataも保存する",
+    )
+    convert_hetero_flat.add_argument(
+        "--core-anchor-mode",
+        default="signal_bary_relative",
+        choices=["absolute", "signal_bary_relative", "fit_core_relative"],
+        help="flat cacheへ保存するcore anchorの定義。trainingのCORE_TARGET_MODEと合わせる",
     )
     convert_hetero_flat.add_argument(
         "--max-graphs",

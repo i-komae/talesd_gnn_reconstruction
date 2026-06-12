@@ -23,6 +23,7 @@ from talesd_gnn_reconstruction.hetero_data import (
     hetero_sample_to_tensors,
     sample_to_hetero_data,
 )
+from talesd_gnn_reconstruction.core_coordinates import core_anchor_from_sample, inverse_transform_core_target
 from talesd_gnn_reconstruction.hetero_attention_analysis import save_hetero_attention_maps
 from talesd_gnn_reconstruction.hetero_feature_analysis import (
     save_hetero_feature_group_importance,
@@ -193,6 +194,94 @@ def _synthetic_graph(index: int) -> SimpleNamespace:
 
 
 class SyntheticHeteroGraphIoTest(unittest.TestCase):
+    def test_core_target_signal_bary_relative_roundtrip(self) -> None:
+        graph = _synthetic_graph(3)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "graphs.h5"
+            with create_hetero_graph_file(graph_path) as handle:
+                write_hetero_graph(handle, 0, graph)
+            dataset = H5HeteroGraphDataset(
+                graph_path,
+                require_target=True,
+                core_target_mode="signal_bary_relative",
+                coordinate_feature_mode="relative_only",
+            )
+            try:
+                sample = dataset.training_sample(0)
+                expected_anchor = core_anchor_from_sample(
+                    {
+                        "pulse_positions_km": graph.pulse_positions_km,
+                        "pulse_features": graph.pulse_features,
+                    },
+                    columns=GRAPH_COLUMNS,
+                    core_anchor_mode="signal_bary_relative",
+                )
+                np.testing.assert_allclose(sample["core_anchor"], expected_anchor, rtol=1.0e-6, atol=1.0e-6)
+                np.testing.assert_allclose(sample["target"][1:3], graph.target[1:3] - expected_anchor, rtol=1.0e-6, atol=1.0e-6)
+                restored = inverse_transform_core_target(
+                    sample["target"][None, :],
+                    sample["core_anchor"][None, :],
+                    "signal_bary_relative",
+                )
+                np.testing.assert_allclose(restored[0, 1:3], graph.target[1:3], rtol=1.0e-6, atol=1.0e-6)
+            finally:
+                dataset.close()
+
+    def test_flat_cache_stores_core_anchor_for_relative_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            grouped = Path(tmpdir) / "grouped.h5"
+            flat = Path(tmpdir) / "flat.h5"
+            with create_hetero_graph_file(grouped) as handle:
+                for index in range(3):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+            convert_hetero_to_flat_cache(grouped, flat, compression="none", cache_mode="training", verify_samples=2)
+            with h5py.File(flat, "r") as handle:
+                self.assertIn("core_anchor_all", handle)
+            dataset = H5FlatHeteroGraphDataset(flat, require_target=True, core_target_mode="signal_bary_relative")
+            try:
+                sample = dataset.training_sample(1)
+                self.assertEqual(sample["core_anchor"].shape, (2,))
+                raw_target = _synthetic_graph(1).target
+                np.testing.assert_allclose(sample["target"][1:3], raw_target[1:3] - sample["core_anchor"], rtol=1.0e-6, atol=1.0e-6)
+            finally:
+                dataset.close()
+
+    def test_flat_cache_rejects_mismatched_core_anchor_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            grouped = Path(tmpdir) / "grouped.h5"
+            flat = Path(tmpdir) / "flat.h5"
+            with create_hetero_graph_file(grouped) as handle:
+                write_hetero_graph(handle, 0, _synthetic_graph(0))
+            convert_hetero_to_flat_cache(
+                grouped,
+                flat,
+                compression="none",
+                cache_mode="training",
+                core_anchor_mode="signal_bary_relative",
+                verify_samples=1,
+            )
+            with self.assertRaisesRegex(ValueError, "core_anchor_mode"):
+                H5FlatHeteroGraphDataset(flat, require_target=True, core_target_mode="fit_core_relative")
+
+    def test_fast_tensor_collate_keeps_core_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "graphs.h5"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(2):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+            dataset = H5TensorHeteroGraphDataset(
+                graph_path,
+                require_target=True,
+                require_particle_label=True,
+                core_target_mode="signal_bary_relative",
+            )
+            try:
+                batch = _collate_tensor_hetero_graphs([dataset[0], dataset[1]])
+                self.assertIn("core_anchor", batch)
+                self.assertEqual(tuple(batch["core_anchor"].shape), (2, 2))
+            finally:
+                dataset.close()
+
     def test_hetero_transformer_training_defaults_are_v100_safe(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1323,6 +1412,10 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertEqual(checkpoint["runtime"]["checkpoint_kind"], "final")
             self.assertEqual(checkpoint["runtime"]["best_epoch"], 1)
             self.assertEqual(checkpoint["runtime"]["checkpoint_epoch"], 1)
+            self.assertEqual(checkpoint["runtime"]["core_target_mode"], "signal_bary_relative")
+            self.assertEqual(checkpoint["runtime"]["coordinate_feature_mode"], "relative_only")
+            self.assertEqual(checkpoint["runtime"]["core_prediction_output"], "delta_core_xy_km")
+            self.assertEqual(checkpoint["runtime"]["metrics_core_coordinates"], "absolute_core_xy_km")
             self.assertIn("hetero_scalers", checkpoint)
             self.assertIn("detector", checkpoint["hetero_scalers"])
             self.assertIn("target", checkpoint["hetero_scalers"])

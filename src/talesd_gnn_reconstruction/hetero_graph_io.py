@@ -11,6 +11,14 @@ from collections.abc import Sequence
 import h5py
 import numpy as np
 
+from .core_coordinates import core_anchor_from_sample
+from .core_coordinates import filter_feature_matrix
+from .core_coordinates import filtered_columns
+from .core_coordinates import normalize_coordinate_feature_mode
+from .core_coordinates import normalize_core_target_mode
+from .core_coordinates import parse_columns_json
+from .core_coordinates import transform_core_target
+
 
 FORMAT_NAME = "talesd_gnn_hetero_graphs"
 FLAT_FORMAT_NAME = "talesd_gnn_hetero_graphs_flat"
@@ -299,6 +307,19 @@ def _log_h5_layout(*, graph_path: Path, format_label: str, compression: str, n_e
     )
 
 
+def _metadata_from_group(group: h5py.Group) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    if "metadata_json" in group.attrs:
+        try:
+            metadata.update(json.loads(str(group.attrs["metadata_json"])))
+        except json.JSONDecodeError:
+            pass
+    for key, value in group.attrs.items():
+        if key != "metadata_json":
+            metadata[str(key)] = value
+    return metadata
+
+
 def _format_duration(seconds: float) -> str:
     seconds = max(float(seconds), 0.0)
     if seconds < 60.0:
@@ -442,6 +463,7 @@ def _verify_flat_cache_samples(
                 "detector_context_features",
                 "pulse_features",
                 "target",
+                "core_anchor",
             ):
                 _assert_array_equal_or_close(f"{key}[{index}]", grouped[key], cached[key])
             grouped_label = np.asarray(
@@ -529,6 +551,7 @@ def convert_hetero_to_flat_cache(
     *,
     compression: str | None = "none",
     cache_mode: str = "training",
+    core_anchor_mode: str = "signal_bary_relative",
     max_graphs: int | None = None,
     verify_samples: int = 5,
     progress_interval_sec: float | None = None,
@@ -537,6 +560,7 @@ def convert_hetero_to_flat_cache(
     cache_mode = str(cache_mode).strip().lower()
     if cache_mode not in {"training", "full"}:
         raise ValueError(f"cache_mode must be training or full, got {cache_mode!r}")
+    core_anchor_mode = normalize_core_target_mode(core_anchor_mode)
     if allow_slow_cache is None:
         allow_slow_cache = _env_flag("ALLOW_SLOW_CACHE", False)
     if progress_interval_sec is None:
@@ -545,7 +569,13 @@ def convert_hetero_to_flat_cache(
     output = Path(output_path).expanduser()
     compression_label = "none" if compression in {None, "", "none"} else str(compression)
     total_start = time.monotonic()
-    source = H5HeteroGraphDataset(input_paths, require_target=True, load_attrs=True)
+    source = H5HeteroGraphDataset(
+        input_paths,
+        require_target=True,
+        load_attrs=True,
+        core_target_mode="absolute",
+        core_anchor_mode=core_anchor_mode,
+    )
     try:
         if len(source) == 0:
             raise ValueError("cannot convert empty hetero HDF5 dataset")
@@ -629,6 +659,7 @@ def convert_hetero_to_flat_cache(
             handle.attrs["waveform_schema"] = WAVEFORM_SCHEMA
             handle.attrs["columns_json"] = source.columns_json
             handle.attrs["cache_mode"] = cache_mode
+            handle.attrs["core_anchor_mode"] = core_anchor_mode
             arrays = handle.create_group("arrays")
             offsets = handle.create_group("offsets")
             metadata = handle.create_group("metadata")
@@ -655,6 +686,7 @@ def convert_hetero_to_flat_cache(
                 arrays.create_dataset("pulse_detector_index", shape=(pulse_total,), dtype=np.int64, **filter_kwargs)
                 arrays.create_dataset("pulse_bounds", shape=(pulse_total, 4), dtype=np.float32, **filter_kwargs)
             arrays.create_dataset("target", shape=(n_events, target_dim), dtype=np.float32, **filter_kwargs)
+            arrays.create_dataset("core_anchor", shape=(n_events, 2), dtype=np.float32, **filter_kwargs)
             arrays.create_dataset("particle_label", shape=(n_events,), dtype=np.float32, **filter_kwargs)
             edge_index_group = arrays.create_group("edge_index_by_type")
             edge_feature_group = arrays.create_group("edge_features_by_type")
@@ -695,6 +727,7 @@ def convert_hetero_to_flat_cache(
                 handle["pulse_detector_index_all"] = arrays["pulse_detector_index"]
                 handle["pulse_bounds_all"] = arrays["pulse_bounds"]
             handle["target_all"] = arrays["target"]
+            handle["core_anchor_all"] = arrays["core_anchor"]
             handle["particle_label_all"] = arrays["particle_label"]
             handle["edge_index_all_by_relation"] = edge_index_group
             handle["edge_features_all_by_relation"] = edge_feature_group
@@ -732,6 +765,8 @@ def convert_hetero_to_flat_cache(
                     arrays["pulse_detector_index"][pulse_slice] = sample["pulse_detector_index"]
                     arrays["pulse_bounds"][pulse_slice] = sample["pulse_bounds"]
                 arrays["target"][index] = sample["target"]
+                core_anchor = np.asarray(sample.get("core_anchor", np.zeros((2,), dtype=np.float32)), dtype=np.float32)
+                arrays["core_anchor"][index] = core_anchor.reshape(-1)[:2]
                 arrays["particle_label"][index] = (
                     np.nan if sample["particle_label"] is None else float(sample["particle_label"])
                 )
@@ -821,7 +856,8 @@ def convert_hetero_to_flat_cache(
             "hetero_flat_cache_done "
             f"output={output} graphs={n_events} detector_nodes={int(detector_total)} "
             f"pulse_nodes={int(pulse_total)} edges={int(sum(edge_totals.values()))} "
-            f"compression={compression_label} cache_mode={cache_mode} verified_samples={int(verified_samples)} "
+            f"compression={compression_label} cache_mode={cache_mode} core_anchor_mode={core_anchor_mode} "
+            f"verified_samples={int(verified_samples)} "
             f"elapsed_sec={elapsed_sec:.6g} events_per_sec={float(n_events) / elapsed_sec if elapsed_sec > 0 else 0.0:.6g}",
             flush=True,
         )
@@ -835,6 +871,7 @@ def convert_hetero_to_flat_cache(
             "waveform_length": int(waveform_length),
             "compression": compression_label,
             "cache_mode": cache_mode,
+            "core_anchor_mode": core_anchor_mode,
             "verified_samples": int(verified_samples),
             "elapsed_sec": float(elapsed_sec),
             "events_per_sec": float(n_events) / elapsed_sec if elapsed_sec > 0 else 0.0,
@@ -851,6 +888,9 @@ class H5HeteroGraphDataset:
         require_target: bool = False,
         require_particle_label: bool = False,
         load_attrs: bool = True,
+        core_target_mode: str = "absolute",
+        coordinate_feature_mode: str = "absolute_and_relative",
+        core_anchor_mode: str | None = None,
     ):
         if isinstance(path, (str, Path)):
             self.paths = [Path(path).expanduser()]
@@ -859,12 +899,19 @@ class H5HeteroGraphDataset:
         self.require_target = bool(require_target)
         self.require_particle_label = bool(require_particle_label)
         self.load_attrs = bool(load_attrs)
+        self.core_target_mode = normalize_core_target_mode(core_target_mode)
+        self.coordinate_feature_mode = normalize_coordinate_feature_mode(coordinate_feature_mode)
+        self.core_anchor_mode = normalize_core_target_mode(
+            core_anchor_mode
+            or ("signal_bary_relative" if self.core_target_mode == "absolute" else self.core_target_mode)
+        )
         self._handles: dict[int, h5py.File] = {}
         self._path_lengths: list[int] = []
         self._cumulative_lengths: list[int] = []
         self._path_local_indices: list[list[int] | None] = []
         self._path_key_lists: list[list[str] | None] = []
         self.columns_json = "{}"
+        self.columns: dict[str, Any] = {}
 
         total = 0
         for path_index, graph_path in enumerate(self.paths):
@@ -890,6 +937,37 @@ class H5HeteroGraphDataset:
             self._cumulative_lengths.append(total)
             self._path_local_indices.append(None)
             self._path_key_lists.append(None)
+        self.columns = parse_columns_json(self.columns_json)
+
+    def _filter_detector_features(self, values: np.ndarray) -> np.ndarray:
+        return filter_feature_matrix(
+            values,
+            list(self.columns.get("detector_features", [])),
+            self.coordinate_feature_mode,
+        )
+
+    def _filter_pulse_features(self, values: np.ndarray) -> np.ndarray:
+        return filter_feature_matrix(
+            values,
+            list(self.columns.get("pulse_features", [])),
+            self.coordinate_feature_mode,
+        )
+
+    def _effective_detector_columns(self) -> list[str]:
+        return filtered_columns(list(self.columns.get("detector_features", [])), self.coordinate_feature_mode)
+
+    def _effective_pulse_columns(self) -> list[str]:
+        return filtered_columns(list(self.columns.get("pulse_features", [])), self.coordinate_feature_mode)
+
+    def _anchor_from_sample(self, sample: dict[str, Any]) -> np.ndarray:
+        return core_anchor_from_sample(
+            sample,
+            columns=self.columns,
+            core_anchor_mode=self.core_anchor_mode,
+        )
+
+    def _prepare_target(self, target: np.ndarray | None, core_anchor: np.ndarray) -> np.ndarray | None:
+        return transform_core_target(target, core_anchor, self.core_target_mode)
 
     def __len__(self) -> int:
         return self._cumulative_lengths[-1] if self._cumulative_lengths else 0
@@ -1051,13 +1129,24 @@ class H5HeteroGraphDataset:
         particle_label = self.particle_label(index)
         if self.require_particle_label and particle_label is None:
             raise ValueError(f"graph has no particle label: {self.paths[path_index]}::{key}")
+        raw_pulse_features = group["pulse_features"][()].astype(np.float32)
+        core_anchor = self._anchor_from_sample(
+            {
+                "pulse_features": raw_pulse_features,
+                "pulse_positions_km": group["pulse_positions_km"][()].astype(np.float32),
+                "metadata": _metadata_from_group(group),
+            }
+        )
         return {
-            "detector_features": group["detector_features"][()].astype(np.float32),
+            "detector_features": self._filter_detector_features(group["detector_features"][()].astype(np.float32)),
             "detector_context_features": group["detector_context_features"][()].astype(np.float32),
-            "pulse_features": group["pulse_features"][()].astype(np.float32),
+            "pulse_features": self._filter_pulse_features(raw_pulse_features),
             "edge_features_by_type": self._read_edge_group(group["edge_features_by_type"]),
-            "target": target,
+            "target": self._prepare_target(target, core_anchor),
+            "core_anchor": core_anchor,
             "particle_label": particle_label,
+            "detector_feature_columns": self._effective_detector_columns(),
+            "pulse_feature_columns": self._effective_pulse_columns(),
         }
 
     def training_sample(self, index: int) -> dict[str, Any]:
@@ -1069,15 +1158,26 @@ class H5HeteroGraphDataset:
         particle_label = self.particle_label(index)
         if self.require_particle_label and particle_label is None:
             raise ValueError(f"graph has no particle label: {self.paths[path_index]}::{key}")
+        raw_pulse_features = group["pulse_features"][()].astype(np.float32)
+        core_anchor = self._anchor_from_sample(
+            {
+                "pulse_features": raw_pulse_features,
+                "pulse_positions_km": group["pulse_positions_km"][()].astype(np.float32),
+                "metadata": _metadata_from_group(group),
+            }
+        )
         return {
-            "detector_features": group["detector_features"][()].astype(np.float32),
+            "detector_features": self._filter_detector_features(group["detector_features"][()].astype(np.float32)),
             "detector_context_features": group["detector_context_features"][()].astype(np.float32),
             "detector_waveforms": group["detector_waveforms"][()].astype(np.float32),
-            "pulse_features": group["pulse_features"][()].astype(np.float32),
+            "pulse_features": self._filter_pulse_features(raw_pulse_features),
             "edge_index_by_type": self._read_edge_group(group["edge_index_by_type"]),
             "edge_features_by_type": self._read_edge_group(group["edge_features_by_type"]),
-            "target": target,
+            "target": self._prepare_target(target, core_anchor),
+            "core_anchor": core_anchor,
             "particle_label": particle_label,
+            "detector_feature_columns": self._effective_detector_columns(),
+            "pulse_feature_columns": self._effective_pulse_columns(),
         }
 
     def __getitem__(self, index: int) -> dict[str, Any]:
@@ -1089,26 +1189,38 @@ class H5HeteroGraphDataset:
         particle_label = self.particle_label(index)
         if self.require_particle_label and particle_label is None:
             raise ValueError(f"graph has no particle label: {self.paths[path_index]}::{key}")
+        raw_pulse_features = group["pulse_features"][()].astype(np.float32)
+        pulse_positions = group["pulse_positions_km"][()].astype(np.float32)
+        metadata_for_anchor = _metadata_from_group(group)
+        core_anchor = self._anchor_from_sample(
+            {
+                "pulse_features": raw_pulse_features,
+                "pulse_positions_km": pulse_positions,
+                "metadata": metadata_for_anchor,
+            }
+        )
         sample: dict[str, Any] = {
-            "detector_features": group["detector_features"][()].astype(np.float32),
+            "detector_features": self._filter_detector_features(group["detector_features"][()].astype(np.float32)),
             "detector_context_features": group["detector_context_features"][()].astype(np.float32),
             "detector_positions_km": group["detector_positions_km"][()].astype(np.float32),
             "detector_lids": group["detector_lids"][()].astype(np.int64),
             "detector_waveforms": group["detector_waveforms"][()].astype(np.float32),
-            "pulse_features": group["pulse_features"][()].astype(np.float32),
-            "pulse_positions_km": group["pulse_positions_km"][()].astype(np.float32),
+            "pulse_features": self._filter_pulse_features(raw_pulse_features),
+            "pulse_positions_km": pulse_positions,
             "pulse_lids": group["pulse_lids"][()].astype(np.int64),
             "pulse_detector_index": group["pulse_detector_index"][()].astype(np.int64),
             "pulse_bounds": group["pulse_bounds"][()].astype(np.float32),
             "edge_index_by_type": self._read_edge_group(group["edge_index_by_type"]),
             "edge_features_by_type": self._read_edge_group(group["edge_features_by_type"]),
-            "target": target,
+            "target": self._prepare_target(target, core_anchor),
+            "core_anchor": core_anchor,
             "particle_label": particle_label,
+            "detector_feature_columns": self._effective_detector_columns(),
+            "pulse_feature_columns": self._effective_pulse_columns(),
         }
         if self.load_attrs:
             sample["attrs"] = dict(group.attrs.items())
-            if "metadata_json" in sample["attrs"]:
-                sample["metadata"] = json.loads(str(sample["attrs"]["metadata_json"]))
+            sample["metadata"] = metadata_for_anchor
         return sample
 
 
@@ -1120,6 +1232,9 @@ class H5FlatHeteroGraphDataset:
         require_target: bool = False,
         require_particle_label: bool = False,
         load_attrs: bool = True,
+        core_target_mode: str = "absolute",
+        coordinate_feature_mode: str = "absolute_and_relative",
+        core_anchor_mode: str | None = None,
     ):
         if isinstance(path, (str, Path)):
             self.paths = [Path(path).expanduser()]
@@ -1128,6 +1243,12 @@ class H5FlatHeteroGraphDataset:
         self.require_target = bool(require_target)
         self.require_particle_label = bool(require_particle_label)
         self.load_attrs = bool(load_attrs)
+        self.core_target_mode = normalize_core_target_mode(core_target_mode)
+        self.coordinate_feature_mode = normalize_coordinate_feature_mode(coordinate_feature_mode)
+        self.core_anchor_mode = normalize_core_target_mode(
+            core_anchor_mode
+            or ("signal_bary_relative" if self.core_target_mode == "absolute" else self.core_target_mode)
+        )
         self._handles: dict[int, h5py.File] = {}
         self._path_lengths: list[int] = []
         self._cumulative_lengths: list[int] = []
@@ -1136,6 +1257,7 @@ class H5FlatHeteroGraphDataset:
         self._path_cache_modes: list[str] = []
         self._path_scan_chunkable = True
         self.columns_json = "{}"
+        self.columns: dict[str, Any] = {}
         total = 0
         for path_index, graph_path in enumerate(self.paths):
             with h5py.File(graph_path, "r") as handle:
@@ -1147,6 +1269,14 @@ class H5FlatHeteroGraphDataset:
                     raise ValueError(f"{graph_path} stores unsupported waveform_schema")
                 if path_index == 0:
                     self.columns_json = str(handle.attrs.get("columns_json", "{}"))
+                stored_anchor_mode = str(handle.attrs.get("core_anchor_mode", "absolute")).strip().lower() or "absolute"
+                stored_anchor_mode = normalize_core_target_mode(stored_anchor_mode)
+                if self.core_target_mode != "absolute" and stored_anchor_mode != self.core_target_mode:
+                    raise ValueError(
+                        f"{graph_path} stores core_anchor_mode={stored_anchor_mode!r}, "
+                        f"but core_target_mode={self.core_target_mode!r} was requested; "
+                        "rebuild the flat cache with matching --core-anchor-mode"
+                    )
                 n_events = int(self._offset_dataset(handle, "detector").shape[0] - 1)
                 cache_mode = str(handle.attrs.get("cache_mode", "full")).strip().lower() or "full"
                 compression = _flat_h5_compression(handle)
@@ -1162,6 +1292,43 @@ class H5FlatHeteroGraphDataset:
             self._path_local_indices.append(None)
             self._path_key_lists.append(None)
             self._path_cache_modes.append(cache_mode)
+        self.columns = parse_columns_json(self.columns_json)
+
+    def _filter_detector_features(self, values: np.ndarray) -> np.ndarray:
+        return filter_feature_matrix(
+            values,
+            list(self.columns.get("detector_features", [])),
+            self.coordinate_feature_mode,
+        )
+
+    def _filter_pulse_features(self, values: np.ndarray) -> np.ndarray:
+        return filter_feature_matrix(
+            values,
+            list(self.columns.get("pulse_features", [])),
+            self.coordinate_feature_mode,
+        )
+
+    def _effective_detector_columns(self) -> list[str]:
+        return filtered_columns(list(self.columns.get("detector_features", [])), self.coordinate_feature_mode)
+
+    def _effective_pulse_columns(self) -> list[str]:
+        return filtered_columns(list(self.columns.get("pulse_features", [])), self.coordinate_feature_mode)
+
+    def _core_anchor(self, handle: h5py.File, local_index: int) -> np.ndarray:
+        if "core_anchor_all" in handle:
+            return handle["core_anchor_all"][local_index].astype(np.float32).reshape(-1)[:2]
+        arrays = handle.get("arrays")
+        if arrays is not None and "core_anchor" in arrays:
+            return arrays["core_anchor"][local_index].astype(np.float32).reshape(-1)[:2]
+        if self.core_target_mode != "absolute":
+            raise ValueError(
+                "relative core target mode needs core_anchor_all in flat HDF5 cache; "
+                "rebuild the flat cache from grouped HDF5 with the current converter"
+            )
+        return np.zeros((2,), dtype=np.float32)
+
+    def _prepare_target(self, target: np.ndarray | None, core_anchor: np.ndarray) -> np.ndarray | None:
+        return transform_core_target(target, core_anchor, self.core_target_mode)
 
     def __len__(self) -> int:
         return self._cumulative_lengths[-1] if self._cumulative_lengths else 0
@@ -1298,6 +1465,8 @@ class H5FlatHeteroGraphDataset:
         arrays = handle.get("arrays")
         if "target_all" in handle or (arrays is not None and "target" in arrays):
             total += _dataset_rows_nbytes(self._array_dataset(handle, "target"), 1)
+        if "core_anchor_all" in handle or (arrays is not None and "core_anchor" in arrays):
+            total += _dataset_rows_nbytes(self._array_dataset(handle, "core_anchor"), 1)
         if "particle_label_all" in handle or (arrays is not None and "particle_label" in arrays):
             total += _dataset_rows_nbytes(self._array_dataset(handle, "particle_label"), 1)
         for relation in EDGE_RELATIONS:
@@ -1326,6 +1495,8 @@ class H5FlatHeteroGraphDataset:
         arrays = handle.get("arrays")
         if "target_all" in handle or (arrays is not None and "target" in arrays):
             total += _dataset_rows_nbytes(self._array_dataset(handle, "target"), 1)
+        if "core_anchor_all" in handle or (arrays is not None and "core_anchor" in arrays):
+            total += _dataset_rows_nbytes(self._array_dataset(handle, "core_anchor"), 1)
         if "particle_label_all" in handle or (arrays is not None and "particle_label" in arrays):
             total += _dataset_rows_nbytes(self._array_dataset(handle, "particle_label"), 1)
         for relation in EDGE_RELATIONS:
@@ -1356,13 +1527,21 @@ class H5FlatHeteroGraphDataset:
         particle_label = self.particle_label(index)
         if self.require_particle_label and particle_label is None:
             raise ValueError(f"graph has no particle label: {self.paths[path_index]}::{local_index}")
+        core_anchor = self._core_anchor(handle, local_index)
         return {
-            "detector_features": self._array_dataset(handle, "detector_features")[detector_slice].astype(np.float32),
+            "detector_features": self._filter_detector_features(
+                self._array_dataset(handle, "detector_features")[detector_slice].astype(np.float32)
+            ),
             "detector_context_features": self._array_dataset(handle, "detector_context_features")[detector_slice].astype(np.float32),
-            "pulse_features": self._array_dataset(handle, "pulse_features")[pulse_slice].astype(np.float32),
+            "pulse_features": self._filter_pulse_features(
+                self._array_dataset(handle, "pulse_features")[pulse_slice].astype(np.float32)
+            ),
             "edge_features_by_type": edge_features_by_type,
-            "target": target,
+            "target": self._prepare_target(target, core_anchor),
+            "core_anchor": core_anchor,
             "particle_label": particle_label,
+            "detector_feature_columns": self._effective_detector_columns(),
+            "pulse_feature_columns": self._effective_pulse_columns(),
         }
 
     def training_sample(self, index: int) -> dict[str, Any]:
@@ -1388,15 +1567,23 @@ class H5FlatHeteroGraphDataset:
             raise ValueError(f"graph has no target: {self.paths[path_index]}::{local_index}")
         if self.require_particle_label and particle_label is None:
             raise ValueError(f"graph has no particle label: {self.paths[path_index]}::{local_index}")
+        core_anchor = self._core_anchor(handle, local_index)
         return {
-            "detector_features": self._array_dataset(handle, "detector_features")[detector_slice].astype(np.float32),
+            "detector_features": self._filter_detector_features(
+                self._array_dataset(handle, "detector_features")[detector_slice].astype(np.float32)
+            ),
             "detector_context_features": self._array_dataset(handle, "detector_context_features")[detector_slice].astype(np.float32),
             "detector_waveforms": self._array_dataset(handle, "detector_waveforms")[detector_slice].astype(np.float32),
-            "pulse_features": self._array_dataset(handle, "pulse_features")[pulse_slice].astype(np.float32),
+            "pulse_features": self._filter_pulse_features(
+                self._array_dataset(handle, "pulse_features")[pulse_slice].astype(np.float32)
+            ),
             "edge_index_by_type": edge_index_by_type,
             "edge_features_by_type": edge_features_by_type,
-            "target": target,
+            "target": self._prepare_target(target, core_anchor),
+            "core_anchor": core_anchor,
             "particle_label": particle_label,
+            "detector_feature_columns": self._effective_detector_columns(),
+            "pulse_feature_columns": self._effective_pulse_columns(),
         }
 
     def __getitem__(self, index: int) -> dict[str, Any]:
@@ -1439,21 +1626,29 @@ class H5FlatHeteroGraphDataset:
             raise ValueError(f"graph has no target: {self.paths[path_index]}::{local_index}")
         if self.require_particle_label and particle_label is None:
             raise ValueError(f"graph has no particle label: {self.paths[path_index]}::{local_index}")
+        core_anchor = self._core_anchor(handle, local_index)
         sample: dict[str, Any] = {
-            "detector_features": self._array_dataset(handle, "detector_features")[detector_slice].astype(np.float32),
+            "detector_features": self._filter_detector_features(
+                self._array_dataset(handle, "detector_features")[detector_slice].astype(np.float32)
+            ),
             "detector_context_features": self._array_dataset(handle, "detector_context_features")[detector_slice].astype(np.float32),
             "detector_positions_km": self._array_dataset(handle, "detector_positions_km")[detector_slice].astype(np.float32),
             "detector_lids": self._array_dataset(handle, "detector_lids")[detector_slice].astype(np.int64),
             "detector_waveforms": self._array_dataset(handle, "detector_waveforms")[detector_slice].astype(np.float32),
-            "pulse_features": self._array_dataset(handle, "pulse_features")[pulse_slice].astype(np.float32),
+            "pulse_features": self._filter_pulse_features(
+                self._array_dataset(handle, "pulse_features")[pulse_slice].astype(np.float32)
+            ),
             "pulse_positions_km": self._array_dataset(handle, "pulse_positions_km")[pulse_slice].astype(np.float32),
             "pulse_lids": self._array_dataset(handle, "pulse_lids")[pulse_slice].astype(np.int64),
             "pulse_detector_index": self._array_dataset(handle, "pulse_detector_index")[pulse_slice].astype(np.int64),
             "pulse_bounds": self._array_dataset(handle, "pulse_bounds")[pulse_slice].astype(np.float32),
             "edge_index_by_type": edge_index_by_type,
             "edge_features_by_type": edge_features_by_type,
-            "target": target,
+            "target": self._prepare_target(target, core_anchor),
+            "core_anchor": core_anchor,
             "particle_label": particle_label,
+            "detector_feature_columns": self._effective_detector_columns(),
+            "pulse_feature_columns": self._effective_pulse_columns(),
         }
         if self.load_attrs:
             metadata = {
