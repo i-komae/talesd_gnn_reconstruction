@@ -245,6 +245,10 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         dropout: float = 0.05,
         waveform_encoder: str = "cnn",
         waveform_embedding_dim: int = 64,
+        waveform_transformer_heads: int = 4,
+        waveform_transformer_layers: int = 1,
+        waveform_transformer_max_tokens: int = 128,
+        waveform_transformer_downsample: str = "adaptive_avg",
         attention_heads: int = 4,
         readout_heads: int = 4,
     ):
@@ -269,6 +273,10 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             "dropout": float(dropout),
             "waveform_encoder": str(waveform_encoder),
             "waveform_embedding_dim": int(waveform_embedding_dim),
+            "waveform_transformer_heads": int(waveform_transformer_heads),
+            "waveform_transformer_layers": int(waveform_transformer_layers),
+            "waveform_transformer_max_tokens": int(waveform_transformer_max_tokens),
+            "waveform_transformer_downsample": str(waveform_transformer_downsample),
             "attention_heads": int(attention_heads),
             "readout_heads": int(readout_heads),
         }
@@ -286,6 +294,10 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             embedding_dim=waveform_embedding_dim,
             mode=waveform_encoder,
             dropout=dropout,
+            transformer_heads=waveform_transformer_heads,
+            transformer_layers=waveform_transformer_layers,
+            transformer_max_tokens=waveform_transformer_max_tokens,
+            transformer_downsample=waveform_transformer_downsample,
         )
         detector_input_dim = hidden_dim * 2 + self.waveform_encoder.output_dim
         self.detector_node_encoder = nn.Sequential(
@@ -378,6 +390,10 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         waveform_embedding_dim: int = 64,
         waveform_length: int | None = None,
         architecture: str = "hetero_attention",
+        waveform_transformer_heads: int = 4,
+        waveform_transformer_layers: int = 1,
+        waveform_transformer_max_tokens: int = 128,
+        waveform_transformer_downsample: str = "adaptive_avg",
         attention_heads: int = 4,
         readout_heads: int = 4,
     ) -> "MinimalHeteroTaleSdGNN":
@@ -402,6 +418,10 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             dropout=dropout,
             waveform_encoder=waveform_encoder,
             waveform_embedding_dim=waveform_embedding_dim,
+            waveform_transformer_heads=waveform_transformer_heads,
+            waveform_transformer_layers=waveform_transformer_layers,
+            waveform_transformer_max_tokens=waveform_transformer_max_tokens,
+            waveform_transformer_downsample=waveform_transformer_downsample,
             architecture=architecture,
             attention_heads=attention_heads,
             readout_heads=readout_heads,
@@ -437,8 +457,8 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             detector_x.shape[0],
             device=detector_x.device,
             dtype=detector_x.dtype,
+            valid_mask=detector_waveform_valid,
         )
-        waveform_embedding = waveform_embedding * detector_waveform_valid.clamp(0.0, 1.0).unsqueeze(-1)
 
         detector_parts = [
             self.detector_feature_encoder(detector_x),

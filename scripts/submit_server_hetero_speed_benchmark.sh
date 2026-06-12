@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [[ -z "${GRAPH_INPUT:-}" ]]; then
+  cat >&2 <<EOF
+Usage:
+  GRAPH_INPUT=/path/to/hetero_graph_dir scripts/submit_server_hetero_speed_benchmark.sh
+
+Runs a short hetero transformer training benchmark. This is not a physics
+production run.
+EOF
+  exit 2
+fi
+
+export RUN_ID="${RUN_ID:-hetero_speed_$(date +%Y%m%d_%H%M%S)}"
+export RUN_NAME="${RUN_NAME:-server_hetero_speed_benchmark_${RUN_ID}}"
+export TRAINING_BACKEND=hetero
+export TRAINING_TASK=reconstruction
+export PARTITION="${PARTITION:-v100-al9_long}"
+export GPUS="${GPUS:-1}"
+export CPUS_PER_GPU="${CPUS_PER_GPU:-8}"
+export MEM_PER_GPU_GB="${MEM_PER_GPU_GB:-192}"
+
+export TRAIN_EPOCHS="${TRAIN_EPOCHS:-2}"
+export MAX_GRAPHS="${MAX_GRAPHS:-4096}"
+export MAX_VAL_GRAPHS="${MAX_VAL_GRAPHS:-512}"
+export VALIDATE_EVERY_N_EPOCHS="${VALIDATE_EVERY_N_EPOCHS:-1}"
+export DIAGNOSTICS="${DIAGNOSTICS:-0}"
+export ATTENTION_MAPS="${ATTENTION_MAPS:-0}"
+export FEATURE_IMPORTANCE="${FEATURE_IMPORTANCE:-0}"
+export TALESD_GNN_PROFILE="${TALESD_GNN_PROFILE:-1}"
+export PROFILE="${PROFILE:-1}"
+
+export MODEL_ARCHITECTURE="${MODEL_ARCHITECTURE:-hetero_attention}"
+export WAVEFORM_ENCODER="${WAVEFORM_ENCODER:-transformer}"
+export WAVEFORM_TRANSFORMER_HEADS="${WAVEFORM_TRANSFORMER_HEADS:-4}"
+export WAVEFORM_TRANSFORMER_LAYERS="${WAVEFORM_TRANSFORMER_LAYERS:-1}"
+export WAVEFORM_TRANSFORMER_MAX_TOKENS="${WAVEFORM_TRANSFORMER_MAX_TOKENS:-128}"
+export WAVEFORM_TRANSFORMER_DOWNSAMPLE="${WAVEFORM_TRANSFORMER_DOWNSAMPLE:-adaptive_avg}"
+
+export BATCH_SIZE="${BATCH_SIZE:-32}"
+export GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-4}"
+export TRAIN_WORKERS="${TRAIN_WORKERS:-4}"
+export PREFETCH_FACTOR="${PREFETCH_FACTOR:-1}"
+export PERSISTENT_WORKERS="${PERSISTENT_WORKERS:-1}"
+export VAL_NUM_WORKERS="${VAL_NUM_WORKERS:-0}"
+export PIN_MEMORY="${PIN_MEMORY:-0}"
+export AMP="${AMP:-fp16}"
+export HETERO_TRAINING_DATA_FORMAT="${HETERO_TRAINING_DATA_FORMAT:-fast_tensor}"
+export DATALOADER_TIMEOUT_SEC="${DATALOADER_TIMEOUT_SEC:-300}"
+export DATA_WAIT_WARN_SEC="${DATA_WAIT_WARN_SEC:-30}"
+
+exec "${SCRIPT_DIR}/submit_server_hetero_training.sh"

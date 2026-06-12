@@ -252,6 +252,10 @@ detector waveform は detector ごとの 1D time series として処理します
 ``WAVEFORM_ENCODER=transformer`` の場合、Transformer はこの detector ごとの waveform time sequence にだけ作用します。
 つまり、同じ detector waveform 内の time bin 同士の self-attention です。
 detector node や pulse node の graph relation を全結合で見るものではありません。
+Transformer block に入れる前に、encoded time sequence は
+``WAVEFORM_TRANSFORMER_MAX_TOKENS`` 以下へ downsample されます。
+server 既定は 128 token です。これにより、保存されている detector waveform が長い場合でも、
+self-attention の二乗コストを上限付きにします。
 1つの detector waveform では、各 time bin が token になります。
 time bin ``t`` と同じ waveform 内の別 time bin ``u`` に対して、Transformer は次を作ります。
 
@@ -307,9 +311,10 @@ pulse node は pulse feature を MLP に通します。
 waveform encoder は detector ごとに 1 回だけ適用します。
 最初の transformer waveform sweep では submitter で ``WAVEFORM_ENCODER=transformer`` を指定します。
 graph 側の architecture は ``hetero_attention`` のままです。
-``detector_waveform_valid`` が 0 の場合、waveform embedding は 0 倍されます。
+``detector_waveform_valid`` が 0 の detector row は waveform encoder に通しません。
+その row の waveform embedding は zero で埋めます。
 その detector は live status、geometry、detector scalar feature、detector-detector edge では寄与できますが、
-存在しない waveform signal としては寄与しません。
+waveform encoder の計算を消費せず、存在しない waveform signal としても寄与しません。
 
 attention という言葉が出てくる場所
 -----------------------------------

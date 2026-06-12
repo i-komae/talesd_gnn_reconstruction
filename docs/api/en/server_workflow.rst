@@ -64,14 +64,21 @@ Unless explicitly overridden, the heterogeneous model architecture is ``hetero_a
 It uses full event graphs and does not use HGSampling.
 The first waveform-encoder sweep should use ``WAVEFORM_ENCODER=transformer``.
 Do not launch the matching ``cnn-gru`` sweep until the transformer results determine the dataset size and auxiliary-head condition.
-For transformer waveform runs, the submitter defaults to GPU micro-batch
-``BATCH_SIZE=8`` with ``GRADIENT_ACCUMULATION_STEPS=16``. This keeps the
-effective batch size at 128 while avoiding the larger activation memory of
-``BATCH_SIZE=128`` inside the waveform Transformer. ``PIN_MEMORY=0`` is the
-default for this Transformer hetero path because the V100 light-dataset test
-failed in the pinned-memory thread before a stable epoch could run. The printed
-``hetero_loader_memory`` line is a CPU/DataLoader prefetch estimate; it is not a
-GPU activation-memory guarantee.
+For transformer waveform runs, the submitter defaults to ``BATCH_SIZE=32`` and
+``GRADIENT_ACCUMULATION_STEPS=4``. This keeps the effective batch size at 128
+without making the Python/DataLoader overhead dominate as badly as a micro-batch
+of 8 did. ``PIN_MEMORY=0``, ``PREFETCH_FACTOR=1``, and
+``PERSISTENT_WORKERS=1`` are the hetero Transformer defaults.
+
+The waveform Transformer is capped with
+``WAVEFORM_TRANSFORMER_MAX_TOKENS=128``. Detector rows with
+``detector_waveform_valid=0`` are not sent through the waveform encoder; their
+waveform embedding is filled with zeros. Training uses
+``HETERO_TRAINING_DATA_FORMAT=fast_tensor`` by default, which avoids building
+PyG ``HeteroData`` objects for every training batch. The final validation/test
+evaluation still uses the same model input schema and writes the usual metrics.
+The printed ``hetero_loader_memory`` line is a CPU/DataLoader prefetch estimate;
+it is not a GPU activation-memory guarantee.
 
 .. code-block:: bash
 
@@ -96,6 +103,39 @@ runner saves validation attention maps for a small event sample under
 ``<checkpoint>.diagnostics/attention_maps/validation/``. The default sample size
 is ``ATTENTION_MAPS_MAX_GRAPHS=16`` so this is a lightweight diagnostic, not a
 full-dataset attention dump.
+
+Milestone checkpoints
+~~~~~~~~~~~~~~~~~~~~~
+
+The default hetero training milestones are ``8,16,32,64`` epochs. At each
+milestone, the trainer loads the best checkpoint seen so far and runs the same
+validation/test prediction and metrics as the final evaluation. It writes
+``<checkpoint>.best_through_epochXXXX.pt`` and the matching
+``.metrics.json``. The final checkpoint still corresponds to the best validation
+loss, not necessarily the last epoch. ``EARLY_STOPPING_PATIENCE=12`` and
+``EARLY_STOPPING_MIN_EPOCHS=32`` are the server defaults.
+
+Speed preflight
+~~~~~~~~~~~~~~~
+
+Before a long run, use the benchmark submitter on the same graph input. It
+limits the graph count, enables profiling, disables heavy post-training
+diagnostics, and uses the same hetero Transformer defaults:
+
+.. code-block:: bash
+
+   GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
+   RUN_ID=hetero_speed_$(date +%Y%m%d_%H%M%S) \
+   scripts/submit_server_hetero_speed_benchmark.sh
+
+If HDF5 event-group reads dominate, set ``PREPARE_FAST_CACHE=1`` for training.
+The runner will first create a flat hetero cache with
+``talesd-gnn convert-hetero-to-flat-cache`` and then train from that cache.
+This is still a single HDF5 file. The point is not to split one HDF5 into many
+files, but to replace the grouped layout
+``events/00000000/<many small gzip datasets>`` with large contiguous datasets
+such as ``detector_features_all``, ``detector_waveforms_all``,
+``edge_index_all_by_relation/*``, and ``target_all`` plus offset tables.
 
 Balanced heterogeneous HDF5 size sweep
 --------------------------------------

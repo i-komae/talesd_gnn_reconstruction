@@ -5,7 +5,7 @@ import unittest
 
 import torch
 
-from talesd_gnn_reconstruction.model import PhysicsTaleSdGNN, build_model_from_config
+from talesd_gnn_reconstruction.model import PhysicsTaleSdGNN, WaveformEncoder, build_model_from_config
 from talesd_gnn_reconstruction.train import (
     _angular_loss_from_vectors,
     _energy_bin_bias_loss,
@@ -17,6 +17,52 @@ from talesd_gnn_reconstruction.train import (
 
 
 class QualityModelTest(unittest.TestCase):
+    def test_waveform_transformer_masks_invalid_rows_and_caps_tokens(self) -> None:
+        torch.manual_seed(123)
+        encoder = WaveformEncoder(
+            waveform_channels=2,
+            waveform_length=64,
+            embedding_dim=8,
+            mode="transformer",
+            dropout=0.0,
+            transformer_heads=2,
+            transformer_layers=1,
+            transformer_max_tokens=16,
+        )
+        encoder.eval()
+        token_counts: list[int] = []
+
+        def _capture_tokens(_module, args):
+            token_counts.append(int(args[0].shape[1]))
+
+        hook = encoder.transformer.register_forward_pre_hook(_capture_tokens)
+        try:
+            waveform = torch.randn(3, 2, 64)
+            valid_mask = torch.tensor([1.0, 0.0, 1.0])
+            with torch.no_grad():
+                baseline = encoder(
+                    waveform,
+                    num_nodes=3,
+                    device=torch.device("cpu"),
+                    dtype=torch.float32,
+                    valid_mask=valid_mask,
+                )
+                changed_invalid = waveform.clone()
+                changed_invalid[1] += 1000.0
+                repeated = encoder(
+                    changed_invalid,
+                    num_nodes=3,
+                    device=torch.device("cpu"),
+                    dtype=torch.float32,
+                    valid_mask=valid_mask,
+                )
+        finally:
+            hook.remove()
+
+        self.assertEqual(token_counts, [16, 16])
+        self.assertTrue(torch.allclose(baseline[1], torch.zeros_like(baseline[1])))
+        self.assertTrue(torch.allclose(baseline, repeated, atol=1.0e-6, rtol=1.0e-6))
+
     def test_physics_model_outputs_reconstruction_mass_and_quality(self) -> None:
         model = PhysicsTaleSdGNN(
             node_dim=5,

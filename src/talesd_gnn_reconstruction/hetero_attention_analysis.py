@@ -13,7 +13,7 @@ from .dataset import StandardScaler
 from .feature_analysis import expand_graph_paths
 from .hetero_data import hetero_sample_to_tensors
 from .hetero_feature_analysis import _scalers_from_checkpoint, _selected_hetero_checkpoint_indices
-from .hetero_graph_io import H5HeteroGraphDataset
+from .hetero_graph_io import H5HeteroGraphDataset, hetero_dataset_class_for_paths
 from .hetero_model import MinimalHeteroTaleSdGNN
 from .progress import progress as _progress
 from .progress import write as _progress_write
@@ -178,7 +178,8 @@ def save_hetero_attention_maps(
 
     if show_progress:
         _progress_write(f"stage=start hetero_attention_maps graphs={len(paths)} selected={len(selected)}")
-    dataset = H5HeteroGraphDataset(
+    dataset_class = hetero_dataset_class_for_paths(paths)
+    dataset = dataset_class(
         paths,
         require_target=target_dim > 0,
         require_particle_label=classification_dim > 0,

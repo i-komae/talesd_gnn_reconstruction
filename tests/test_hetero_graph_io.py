@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -27,19 +28,26 @@ from talesd_gnn_reconstruction.hetero_feature_analysis import (
 )
 from talesd_gnn_reconstruction.hetero_graph_io import (
     EDGE_RELATIONS,
+    FLAT_FORMAT_NAME,
     FORMAT_NAME,
     GRAPH_DEFINITION,
+    H5FlatHeteroGraphDataset,
     H5HeteroGraphDataset,
     H5PyGHeteroGraphDataset,
     WAVEFORM_SCHEMA,
+    convert_hetero_to_flat_cache,
     create_hetero_graph_file,
+    hetero_dataset_class_for_paths,
     hetero_graph_count,
     write_hetero_graph,
 )
 from talesd_gnn_reconstruction.hetero_model import MinimalHeteroTaleSdGNN
 from talesd_gnn_reconstruction.hetero_predict import reconstruct_dst
 from talesd_gnn_reconstruction.hetero_training import (
+    H5TensorHeteroGraphDataset,
+    _collate_tensor_hetero_graphs,
     _estimate_graph_bytes,
+    _filter_batch_relations,
     _resolve_loader_settings,
     _split_dataset,
     train_hetero_model,
@@ -208,9 +216,13 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 capture_output=True,
                 check=True,
             )
-            self.assertIn("batch_size=8", submit_result.stdout)
-            self.assertIn("gradient_accumulation_steps=16", submit_result.stdout)
+            self.assertIn("batch_size=32", submit_result.stdout)
+            self.assertIn("gradient_accumulation_steps=4", submit_result.stdout)
             self.assertIn("pin_memory=0", submit_result.stdout)
+            self.assertIn("prefetch_factor=1", submit_result.stdout)
+            self.assertIn("persistent_workers=1", submit_result.stdout)
+            self.assertIn("waveform_transformer_max_tokens=128", submit_result.stdout)
+            self.assertIn("hetero_training_data_format=fast_tensor", submit_result.stdout)
             sbatch_path = (
                 tmp
                 / "output"
@@ -231,9 +243,12 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 capture_output=True,
                 check=True,
             )
-            self.assertIn("--batch-size 8", direct_result.stdout)
-            self.assertIn("--gradient-accumulation-steps 16", direct_result.stdout)
+            self.assertIn("--batch-size 32", direct_result.stdout)
+            self.assertIn("--gradient-accumulation-steps 4", direct_result.stdout)
             self.assertIn("--no-pin-memory", direct_result.stdout)
+            self.assertIn("--prefetch-factor 1", direct_result.stdout)
+            self.assertIn("--waveform-transformer-max-tokens 128", direct_result.stdout)
+            self.assertIn("--training-data-format fast_tensor", direct_result.stdout)
 
     def test_dstio_v3_columns_are_used(self) -> None:
         self.assertEqual(GRAPH_DEFINITION, tale_graph.GRAPH_DEFINITION)
@@ -241,6 +256,109 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
         self.assertEqual(list(GRAPH_COLUMNS["detector_features"]), list(tale_graph.graph_columns()["detector_features"]))
         for name in DETECTOR_ISING_FEATURE_COLUMNS:
             self.assertIn(name, DETECTOR_FEATURE_INDEX)
+
+    def test_flat_cache_roundtrip_and_auto_dataset_class(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            flat_path = Path(tmpdir) / "synthetic_hetero.flat.h5"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(3):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            result = convert_hetero_to_flat_cache(graph_path, flat_path, compression="none")
+
+            self.assertEqual(result["format"], FLAT_FORMAT_NAME)
+            self.assertEqual(result["graphs"], 3)
+            with h5py.File(flat_path, "r") as handle:
+                self.assertIn("detector_features_all", handle)
+                self.assertIn("detector_context_features_all", handle)
+                self.assertIn("detector_waveforms_all", handle)
+                self.assertIn("pulse_features_all", handle)
+                self.assertIn("target_all", handle)
+                self.assertIn("particle_label_all", handle)
+                self.assertIn("detector_offsets", handle)
+                self.assertIn("pulse_offsets", handle)
+                self.assertIn("edge_offsets_by_relation", handle)
+                self.assertIn("pulse__near_space__pulse", handle["edge_index_all_by_relation"])
+                self.assertIsNone(handle["detector_features_all"].compression)
+            self.assertIs(hetero_dataset_class_for_paths(graph_path), H5HeteroGraphDataset)
+            self.assertIs(hetero_dataset_class_for_paths(flat_path), H5FlatHeteroGraphDataset)
+            original = H5HeteroGraphDataset(graph_path, require_target=True, require_particle_label=True)
+            flat = H5FlatHeteroGraphDataset(flat_path, require_target=True, require_particle_label=True)
+            try:
+                self.assertEqual(len(flat), len(original))
+                self.assertEqual(flat.source_path(1), original.source_path(1))
+                np.testing.assert_allclose(flat.target(1), original.target(1))
+                sample = flat[2]
+                self.assertEqual(sample["detector_features"].shape[1], DETECTOR_FEATURE_DIM)
+                self.assertEqual(sample["pulse_features"].shape[1], PULSE_FEATURE_DIM)
+            finally:
+                original.close()
+                flat.close()
+
+            cli_flat_path = Path(tmpdir) / "synthetic_hetero.cli.flat.h5"
+            cli_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "talesd_gnn_reconstruction.cli",
+                    "convert-hetero-to-flat-cache",
+                    "--input",
+                    str(graph_path),
+                    "--output",
+                    str(cli_flat_path),
+                    "--compression",
+                    "none",
+                ],
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertIn("hetero_graph_io format=flat_hdf5", cli_result.stdout)
+            self.assertIn("hetero_flat_cache", cli_result.stdout)
+            self.assertEqual(hetero_graph_count(cli_flat_path), 3)
+
+    def test_fast_tensor_batch_collates_and_relation_filtering(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(2):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            dataset = H5TensorHeteroGraphDataset(graph_path, require_target=True, require_particle_label=True)
+            try:
+                batch = _collate_tensor_hetero_graphs([dataset[0], dataset[1]])
+                self.assertEqual(batch["num_graphs"], 2)
+                self.assertEqual(batch["detector"]["x"].shape[0], 6)
+                self.assertEqual(batch["pulse"]["x"].shape[0], 8)
+                self.assertEqual(batch["target"].shape, (2, 6))
+                self.assertGreater(batch["edge_index_by_type"]["pulse__near_space__pulse"].shape[1], 0)
+
+                filtered = _filter_batch_relations(
+                    batch,
+                    enabled_relations=set(EDGE_RELATIONS) - {"pulse__near_space__pulse"},
+                    max_neighbors={},
+                )
+                self.assertEqual(filtered["edge_index_by_type"]["pulse__near_space__pulse"].shape, (2, 0))
+                self.assertEqual(
+                    filtered["edge_features_by_type"]["pulse__near_space__pulse"].shape[1],
+                    EDGE_FEATURE_DIMS["pulse__near_space__pulse"],
+                )
+                model = MinimalHeteroTaleSdGNN.from_sample(
+                    _synthetic_graph(0).__dict__,
+                    target_dim=6,
+                    classification_dim=1,
+                    hidden_dim=16,
+                    num_layers=1,
+                    dropout=0.0,
+                    waveform_embedding_dim=8,
+                )
+                model.eval()
+                with torch.no_grad():
+                    output = model(filtered)
+                self.assertEqual(output.shape, (2, 7))
+            finally:
+                dataset.close()
 
     def test_training_scaler_sample_does_not_load_waveforms(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -953,6 +1071,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                 split_mode="event",
                 device="cpu",
                 num_workers=0,
+                checkpoint_milestones=(1,),
                 show_progress=False,
             )
 
@@ -979,6 +1098,46 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertTrue(checkpoint["runtime"]["quality_prediction"])
             self.assertFalse(checkpoint["runtime"]["error_prediction"])
             self.assertTrue((Path(str(checkpoint_path) + ".metrics.json")).exists())
+            milestone_path = checkpoint_path.with_name(f"{checkpoint_path.stem}.best_through_epoch0001.pt")
+            milestone_metrics = Path(f"{milestone_path}.metrics.json")
+            self.assertTrue(milestone_path.exists())
+            self.assertTrue(milestone_metrics.exists())
+            milestone_payload = json.loads(milestone_metrics.read_text())
+            self.assertEqual(milestone_payload["runtime"]["checkpoint_kind"], "milestone_epoch_1")
+            self.assertIn("validation", milestone_payload["metrics"])
+            self.assertIn("test", milestone_payload["metrics"])
+
+    def test_train_hetero_from_flat_cache_smoke_saves_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            flat_path = Path(tmpdir) / "synthetic_hetero.flat.h5"
+            checkpoint_path = Path(tmpdir) / "checkpoint.pt"
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(6):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+            convert_hetero_to_flat_cache(graph_path, flat_path, compression="none")
+
+            train_hetero_model(
+                flat_path,
+                checkpoint_path,
+                epochs=1,
+                batch_size=2,
+                gradient_accumulation_steps=2,
+                hidden_dim=16,
+                num_layers=1,
+                dropout=0.0,
+                waveform_embedding_dim=8,
+                mass_classification=True,
+                split_mode="event",
+                device="cpu",
+                num_workers=0,
+                training_data_format="fast_tensor",
+                show_progress=False,
+            )
+
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            self.assertEqual(checkpoint["runtime"]["training_data_format"], "fast_tensor")
+            self.assertTrue(checkpoint["runtime"]["completed"])
 
     def test_train_hetero_minimal_architecture_smoke_saves_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -4,12 +4,14 @@ import json
 from bisect import bisect_right
 from pathlib import Path
 from typing import Any
+from collections.abc import Sequence
 
 import h5py
 import numpy as np
 
 
 FORMAT_NAME = "talesd_gnn_hetero_graphs"
+FLAT_FORMAT_NAME = "talesd_gnn_hetero_graphs_flat"
 FORMAT_VERSION = "0.1"
 GRAPH_DEFINITION = "tale_sd_hetero_ising_pulse_detector_graph_v3"
 WAVEFORM_SCHEMA = "detector_full_calibrated_vem_v1"
@@ -247,7 +249,259 @@ def graph_event_to_sample(graph: Any, *, load_attrs: bool = True) -> dict[str, A
 
 def hetero_graph_count(path: str | Path) -> int:
     with h5py.File(Path(path).expanduser(), "r") as handle:
+        graph_format = str(handle.attrs.get("format", ""))
+        if graph_format == FLAT_FORMAT_NAME:
+            if "detector_offsets" in handle:
+                return int(handle["detector_offsets"].shape[0] - 1)
+            return int(handle["offsets/detector"].shape[0] - 1)
         return len(handle["events"])
+
+
+def hetero_h5_format(path: str | Path) -> str:
+    with h5py.File(Path(path).expanduser(), "r") as handle:
+        return str(handle.attrs.get("format", ""))
+
+
+def _compression_name(dataset: h5py.Dataset | None) -> str:
+    if dataset is None:
+        return "unknown"
+    compression = dataset.compression
+    return "none" if compression in {None, ""} else str(compression)
+
+
+def _grouped_h5_compression(handle: h5py.File) -> str:
+    events = handle.get("events")
+    if events is None or not events:
+        return "unknown"
+    first_key = sorted(events.keys())[0]
+    group = events[first_key]
+    dataset = group.get("detector_features")
+    return _compression_name(dataset if isinstance(dataset, h5py.Dataset) else None)
+
+
+def _flat_h5_compression(handle: h5py.File) -> str:
+    dataset = handle.get("detector_features_all")
+    if not isinstance(dataset, h5py.Dataset):
+        dataset = handle.get("arrays/detector_features")
+    return _compression_name(dataset if isinstance(dataset, h5py.Dataset) else None)
+
+
+def _log_h5_layout(*, graph_path: Path, format_label: str, compression: str, n_events: int) -> None:
+    print(
+        "hetero_graph_io "
+        f"format={format_label} "
+        f"compression={compression} "
+        f"n_events={int(n_events)} "
+        f"path={graph_path}",
+        flush=True,
+    )
+
+
+def hetero_dataset_class_for_paths(path: str | Path | Sequence[str | Path]) -> type:
+    paths = [Path(path).expanduser()] if isinstance(path, (str, Path)) else [Path(item).expanduser() for item in path]
+    formats = {hetero_h5_format(item) for item in paths}
+    if formats == {FORMAT_NAME}:
+        return H5HeteroGraphDataset
+    if formats == {FLAT_FORMAT_NAME}:
+        return H5FlatHeteroGraphDataset
+    raise ValueError(f"mixed or unsupported hetero HDF5 formats: {sorted(formats)}")
+
+
+def _pad_waveforms(waveforms: np.ndarray, waveform_length: int) -> np.ndarray:
+    waveforms = np.asarray(waveforms, dtype=np.float32)
+    if waveforms.shape[-1] == waveform_length:
+        return waveforms
+    if waveforms.shape[-1] > waveform_length:
+        return waveforms[..., :waveform_length]
+    pad_shape = list(waveforms.shape)
+    pad_shape[-1] = int(waveform_length) - int(waveforms.shape[-1])
+    return np.concatenate([waveforms, np.zeros(pad_shape, dtype=np.float32)], axis=-1)
+
+
+def convert_hetero_to_flat_cache(
+    input_paths: str | Path | Sequence[str | Path],
+    output_path: str | Path,
+    *,
+    compression: str | None = "lzf",
+) -> dict[str, Any]:
+    source = H5HeteroGraphDataset(input_paths, require_target=True, load_attrs=False)
+    try:
+        if len(source) == 0:
+            raise ValueError("cannot convert empty hetero HDF5 dataset")
+        detector_total = 0
+        pulse_total = 0
+        edge_totals = {relation: 0 for relation in EDGE_RELATIONS}
+        waveform_channels = 0
+        waveform_length = 0
+        target_dim = 0
+        detector_dim = 0
+        detector_context_dim = 0
+        pulse_dim = 0
+        edge_dims = {relation: 0 for relation in EDGE_RELATIONS}
+        for index in range(len(source)):
+            sample = source[index]
+            detector_total += int(sample["detector_features"].shape[0])
+            pulse_total += int(sample["pulse_features"].shape[0])
+            waveform_channels = max(waveform_channels, int(sample["detector_waveforms"].shape[1]))
+            waveform_length = max(waveform_length, int(sample["detector_waveforms"].shape[2]))
+            target_dim = max(target_dim, int(sample["target"].shape[0]) if sample["target"] is not None else 0)
+            detector_dim = max(detector_dim, int(sample["detector_features"].shape[1]))
+            detector_context_dim = max(detector_context_dim, int(sample["detector_context_features"].shape[1]))
+            pulse_dim = max(pulse_dim, int(sample["pulse_features"].shape[1]))
+            for relation in EDGE_RELATIONS:
+                edge_totals[relation] += int(sample["edge_index_by_type"][relation].shape[1])
+                edge_dims[relation] = max(edge_dims[relation], int(sample["edge_features_by_type"][relation].shape[1]))
+
+        output = Path(output_path).expanduser()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        filter_kwargs = {} if compression in {None, "", "none"} else {"compression": compression}
+        detector_offsets = np.zeros(len(source) + 1, dtype=np.int64)
+        pulse_offsets = np.zeros(len(source) + 1, dtype=np.int64)
+        edge_offsets = {relation: np.zeros(len(source) + 1, dtype=np.int64) for relation in EDGE_RELATIONS}
+        with h5py.File(output, "w") as handle:
+            handle.attrs["format"] = FLAT_FORMAT_NAME
+            handle.attrs["format_version"] = FORMAT_VERSION
+            handle.attrs["source_format"] = FORMAT_NAME
+            handle.attrs["graph_definition"] = GRAPH_DEFINITION
+            handle.attrs["waveform_schema"] = WAVEFORM_SCHEMA
+            handle.attrs["columns_json"] = source.columns_json
+            arrays = handle.create_group("arrays")
+            offsets = handle.create_group("offsets")
+            metadata = handle.create_group("metadata")
+            arrays.create_dataset("detector_features", shape=(detector_total, detector_dim), dtype=np.float32, **filter_kwargs)
+            arrays.create_dataset(
+                "detector_context_features",
+                shape=(detector_total, detector_context_dim),
+                dtype=np.float32,
+                **filter_kwargs,
+            )
+            arrays.create_dataset("detector_positions_km", shape=(detector_total, 3), dtype=np.float32, **filter_kwargs)
+            arrays.create_dataset("detector_lids", shape=(detector_total,), dtype=np.int64, **filter_kwargs)
+            arrays.create_dataset(
+                "detector_waveforms",
+                shape=(detector_total, waveform_channels, waveform_length),
+                dtype=np.float32,
+                **filter_kwargs,
+            )
+            arrays.create_dataset("pulse_features", shape=(pulse_total, pulse_dim), dtype=np.float32, **filter_kwargs)
+            arrays.create_dataset("pulse_positions_km", shape=(pulse_total, 3), dtype=np.float32, **filter_kwargs)
+            arrays.create_dataset("pulse_lids", shape=(pulse_total,), dtype=np.int64, **filter_kwargs)
+            arrays.create_dataset("pulse_detector_index", shape=(pulse_total,), dtype=np.int64, **filter_kwargs)
+            arrays.create_dataset("pulse_bounds", shape=(pulse_total, 4), dtype=np.float32, **filter_kwargs)
+            arrays.create_dataset("target", shape=(len(source), target_dim), dtype=np.float32, **filter_kwargs)
+            arrays.create_dataset("particle_label", shape=(len(source),), dtype=np.float32, **filter_kwargs)
+            edge_index_group = arrays.create_group("edge_index_by_type")
+            edge_feature_group = arrays.create_group("edge_features_by_type")
+            for relation in EDGE_RELATIONS:
+                edge_index_group.create_dataset(
+                    relation,
+                    shape=(2, edge_totals[relation]),
+                    dtype=np.int64,
+                    **filter_kwargs,
+                )
+                edge_feature_group.create_dataset(
+                    relation,
+                    shape=(edge_totals[relation], edge_dims[relation]),
+                    dtype=np.float32,
+                    **filter_kwargs,
+                )
+            string_dtype = h5py.string_dtype(encoding="utf-8")
+            metadata.create_dataset("event_id", shape=(len(source),), dtype=string_dtype)
+            metadata.create_dataset("source_path", shape=(len(source),), dtype=string_dtype)
+            metadata.create_dataset("source_index", shape=(len(source),), dtype=np.int64)
+
+            # Root-level names are the public training-cache schema. The
+            # arrays/offsets groups are kept as hard-link aliases so older
+            # local cache readers can still open files created during the
+            # transition.
+            handle["detector_features_all"] = arrays["detector_features"]
+            handle["detector_context_features_all"] = arrays["detector_context_features"]
+            handle["detector_positions_km_all"] = arrays["detector_positions_km"]
+            handle["detector_lids_all"] = arrays["detector_lids"]
+            handle["detector_waveforms_all"] = arrays["detector_waveforms"]
+            handle["pulse_features_all"] = arrays["pulse_features"]
+            handle["pulse_positions_km_all"] = arrays["pulse_positions_km"]
+            handle["pulse_lids_all"] = arrays["pulse_lids"]
+            handle["pulse_detector_index_all"] = arrays["pulse_detector_index"]
+            handle["pulse_bounds_all"] = arrays["pulse_bounds"]
+            handle["target_all"] = arrays["target"]
+            handle["particle_label_all"] = arrays["particle_label"]
+            handle["edge_index_all_by_relation"] = edge_index_group
+            handle["edge_features_all_by_relation"] = edge_feature_group
+
+            detector_cursor = 0
+            pulse_cursor = 0
+            edge_cursors = {relation: 0 for relation in EDGE_RELATIONS}
+            for index in range(len(source)):
+                sample = source[index]
+                n_detector = int(sample["detector_features"].shape[0])
+                n_pulse = int(sample["pulse_features"].shape[0])
+                detector_slice = slice(detector_cursor, detector_cursor + n_detector)
+                pulse_slice = slice(pulse_cursor, pulse_cursor + n_pulse)
+                arrays["detector_features"][detector_slice] = sample["detector_features"]
+                arrays["detector_context_features"][detector_slice] = sample["detector_context_features"]
+                arrays["detector_positions_km"][detector_slice] = sample["detector_positions_km"]
+                arrays["detector_lids"][detector_slice] = sample["detector_lids"]
+                arrays["detector_waveforms"][detector_slice] = _pad_waveforms(
+                    sample["detector_waveforms"],
+                    waveform_length,
+                )
+                arrays["pulse_features"][pulse_slice] = sample["pulse_features"]
+                arrays["pulse_positions_km"][pulse_slice] = sample["pulse_positions_km"]
+                arrays["pulse_lids"][pulse_slice] = sample["pulse_lids"]
+                arrays["pulse_detector_index"][pulse_slice] = sample["pulse_detector_index"]
+                arrays["pulse_bounds"][pulse_slice] = sample["pulse_bounds"]
+                arrays["target"][index] = sample["target"]
+                arrays["particle_label"][index] = (
+                    np.nan if sample["particle_label"] is None else float(sample["particle_label"])
+                )
+                for relation in EDGE_RELATIONS:
+                    edge_index = sample["edge_index_by_type"][relation]
+                    edge_features = sample["edge_features_by_type"][relation]
+                    n_edges = int(edge_index.shape[1])
+                    edge_slice = slice(edge_cursors[relation], edge_cursors[relation] + n_edges)
+                    edge_index_group[relation][:, edge_slice] = edge_index
+                    edge_feature_group[relation][edge_slice] = edge_features
+                    edge_cursors[relation] += n_edges
+                    edge_offsets[relation][index + 1] = edge_cursors[relation]
+                detector_cursor += n_detector
+                pulse_cursor += n_pulse
+                detector_offsets[index + 1] = detector_cursor
+                pulse_offsets[index + 1] = pulse_cursor
+                metadata_dict = sample.get("metadata", {})
+                metadata["event_id"][index] = str(metadata_dict.get("event_id", sample.get("event_id", f"{index:08d}")))
+                metadata["source_path"][index] = str(metadata_dict.get("source_path", source.source_path(index)))
+                source_index_value = metadata_dict.get("source_index")
+                if source_index_value is None and hasattr(source, "_metadata_value"):
+                    path_index, local_index, _key = source._locate(index)
+                    source_index_value = source._metadata_value(path_index, local_index, "source_index")
+                metadata["source_index"][index] = -1 if source_index_value is None else int(source_index_value)
+            offsets.create_dataset("detector", data=detector_offsets)
+            offsets.create_dataset("pulse", data=pulse_offsets)
+            edge_offsets_group = offsets.create_group("edge_by_type")
+            for relation in EDGE_RELATIONS:
+                edge_offsets_group.create_dataset(relation, data=edge_offsets[relation])
+            handle["detector_offsets"] = offsets["detector"]
+            handle["pulse_offsets"] = offsets["pulse"]
+            handle["edge_offsets_by_relation"] = edge_offsets_group
+        _log_h5_layout(
+            graph_path=output,
+            format_label="flat_hdf5",
+            compression="none" if compression in {None, "", "none"} else str(compression),
+            n_events=int(len(source)),
+        )
+        return {
+            "output": str(output),
+            "format": FLAT_FORMAT_NAME,
+            "graphs": int(len(source)),
+            "detector_nodes": int(detector_total),
+            "pulse_nodes": int(pulse_total),
+            "waveform_channels": int(waveform_channels),
+            "waveform_length": int(waveform_length),
+            "compression": "none" if compression in {None, "", "none"} else str(compression),
+        }
+    finally:
+        source.close()
 
 
 class H5HeteroGraphDataset:
@@ -285,6 +539,13 @@ class H5HeteroGraphDataset:
                 if path_index == 0:
                     self.columns_json = str(handle.attrs.get("columns_json", "{}"))
                 n_events = len(handle["events"])
+                compression = _grouped_h5_compression(handle)
+                _log_h5_layout(
+                    graph_path=graph_path,
+                    format_label="grouped_hdf5",
+                    compression=compression,
+                    n_events=int(n_events),
+                )
             total += n_events
             self._path_lengths.append(n_events)
             self._cumulative_lengths.append(total)
@@ -472,6 +733,220 @@ class H5HeteroGraphDataset:
         return sample
 
 
+class H5FlatHeteroGraphDataset:
+    def __init__(
+        self,
+        path: str | Path | list[str | Path] | tuple[str | Path, ...],
+        *,
+        require_target: bool = False,
+        require_particle_label: bool = False,
+        load_attrs: bool = True,
+    ):
+        if isinstance(path, (str, Path)):
+            self.paths = [Path(path).expanduser()]
+        else:
+            self.paths = [Path(item).expanduser() for item in path]
+        self.require_target = bool(require_target)
+        self.require_particle_label = bool(require_particle_label)
+        self.load_attrs = bool(load_attrs)
+        self._handles: dict[int, h5py.File] = {}
+        self._path_lengths: list[int] = []
+        self._cumulative_lengths: list[int] = []
+        self.columns_json = "{}"
+        total = 0
+        for path_index, graph_path in enumerate(self.paths):
+            with h5py.File(graph_path, "r") as handle:
+                if str(handle.attrs.get("format", "")) != FLAT_FORMAT_NAME:
+                    raise ValueError(f"{graph_path} is not a flat hetero graph HDF5 cache")
+                if str(handle.attrs.get("graph_definition", "")) != GRAPH_DEFINITION:
+                    raise ValueError(f"{graph_path} stores unsupported graph_definition")
+                if str(handle.attrs.get("waveform_schema", "")) != WAVEFORM_SCHEMA:
+                    raise ValueError(f"{graph_path} stores unsupported waveform_schema")
+                if path_index == 0:
+                    self.columns_json = str(handle.attrs.get("columns_json", "{}"))
+                n_events = int(self._offset_dataset(handle, "detector").shape[0] - 1)
+                compression = _flat_h5_compression(handle)
+                _log_h5_layout(
+                    graph_path=graph_path,
+                    format_label="flat_hdf5",
+                    compression=compression,
+                    n_events=int(n_events),
+                )
+            total += n_events
+            self._path_lengths.append(n_events)
+            self._cumulative_lengths.append(total)
+
+    def __len__(self) -> int:
+        return self._cumulative_lengths[-1] if self._cumulative_lengths else 0
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        state["_handles"] = {}
+        return state
+
+    def close(self) -> None:
+        for handle in self._handles.values():
+            handle.close()
+        self._handles.clear()
+
+    def _handle(self, path_index: int) -> h5py.File:
+        handle = self._handles.get(path_index)
+        if handle is None:
+            handle = h5py.File(self.paths[path_index], "r")
+            self._handles[path_index] = handle
+        return handle
+
+    def _locate(self, index: int) -> tuple[int, int]:
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+        path_index = bisect_right(self._cumulative_lengths, index)
+        previous = self._cumulative_lengths[path_index - 1] if path_index > 0 else 0
+        return path_index, index - previous
+
+    @staticmethod
+    def _decode_text(value: Any) -> str:
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
+
+    @staticmethod
+    def _slice_offsets(handle: h5py.File, name: str, local_index: int) -> slice:
+        offsets = H5FlatHeteroGraphDataset._offset_dataset(handle, name)
+        return slice(int(offsets[local_index]), int(offsets[local_index + 1]))
+
+    @staticmethod
+    def _array_dataset(handle: h5py.File, name: str) -> h5py.Dataset:
+        public_name = f"{name}_all"
+        if public_name in handle:
+            return handle[public_name]
+        return handle[f"arrays/{name}"]
+
+    @staticmethod
+    def _offset_dataset(handle: h5py.File, name: str) -> h5py.Dataset:
+        public_name = f"{name}_offsets"
+        if public_name in handle:
+            return handle[public_name]
+        return handle[f"offsets/{name}"]
+
+    @staticmethod
+    def _edge_index_dataset(handle: h5py.File, relation: str) -> h5py.Dataset:
+        if "edge_index_all_by_relation" in handle:
+            return handle["edge_index_all_by_relation"][relation]
+        return handle["arrays/edge_index_by_type"][relation]
+
+    @staticmethod
+    def _edge_feature_dataset(handle: h5py.File, relation: str) -> h5py.Dataset:
+        if "edge_features_all_by_relation" in handle:
+            return handle["edge_features_all_by_relation"][relation]
+        return handle["arrays/edge_features_by_type"][relation]
+
+    @staticmethod
+    def _edge_offset_dataset(handle: h5py.File, relation: str) -> h5py.Dataset:
+        if "edge_offsets_by_relation" in handle:
+            return handle["edge_offsets_by_relation"][relation]
+        return handle["offsets/edge_by_type"][relation]
+
+    def source_path(self, index: int) -> str:
+        path_index, local_index = self._locate(index)
+        handle = self._handle(path_index)
+        return self._decode_text(handle["metadata/source_path"][local_index])
+
+    def target(self, index: int) -> np.ndarray | None:
+        path_index, local_index = self._locate(index)
+        handle = self._handle(path_index)
+        arrays = handle.get("arrays")
+        if "target_all" not in handle and (arrays is None or "target" not in arrays):
+            return None
+        return self._array_dataset(handle, "target")[local_index].astype(np.float32)
+
+    def particle_label(self, index: int) -> float | None:
+        path_index, local_index = self._locate(index)
+        handle = self._handle(path_index)
+        arrays = handle.get("arrays")
+        if "particle_label_all" not in handle and (arrays is None or "particle_label" not in arrays):
+            return None
+        value = float(self._array_dataset(handle, "particle_label")[local_index])
+        return value if np.isfinite(value) else None
+
+    def detector_waveform_shape(self, index: int) -> tuple[int, ...]:
+        path_index, local_index = self._locate(index)
+        handle = self._handle(path_index)
+        detector_slice = self._slice_offsets(handle, "detector", local_index)
+        n_detector = int(detector_slice.stop - detector_slice.start)
+        waveform = self._array_dataset(handle, "detector_waveforms")
+        return (n_detector, int(waveform.shape[1]), int(waveform.shape[2]))
+
+    def graph_nbytes(self, index: int) -> int:
+        sample = self[index]
+        total = 0
+        for key, value in sample.items():
+            if isinstance(value, np.ndarray):
+                total += int(value.nbytes)
+            elif isinstance(value, dict):
+                total += sum(int(item.nbytes) for item in value.values() if isinstance(item, np.ndarray))
+        return int(total)
+
+    def scaler_sample(self, index: int) -> dict[str, Any]:
+        sample = self[index]
+        return {
+            "detector_features": sample["detector_features"],
+            "detector_context_features": sample["detector_context_features"],
+            "pulse_features": sample["pulse_features"],
+            "edge_features_by_type": sample["edge_features_by_type"],
+            "target": sample["target"],
+            "particle_label": sample["particle_label"],
+        }
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        path_index, local_index = self._locate(index)
+        handle = self._handle(path_index)
+        detector_slice = self._slice_offsets(handle, "detector", local_index)
+        pulse_slice = self._slice_offsets(handle, "pulse", local_index)
+        edge_index_by_type = {}
+        edge_features_by_type = {}
+        for relation in EDGE_RELATIONS:
+            offsets = self._edge_offset_dataset(handle, relation)
+            edge_slice = slice(int(offsets[local_index]), int(offsets[local_index + 1]))
+            edge_index_by_type[relation] = self._edge_index_dataset(handle, relation)[:, edge_slice].astype(np.int64)
+            edge_features_by_type[relation] = self._edge_feature_dataset(handle, relation)[edge_slice].astype(np.float32)
+        arrays = handle.get("arrays")
+        target = (
+            self._array_dataset(handle, "target")[local_index].astype(np.float32)
+            if "target_all" in handle or (arrays is not None and "target" in arrays)
+            else None
+        )
+        particle_label = self.particle_label(index)
+        if self.require_target and target is None:
+            raise ValueError(f"graph has no target: {self.paths[path_index]}::{local_index}")
+        if self.require_particle_label and particle_label is None:
+            raise ValueError(f"graph has no particle label: {self.paths[path_index]}::{local_index}")
+        sample: dict[str, Any] = {
+            "detector_features": self._array_dataset(handle, "detector_features")[detector_slice].astype(np.float32),
+            "detector_context_features": self._array_dataset(handle, "detector_context_features")[detector_slice].astype(np.float32),
+            "detector_positions_km": self._array_dataset(handle, "detector_positions_km")[detector_slice].astype(np.float32),
+            "detector_lids": self._array_dataset(handle, "detector_lids")[detector_slice].astype(np.int64),
+            "detector_waveforms": self._array_dataset(handle, "detector_waveforms")[detector_slice].astype(np.float32),
+            "pulse_features": self._array_dataset(handle, "pulse_features")[pulse_slice].astype(np.float32),
+            "pulse_positions_km": self._array_dataset(handle, "pulse_positions_km")[pulse_slice].astype(np.float32),
+            "pulse_lids": self._array_dataset(handle, "pulse_lids")[pulse_slice].astype(np.int64),
+            "pulse_detector_index": self._array_dataset(handle, "pulse_detector_index")[pulse_slice].astype(np.int64),
+            "pulse_bounds": self._array_dataset(handle, "pulse_bounds")[pulse_slice].astype(np.float32),
+            "edge_index_by_type": edge_index_by_type,
+            "edge_features_by_type": edge_features_by_type,
+            "target": target,
+            "particle_label": particle_label,
+        }
+        if self.load_attrs:
+            sample["metadata"] = {
+                "event_id": self._decode_text(handle["metadata/event_id"][local_index]),
+                "source_path": self._decode_text(handle["metadata/source_path"][local_index]),
+                "source_index": int(handle["metadata/source_index"][local_index]),
+            }
+        return sample
+
+
 class H5PyGHeteroGraphDataset:
     def __init__(
         self,
@@ -480,7 +955,8 @@ class H5PyGHeteroGraphDataset:
         waveform_length: int | None = None,
         **kwargs: Any,
     ):
-        self.base = H5HeteroGraphDataset(*args, **kwargs)
+        dataset_class = hetero_dataset_class_for_paths(args[0])
+        self.base = dataset_class(*args, **kwargs)
         self.scalers = scalers
         self.waveform_length = None if waveform_length is None else int(waveform_length)
 
@@ -490,12 +966,14 @@ class H5PyGHeteroGraphDataset:
     def __getstate__(self) -> dict[str, Any]:
         return {
             "base": self.base.__getstate__(),
+            "base_class": self.base.__class__.__name__,
             "scalers": self.scalers,
             "waveform_length": self.waveform_length,
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
-        self.base = H5HeteroGraphDataset.__new__(H5HeteroGraphDataset)
+        base_class = H5FlatHeteroGraphDataset if state.get("base_class") == "H5FlatHeteroGraphDataset" else H5HeteroGraphDataset
+        self.base = base_class.__new__(base_class)
         self.base.__dict__.update(state["base"])
         self.scalers = state.get("scalers")
         self.waveform_length = state.get("waveform_length")

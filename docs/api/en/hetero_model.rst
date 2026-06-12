@@ -272,6 +272,10 @@ detector:
 If ``WAVEFORM_ENCODER=transformer``, the Transformer operates only on this
 per-detector waveform time sequence. It computes self-attention between time
 bins of the same detector waveform, not between detector and pulse graph nodes.
+Before the Transformer block, the encoded time sequence is downsampled to at
+most ``WAVEFORM_TRANSFORMER_MAX_TOKENS`` tokens. The server default is 128
+tokens, which bounds the quadratic self-attention cost even when the stored
+detector waveform is longer.
 For one detector waveform, each time bin is a token.  For time bin ``t`` and
 another time bin ``u`` in the same detector waveform, the Transformer forms
 
@@ -330,10 +334,11 @@ Pulse nodes have one scalar branch:
 The waveform encoder is applied once per detector. For the first transformer
 waveform sweep, the submitter sets ``WAVEFORM_ENCODER=transformer``. The graph
 attention architecture remains ``hetero_attention``.
-If ``detector_waveform_valid`` is zero, the waveform embedding is multiplied by
-zero. The detector can still contribute through live-status, geometry, detector
-scalar features, and detector-detector edges, but not through a fake waveform
-signal.
+If ``detector_waveform_valid`` is zero, that detector row is not passed through
+the waveform encoder. The output embedding for that row is filled with zeros.
+The detector can still contribute through live-status, geometry, detector
+scalar features, and detector-detector edges, but it does not consume waveform
+encoder compute and it does not contribute through a fake waveform signal.
 
 Where attention appears
 -----------------------

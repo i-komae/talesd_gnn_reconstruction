@@ -64,12 +64,17 @@ heterogeneous reco+mass比較
 event graph は丸ごと使い、HGSampling は使いません。
 最初の waveform encoder 比較では ``WAVEFORM_ENCODER=transformer`` を使います。
 transformer の結果で dataset size と auxiliary head 条件を決めるまで、対応する ``cnn-gru`` sweep は投げません。
-transformer waveform run では、submitter の既定を GPU micro-batch
-``BATCH_SIZE=8``、``GRADIENT_ACCUMULATION_STEPS=16`` にします。
-effective batch size は 128 のまま保ち、``BATCH_SIZE=128`` をそのまま
-waveform Transformer に入れた時の大きな activation memory を避けます。
-この Transformer hetero 経路では、V100 の light dataset test が pinned-memory
-thread で落ちたため、既定では ``PIN_MEMORY=0`` にします。
+transformer waveform run では、submitter の既定を ``BATCH_SIZE=32``、
+``GRADIENT_ACCUMULATION_STEPS=4`` にします。effective batch size は 128 のまま保ちつつ、
+micro-batch 8 の時に目立っていた Python/DataLoader overhead を減らします。
+この Transformer hetero 経路では、``PIN_MEMORY=0``、``PREFETCH_FACTOR=1``、
+``PERSISTENT_WORKERS=1`` を既定にします。
+
+waveform Transformer は ``WAVEFORM_TRANSFORMER_MAX_TOKENS=128`` で token 数を制限します。
+``detector_waveform_valid=0`` の detector row は waveform encoder に通さず、
+waveform embedding は zero にします。training では既定で
+``HETERO_TRAINING_DATA_FORMAT=fast_tensor`` を使い、batch ごとの PyG ``HeteroData``
+構築を避けます。最終 validation/test 評価は同じ model input schema で通常の metrics を保存します。
 log に出る ``hetero_loader_memory`` は CPU/DataLoader prefetch の見積もりであり、
 GPU activation memory の保証ではありません。
 
@@ -94,6 +99,37 @@ GPU activation memory の保証ではありません。
 一方で ``ATTENTION_MAPS=1`` は既定です。checkpoint 作成後に、validation の少数eventについて
 ``<checkpoint>.diagnostics/attention_maps/validation/`` へ attention map を保存します。
 既定の保存数は ``ATTENTION_MAPS_MAX_GRAPHS=16`` なので、これは全dataset dumpではなく軽量診断です。
+
+milestone checkpoint
+~~~~~~~~~~~~~~~~~~~~
+
+hetero training の既定 milestone は ``8,16,32,64`` epoch です。
+各 milestone では、その時点までの best checkpoint を読み込み、終了時と同じ validation/test
+prediction と metrics を実行します。出力は
+``<checkpoint>.best_through_epochXXXX.pt`` と対応する ``.metrics.json`` です。
+最終 checkpoint は last epoch ではなく best validation loss の checkpoint です。
+server 既定は ``EARLY_STOPPING_PATIENCE=12``、``EARLY_STOPPING_MIN_EPOCHS=32`` です。
+
+速度 preflight
+~~~~~~~~~~~~~~
+
+長い学習の前に、同じ graph input で speed benchmark を投げます。
+graph 数を制限し、profile を有効にし、重い post-training diagnostics を止めたうえで、
+本番と同じ hetero Transformer 既定値を使います。
+
+.. code-block:: bash
+
+   GRAPH_INPUT=/dicos_ui_home/ikomae/work/gnn/graphs/<hetero_graph_dir> \
+   RUN_ID=hetero_speed_$(date +%Y%m%d_%H%M%S) \
+   scripts/submit_server_hetero_speed_benchmark.sh
+
+HDF5 event-group read が律速になる場合は、学習時に ``PREPARE_FAST_CACHE=1`` を指定します。
+runner は先に ``talesd-gnn convert-hetero-to-flat-cache`` で flat hetero cache を作り、
+その cache から学習します。
+これは多数の HDF5 file を作る仕組みではなく、単一 HDF5 file の内部 layout を
+``events/00000000/<多数の小さいgzip dataset>`` から、
+``detector_features_all``、``detector_waveforms_all``、
+``edge_index_all_by_relation/*``、``target_all`` と offset table を持つ連続配列 layout へ変換するものです。
 
 balanced heterogeneous HDF5 サイズ比較
 ---------------------------------------

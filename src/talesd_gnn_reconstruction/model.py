@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 
 WAVEFORM_SHAPE_DIM = 20
@@ -381,12 +382,18 @@ class WaveformEncoder(nn.Module):
         dropout: float = 0.05,
         transformer_heads: int = 4,
         transformer_layers: int = 1,
+        transformer_max_tokens: int = 128,
+        transformer_downsample: str = "adaptive_avg",
     ):
         super().__init__()
         self.mode = str(mode)
         self.waveform_channels = max(int(waveform_channels), 0)
         self.waveform_length = max(int(waveform_length), 0)
         self.embedding_dim = max(int(embedding_dim), 0)
+        self.transformer_max_tokens = max(int(transformer_max_tokens), 1)
+        self.transformer_downsample = str(transformer_downsample)
+        if self.transformer_downsample not in {"adaptive_avg", "stride_conv"}:
+            raise ValueError("transformer_downsample must be 'adaptive_avg' or 'stride_conv'")
         if self.mode == "none" or self.embedding_dim == 0:
             self.mode = "none"
         if self.mode != "none" and (self.waveform_channels <= 0 or self.waveform_length <= 0):
@@ -398,13 +405,19 @@ class WaveformEncoder(nn.Module):
             self.proj = None
             self.positional = None
             self.transformer = None
+            self.transformer_downsample_conv = None
             return
 
         conv_hidden = max(self.embedding_dim // 2, 16)
+        waveform_norm: nn.Module
+        if self.mode == "transformer":
+            waveform_norm = nn.GroupNorm(1, conv_hidden)
+        else:
+            waveform_norm = nn.LayerNorm([conv_hidden, self.waveform_length])
         self.encoder = nn.Sequential(
             nn.Conv1d(self.waveform_channels, conv_hidden, kernel_size=5, padding=2),
             nn.SiLU(),
-            nn.LayerNorm([conv_hidden, self.waveform_length]),
+            waveform_norm,
             nn.Conv1d(conv_hidden, self.embedding_dim, kernel_size=5, padding=2),
             nn.SiLU(),
         )
@@ -424,6 +437,7 @@ class WaveformEncoder(nn.Module):
             )
             self.positional = None
             self.transformer = None
+            self.transformer_downsample_conv = None
         elif self.mode == "transformer":
             heads = max(int(transformer_heads), 1)
             if self.embedding_dim % heads != 0:
@@ -438,7 +452,13 @@ class WaveformEncoder(nn.Module):
                 norm_first=True,
             )
             self.transformer = nn.TransformerEncoder(layer, num_layers=max(int(transformer_layers), 1))
-            self.positional = nn.Parameter(torch.zeros(1, self.waveform_length, self.embedding_dim))
+            self.positional = nn.Parameter(torch.zeros(1, self.transformer_max_tokens, self.embedding_dim))
+            stride = max((self.waveform_length + self.transformer_max_tokens - 1) // self.transformer_max_tokens, 1)
+            self.transformer_downsample_conv = (
+                nn.Conv1d(self.embedding_dim, self.embedding_dim, kernel_size=3, padding=1, stride=stride)
+                if self.transformer_downsample == "stride_conv"
+                else None
+            )
             self.proj = nn.Sequential(
                 nn.Linear(self.embedding_dim * 2, self.embedding_dim),
                 nn.SiLU(),
@@ -454,6 +474,7 @@ class WaveformEncoder(nn.Module):
             self.gru = None
             self.positional = None
             self.transformer = None
+            self.transformer_downsample_conv = None
         else:
             raise ValueError("waveform_encoder must be 'none', 'cnn', 'cnn-gru', or 'transformer'")
 
@@ -461,7 +482,36 @@ class WaveformEncoder(nn.Module):
     def output_dim(self) -> int:
         return 0 if self.mode == "none" else self.embedding_dim
 
-    def forward(self, waveform_x: torch.Tensor | None, num_nodes: int, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    def _encode_valid_waveforms(self, waveform: torch.Tensor, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        encoded = self.encoder(waveform)
+        if self.mode == "transformer":
+            if encoded.shape[-1] > self.transformer_max_tokens:
+                if self.transformer_downsample_conv is not None:
+                    encoded = self.transformer_downsample_conv(encoded)
+                    if encoded.shape[-1] > self.transformer_max_tokens:
+                        encoded = F.adaptive_avg_pool1d(encoded, self.transformer_max_tokens)
+                else:
+                    encoded = F.adaptive_avg_pool1d(encoded, self.transformer_max_tokens)
+            encoded = encoded.transpose(1, 2)
+            positional = self.positional[:, : encoded.shape[1]].to(device=device, dtype=dtype)
+            transformed = self.transformer(encoded + positional)
+            return self.proj(torch.cat([transformed.mean(dim=1), transformed.amax(dim=1)], dim=-1))
+        encoded = encoded.transpose(1, 2)
+        if self.mode == "cnn-gru":
+            recurrent, _hidden = self.gru(encoded)
+            pooled = torch.cat([recurrent[:, -1], encoded.mean(dim=1), encoded.amax(dim=1)], dim=-1)
+            return self.proj(pooled)
+        return self.proj(torch.cat([encoded.mean(dim=1), encoded.amax(dim=1)], dim=-1))
+
+    def forward(
+        self,
+        waveform_x: torch.Tensor | None,
+        num_nodes: int,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+        valid_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         if self.mode == "none":
             return torch.zeros(num_nodes, 0, dtype=dtype, device=device)
         if waveform_x is None:
@@ -469,15 +519,15 @@ class WaveformEncoder(nn.Module):
         waveform = waveform_x.to(device=device, dtype=dtype)
         if waveform.ndim != 3 or waveform.shape[0] != num_nodes or waveform.shape[1] != self.waveform_channels:
             raise ValueError("waveform_x shape does not match model waveform configuration")
-        encoded = self.encoder(waveform).transpose(1, 2)
-        if self.mode == "cnn-gru":
-            recurrent, _hidden = self.gru(encoded)
-            pooled = torch.cat([recurrent[:, -1], encoded.mean(dim=1), encoded.amax(dim=1)], dim=-1)
-            return self.proj(pooled)
-        if self.mode == "transformer":
-            transformed = self.transformer(encoded + self.positional.to(device=device, dtype=dtype))
-            return self.proj(torch.cat([transformed.mean(dim=1), transformed.amax(dim=1)], dim=-1))
-        return self.proj(torch.cat([encoded.mean(dim=1), encoded.amax(dim=1)], dim=-1))
+        if valid_mask is None:
+            return self._encode_valid_waveforms(waveform, device=device, dtype=dtype)
+        valid = valid_mask.to(device=device).reshape(-1) > 0.5
+        if valid.shape[0] != num_nodes:
+            raise ValueError("valid_mask length does not match waveform_x")
+        output = torch.zeros(num_nodes, self.output_dim, dtype=dtype, device=device)
+        if bool(valid.any()):
+            output[valid] = self._encode_valid_waveforms(waveform[valid], device=device, dtype=dtype)
+        return output
 
 
 class TaleSdGNN(nn.Module):
@@ -502,6 +552,8 @@ class TaleSdGNN(nn.Module):
         waveform_embedding_dim: int = 64,
         waveform_transformer_heads: int = 4,
         waveform_transformer_layers: int = 1,
+        waveform_transformer_max_tokens: int = 128,
+        waveform_transformer_downsample: str = "adaptive_avg",
         classification_arch: str = "legacy",
     ):
         super().__init__()
@@ -531,6 +583,8 @@ class TaleSdGNN(nn.Module):
             "waveform_embedding_dim": int(waveform_embedding_dim),
             "waveform_transformer_heads": int(waveform_transformer_heads),
             "waveform_transformer_layers": int(waveform_transformer_layers),
+            "waveform_transformer_max_tokens": int(waveform_transformer_max_tokens),
+            "waveform_transformer_downsample": str(waveform_transformer_downsample),
             "classification_arch": classification_arch,
         }
         self.pulse_dim = int(pulse_dim)
@@ -550,6 +604,8 @@ class TaleSdGNN(nn.Module):
             dropout=dropout,
             transformer_heads=waveform_transformer_heads,
             transformer_layers=waveform_transformer_layers,
+            transformer_max_tokens=waveform_transformer_max_tokens,
+            transformer_downsample=waveform_transformer_downsample,
         )
         if self.pulse_dim > 0:
             self.pulse_encoder = _make_mlp(self.pulse_dim, hidden_dim, hidden_dim, dropout)
@@ -750,6 +806,8 @@ class PhysicsTaleSdGNN(nn.Module):
         waveform_embedding_dim: int = 64,
         waveform_transformer_heads: int = 4,
         waveform_transformer_layers: int = 1,
+        waveform_transformer_max_tokens: int = 128,
+        waveform_transformer_downsample: str = "adaptive_avg",
         classification_arch: str = "legacy",
     ):
         super().__init__()
@@ -780,6 +838,8 @@ class PhysicsTaleSdGNN(nn.Module):
             "waveform_embedding_dim": int(waveform_embedding_dim),
             "waveform_transformer_heads": int(waveform_transformer_heads),
             "waveform_transformer_layers": int(waveform_transformer_layers),
+            "waveform_transformer_max_tokens": int(waveform_transformer_max_tokens),
+            "waveform_transformer_downsample": str(waveform_transformer_downsample),
             "classification_arch": classification_arch,
         }
         self.pulse_dim = int(pulse_dim)
@@ -802,6 +862,8 @@ class PhysicsTaleSdGNN(nn.Module):
             dropout=dropout,
             transformer_heads=waveform_transformer_heads,
             transformer_layers=waveform_transformer_layers,
+            transformer_max_tokens=waveform_transformer_max_tokens,
+            transformer_downsample=waveform_transformer_downsample,
         )
         if self.pulse_dim > 0:
             self.pulse_encoder = _make_mlp(self.pulse_dim, hidden_dim, hidden_dim, dropout)

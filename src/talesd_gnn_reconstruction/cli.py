@@ -4228,6 +4228,8 @@ def _cmd_train(args: argparse.Namespace) -> None:
         waveform_embedding_dim=args.waveform_embedding_dim,
         waveform_transformer_heads=args.waveform_transformer_heads,
         waveform_transformer_layers=args.waveform_transformer_layers,
+        waveform_transformer_max_tokens=args.waveform_transformer_max_tokens,
+        waveform_transformer_downsample=args.waveform_transformer_downsample,
         loss_mode=args.loss_mode,
         energy_loss_weight=args.energy_loss_weight,
         core_loss_weight=args.core_loss_weight,
@@ -4331,6 +4333,10 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         waveform_encoder=args.waveform_encoder,
         waveform_embedding_dim=args.waveform_embedding_dim,
         waveform_length=args.waveform_length,
+        waveform_transformer_heads=args.waveform_transformer_heads,
+        waveform_transformer_layers=args.waveform_transformer_layers,
+        waveform_transformer_max_tokens=args.waveform_transformer_max_tokens,
+        waveform_transformer_downsample=args.waveform_transformer_downsample,
         loss_mode=args.loss_mode,
         energy_loss_weight=args.energy_loss_weight,
         core_loss_weight=args.core_loss_weight,
@@ -4374,11 +4380,23 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         persistent_workers=args.persistent_workers,
+        val_num_workers=args.val_num_workers,
+        validate_every_n_epochs=args.validate_every_n_epochs,
+        max_val_graphs=args.max_val_graphs,
+        early_stopping_patience=args.early_stopping_patience,
+        early_stopping_min_epochs=args.early_stopping_min_epochs,
+        checkpoint_milestones=args.checkpoint_milestones,
         pin_memory=None if not args.no_pin_memory else False,
         loader_memory_budget_gib=args.loader_memory_budget_gib,
         loader_memory_estimate_samples=args.loader_memory_estimate_samples,
         split_workers=args.split_workers,
         amp=args.amp,
+        profile=True if args.profile else None,
+        max_graphs=args.max_graphs,
+        training_data_format=args.training_data_format,
+        hetero_relations=args.hetero_relations,
+        dataloader_timeout_sec=args.dataloader_timeout_sec,
+        data_wait_warn_sec=args.data_wait_warn_sec,
         show_progress=not args.no_progress,
     )
     print(f"checkpoint: {result['checkpoint']}")
@@ -4402,6 +4420,26 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
             f"core_68_km={test.get('core_68_km', float('nan')):.6g} "
             f"angular_68_deg={test.get('angular_68_deg', float('nan')):.6g}"
         )
+
+
+def _cmd_convert_hetero_to_flat(args: argparse.Namespace) -> None:
+    from .hetero_graph_io import convert_hetero_to_flat_cache
+
+    graphs = _resolve_graph_args(args.graphs, args.graphs_list)
+    summary = convert_hetero_to_flat_cache(
+        graphs,
+        args.output,
+        compression=args.compression,
+    )
+    print(
+        "hetero_flat_cache "
+        f"output={summary['output']} "
+        f"graphs={summary['graphs']} "
+        f"detector_nodes={summary['detector_nodes']} "
+        f"pulse_nodes={summary['pulse_nodes']} "
+        f"waveform_shape={summary['waveform_channels']}x{summary['waveform_length']} "
+        f"compression={summary['compression']}"
+    )
 
 
 def _cmd_reconstruct_dst(args: argparse.Namespace) -> None:
@@ -4453,7 +4491,7 @@ def _cmd_input_distributions(args: argparse.Namespace) -> None:
 
         with h5py.File(paths[0], "r") as handle:
             graph_format = str(handle.attrs.get("format", ""))
-    if graph_format == "talesd_gnn_hetero_graphs":
+    if graph_format in {"talesd_gnn_hetero_graphs", "talesd_gnn_hetero_graphs_flat"}:
         from .hetero_feature_analysis import save_hetero_input_distributions
 
         save = save_hetero_input_distributions
@@ -4781,6 +4819,12 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--waveform-embedding-dim", type=int, default=64, help="波形encoder出力次元")
     train.add_argument("--waveform-transformer-heads", type=int, default=4)
     train.add_argument("--waveform-transformer-layers", type=int, default=1)
+    train.add_argument("--waveform-transformer-max-tokens", type=int, default=128)
+    train.add_argument(
+        "--waveform-transformer-downsample",
+        choices=["adaptive_avg", "stride_conv"],
+        default="adaptive_avg",
+    )
     train.add_argument(
         "--loss-mode",
         choices=["scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics", "physics-nll", "nll"],
@@ -4891,6 +4935,14 @@ def build_parser() -> argparse.ArgumentParser:
     train_hetero.add_argument("--readout-heads", type=int, default=4, help="detector/pulse type別 attention readout head数")
     train_hetero.add_argument("--waveform-encoder", choices=["none", "cnn", "cnn-gru", "transformer"], default="cnn")
     train_hetero.add_argument("--waveform-embedding-dim", type=int, default=64)
+    train_hetero.add_argument("--waveform-transformer-heads", type=int, default=4)
+    train_hetero.add_argument("--waveform-transformer-layers", type=int, default=1)
+    train_hetero.add_argument("--waveform-transformer-max-tokens", type=int, default=128)
+    train_hetero.add_argument(
+        "--waveform-transformer-downsample",
+        choices=["adaptive_avg", "stride_conv"],
+        default="adaptive_avg",
+    )
     train_hetero.add_argument(
         "--waveform-length",
         type=int,
@@ -4946,8 +4998,31 @@ def build_parser() -> argparse.ArgumentParser:
     train_hetero.add_argument("--diagnostic-energy-bin-width", type=float, default=0.1)
     train_hetero.add_argument("--diagnostic-min-bin-count", type=int, default=20)
     train_hetero.add_argument("--num-workers", type=int, default=DEFAULT_TRAIN_WORKERS, help="hetero DataLoader worker数。-1ならCPUとメモリ見積もりから決める")
-    train_hetero.add_argument("--prefetch-factor", type=int, default=2, help="各hetero DataLoader workerが先読みするbatch数")
-    train_hetero.add_argument("--persistent-workers", action="store_true", help="hetero DataLoader workerをepoch間で保持する")
+    train_hetero.add_argument("--prefetch-factor", type=int, default=1, help="各hetero DataLoader workerが先読みするbatch数")
+    train_hetero.add_argument(
+        "--persistent-workers",
+        dest="persistent_workers",
+        action="store_true",
+        default=None,
+        help="hetero DataLoader workerをepoch間で保持する",
+    )
+    train_hetero.add_argument(
+        "--no-persistent-workers",
+        dest="persistent_workers",
+        action="store_false",
+        help="hetero DataLoader workerをepoch間で保持しない",
+    )
+    train_hetero.add_argument("--val-num-workers", type=int, default=0, help="per-epoch validation DataLoader worker数")
+    train_hetero.add_argument("--validate-every-n-epochs", type=int, default=1, help="per-epoch validationを何epochごとに実行するか。0ならskip")
+    train_hetero.add_argument("--max-val-graphs", type=int, default=None, help="per-epoch validationに使う最大graph数。最終metricsはfull validationを使う")
+    train_hetero.add_argument("--early-stopping-patience", type=int, default=0)
+    train_hetero.add_argument("--early-stopping-min-epochs", type=int, default=1)
+    train_hetero.add_argument(
+        "--checkpoint-milestones",
+        type=lambda value: [int(item) for item in str(value).split(",") if item.strip()],
+        default=None,
+        help="到達時点までのbest checkpointとfull評価を保存するepoch list。既定は8,16,32,64",
+    )
     train_hetero.add_argument("--no-pin-memory", action="store_true", help="CUDA転送用のpinned memoryを使わない")
     train_hetero.add_argument(
         "--loader-memory-budget-gib",
@@ -4963,8 +5038,35 @@ def build_parser() -> argparse.ArgumentParser:
         default="off",
         help="CUDA mixed precision。V100 transformer training では fp16 が速い",
     )
+    train_hetero.add_argument("--profile", action="store_true", help="hetero training timing profileをepochごとに出力する")
+    train_hetero.add_argument("--max-graphs", type=int, default=None, help="速度debug用にsplit後のgraph数を制限する")
+    train_hetero.add_argument(
+        "--training-data-format",
+        choices=["fast_tensor", "pyg"],
+        default=None,
+        help="training DataLoader形式。既定はfast_tensor",
+    )
+    train_hetero.add_argument("--hetero-relations", default=None, help="使用relationのcomma list。既定はHETERO_RELATIONSまたはall")
+    train_hetero.add_argument("--dataloader-timeout-sec", type=float, default=None)
+    train_hetero.add_argument("--data-wait-warn-sec", type=float, default=None)
     train_hetero.add_argument("--no-progress", action="store_true")
     train_hetero.set_defaults(func=_cmd_train_hetero)
+
+    convert_hetero_flat = sub.add_parser(
+        "convert-hetero-to-flat-cache",
+        aliases=["convert-hetero-to-flat", "prepare-hetero-fast-cache"],
+        help="event-group hetero HDF5をtraining向けflat cacheへ変換する",
+    )
+    convert_hetero_flat.add_argument("--graphs", "--input", nargs="*", default=[], help="入力hetero HDF5 graph/shard/directory")
+    convert_hetero_flat.add_argument("--graphs-list", action="append", default=[], help="入力hetero HDF5 shard path list")
+    convert_hetero_flat.add_argument("-o", "--output", required=True, help="出力flat hetero HDF5 cache")
+    convert_hetero_flat.add_argument(
+        "--compression",
+        default="lzf",
+        choices=["lzf", "none"],
+        help="flat cache dataset compression。training I/Oではlzfまたはnoneを使う",
+    )
+    convert_hetero_flat.set_defaults(func=_cmd_convert_hetero_to_flat)
 
     reconstruct_dst = sub.add_parser(
         "reconstruct-dst",

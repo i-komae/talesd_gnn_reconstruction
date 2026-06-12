@@ -21,7 +21,7 @@ from .feature_analysis import (
     _write_sample_values_artifacts,
 )
 from .hetero_data import sample_to_hetero_data
-from .hetero_graph_io import EDGE_RELATIONS, H5HeteroGraphDataset, H5PyGHeteroGraphDataset
+from .hetero_graph_io import EDGE_RELATIONS, H5HeteroGraphDataset, H5PyGHeteroGraphDataset, hetero_dataset_class_for_paths
 from .hetero_model import MinimalHeteroTaleSdGNN
 from .hetero_training import _predict_hetero_numpy
 from .metrics import binary_classification_metrics, reconstruction_metrics
@@ -82,7 +82,8 @@ def save_hetero_input_distributions(
     if show_progress:
         _progress_write(f"stage=start hetero_input_distributions paths={len(paths)}")
         _progress_write("stage=start hetero_input_distributions dataset_init")
-    dataset = H5HeteroGraphDataset(paths, require_target=False, require_particle_label=False, load_attrs=False)
+    dataset_class = hetero_dataset_class_for_paths(paths)
+    dataset = dataset_class(paths, require_target=False, require_particle_label=False, load_attrs=False)
     try:
         if show_progress:
             _progress_write(
@@ -485,8 +486,10 @@ def save_hetero_feature_group_importance(
     error_prediction = int(model_config.get("error_dim", 0)) > 0
     waveform_length = int(model_config["waveform_length"])
 
-    dataset = H5HeteroGraphDataset(
-        expand_graph_paths(graphs_path),
+    graph_paths = expand_graph_paths(graphs_path)
+    dataset_class = hetero_dataset_class_for_paths(graph_paths)
+    dataset = dataset_class(
+        graph_paths,
         require_target=True,
         require_particle_label=mass_classification,
         load_attrs=False,
@@ -523,7 +526,7 @@ def save_hetero_feature_group_importance(
         return reco, mass
 
     base_dataset = H5PyGHeteroGraphDataset(
-        expand_graph_paths(graphs_path),
+        graph_paths,
         require_target=True,
         require_particle_label=mass_classification,
         scalers=scalers,
