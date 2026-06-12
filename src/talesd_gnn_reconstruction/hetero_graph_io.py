@@ -517,18 +517,18 @@ def convert_hetero_to_flat_cache(
     output = Path(output_path).expanduser()
     compression_label = "none" if compression in {None, "", "none"} else str(compression)
     total_start = time.monotonic()
-    print(
-        "hetero_flat_cache_start "
-        f"input={input_paths} output={output} compression={compression_label} "
-        f"verify_samples={int(verify_samples)} "
-        f"progress_interval_sec={progress_interval_sec:.6g}",
-        flush=True,
-    )
     source = H5HeteroGraphDataset(input_paths, require_target=True, load_attrs=True)
     try:
         if len(source) == 0:
             raise ValueError("cannot convert empty hetero HDF5 dataset")
         n_events = int(len(source))
+        print(
+            "hetero_flat_cache_start "
+            f"input={input_paths} output={output} compression={compression_label} "
+            f"graphs={n_events} verify_samples={int(verify_samples)} "
+            f"progress_interval_sec={progress_interval_sec:.6g}",
+            flush=True,
+        )
         detector_total = 0
         pulse_total = 0
         edge_totals = {relation: 0 for relation in EDGE_RELATIONS}
@@ -942,6 +942,26 @@ class H5HeteroGraphDataset:
         path_index, _local_index, key = self._locate(index)
         return self._group_nbytes(self._handle(path_index)["events"][key])
 
+    def graph_training_nbytes(self, index: int) -> int:
+        path_index, _local_index, key = self._locate(index)
+        group = self._handle(path_index)["events"][key]
+        total = 0
+        for name in (
+            "detector_features",
+            "detector_context_features",
+            "detector_waveforms",
+            "pulse_features",
+        ):
+            total += self._dataset_nbytes(group[name])
+        if "target" in group:
+            total += self._dataset_nbytes(group["target"])
+        if "particle_label" in group:
+            total += self._dataset_nbytes(group["particle_label"])
+        for relation in EDGE_RELATIONS:
+            total += self._dataset_nbytes(group["edge_index_by_type"][relation])
+            total += self._dataset_nbytes(group["edge_features_by_type"][relation])
+        return int(total)
+
     def scaler_sample(self, index: int) -> dict[str, Any]:
         path_index, _local_index, key = self._locate(index)
         group = self._handle(path_index)["events"][key]
@@ -1181,6 +1201,34 @@ class H5FlatHeteroGraphDataset:
             ("pulse_lids", n_pulse),
             ("pulse_detector_index", n_pulse),
             ("pulse_bounds", n_pulse),
+        ):
+            dataset = self._array_dataset(handle, name)
+            total += _dataset_rows_nbytes(dataset, rows)
+        arrays = handle.get("arrays")
+        if "target_all" in handle or (arrays is not None and "target" in arrays):
+            total += _dataset_rows_nbytes(self._array_dataset(handle, "target"), 1)
+        if "particle_label_all" in handle or (arrays is not None and "particle_label" in arrays):
+            total += _dataset_rows_nbytes(self._array_dataset(handle, "particle_label"), 1)
+        for relation in EDGE_RELATIONS:
+            offsets = self._edge_offset_dataset(handle, relation)
+            n_edges = int(offsets[local_index + 1] - offsets[local_index])
+            total += _dataset_axis_nbytes(self._edge_index_dataset(handle, relation), axis=1, count=n_edges)
+            total += _dataset_rows_nbytes(self._edge_feature_dataset(handle, relation), n_edges)
+        return int(total)
+
+    def graph_training_nbytes(self, index: int) -> int:
+        path_index, local_index = self._locate(index)
+        handle = self._handle(path_index)
+        detector_slice = self._slice_offsets(handle, "detector", local_index)
+        pulse_slice = self._slice_offsets(handle, "pulse", local_index)
+        n_detector = int(detector_slice.stop - detector_slice.start)
+        n_pulse = int(pulse_slice.stop - pulse_slice.start)
+        total = 0
+        for name, rows in (
+            ("detector_features", n_detector),
+            ("detector_context_features", n_detector),
+            ("detector_waveforms", n_detector),
+            ("pulse_features", n_pulse),
         ):
             dataset = self._array_dataset(handle, name)
             total += _dataset_rows_nbytes(dataset, rows)

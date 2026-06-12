@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
@@ -420,6 +422,25 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             finally:
                 dataset.close()
 
+    def test_fast_tensor_dataset_uses_training_sample_not_getitem(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            with create_hetero_graph_file(graph_path) as handle:
+                write_hetero_graph(handle, 0, _synthetic_graph(0))
+
+            dataset = H5TensorHeteroGraphDataset(graph_path, require_target=True, require_particle_label=True)
+            try:
+                with (
+                    mock.patch.object(dataset.base, "training_sample", wraps=dataset.base.training_sample) as training_sample,
+                    mock.patch.object(H5HeteroGraphDataset, "__getitem__", side_effect=AssertionError),
+                ):
+                    sample = dataset[0]
+                training_sample.assert_called_once_with(0)
+                self.assertIn("detector", sample)
+                self.assertIn("pulse", sample)
+            finally:
+                dataset.close()
+
     def test_training_scaler_sample_does_not_load_waveforms(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "synthetic_hetero.h5"
@@ -453,6 +474,31 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             finally:
                 dataset.close()
 
+    def test_training_sample_does_not_include_metadata_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "synthetic_hetero.h5"
+            with create_hetero_graph_file(output) as handle:
+                write_hetero_graph(handle, 0, _synthetic_graph(0))
+
+            dataset = H5HeteroGraphDataset(output, require_target=True, require_particle_label=True)
+            try:
+                sample = dataset.training_sample(0)
+                for key in (
+                    "detector_positions_km",
+                    "detector_lids",
+                    "pulse_positions_km",
+                    "pulse_lids",
+                    "pulse_detector_index",
+                    "pulse_bounds",
+                    "metadata",
+                    "attrs",
+                ):
+                    self.assertNotIn(key, sample)
+                self.assertIn("detector_waveforms", sample)
+                self.assertIn("edge_index_by_type", sample)
+            finally:
+                dataset.close()
+
     def test_flat_cache_scaler_sample_does_not_load_waveforms_or_call_getitem(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             grouped = Path(tmpdir) / "synthetic_hetero.h5"
@@ -477,6 +523,55 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 self.assertEqual(set(scaler_sample["edge_features_by_type"]), set(EDGE_RELATIONS))
             finally:
                 dataset.close()
+
+    def test_flat_cache_training_nbytes_is_smaller_than_full_estimate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            grouped = Path(tmpdir) / "synthetic_hetero.h5"
+            flat = Path(tmpdir) / "synthetic_hetero.flat.h5"
+            with create_hetero_graph_file(grouped) as handle:
+                for index in range(2):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+            convert_hetero_to_flat_cache(grouped, flat, compression="none", verify_samples=1)
+
+            dataset = H5FlatHeteroGraphDataset(flat, require_target=True, require_particle_label=True)
+            try:
+                with mock.patch.object(H5FlatHeteroGraphDataset, "__getitem__", side_effect=AssertionError):
+                    training_nbytes = dataset.graph_training_nbytes(0)
+                    full_nbytes = dataset.graph_nbytes(0)
+                self.assertGreater(training_nbytes, 0)
+                self.assertGreater(full_nbytes, training_nbytes)
+
+                training_summary = _estimate_graph_bytes(dataset, [0, 1], max_samples=2, mode="training")
+                full_summary = _estimate_graph_bytes(dataset, [0, 1], max_samples=2, mode="full")
+                self.assertEqual(training_summary["graph_bytes_mode"], "training")
+                self.assertEqual(full_summary["graph_bytes_mode"], "full")
+                self.assertLess(training_summary["p95_graph_bytes"], full_summary["p95_graph_bytes"])
+            finally:
+                dataset.close()
+
+    def test_flat_cache_progress_log_is_emitted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            grouped = Path(tmpdir) / "synthetic_hetero.h5"
+            flat = Path(tmpdir) / "synthetic_hetero.flat.h5"
+            with create_hetero_graph_file(grouped) as handle:
+                for index in range(3):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                convert_hetero_to_flat_cache(
+                    grouped,
+                    flat,
+                    compression="none",
+                    verify_samples=2,
+                    progress_interval_sec=0.0,
+                )
+            text = output.getvalue()
+            self.assertIn("hetero_flat_cache_start", text)
+            self.assertIn("graphs=3", text)
+            self.assertIn("hetero_flat_cache_progress stage=count", text)
+            self.assertIn("hetero_flat_cache_progress stage=write", text)
+            self.assertIn("hetero_flat_cache_done", text)
 
     def test_training_loader_worker_count_is_memory_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1141,25 +1236,32 @@ class HeteroGraphIoTest(unittest.TestCase):
                 for index in range(6):
                     write_hetero_graph(handle, index, _synthetic_graph(index))
 
-            result = train_hetero_model(
-                graph_path,
-                checkpoint_path,
-                epochs=1,
-                batch_size=2,
-                gradient_accumulation_steps=2,
-                hidden_dim=16,
-                num_layers=1,
-                dropout=0.0,
-                waveform_embedding_dim=8,
-                mass_classification=True,
-                quality_prediction=True,
-                split_mode="event",
-                device="cpu",
-                num_workers=0,
-                checkpoint_milestones=(1,),
-                checkpoint_milestone_full_eval=True,
-                show_progress=False,
-            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = train_hetero_model(
+                    graph_path,
+                    checkpoint_path,
+                    epochs=1,
+                    batch_size=2,
+                    gradient_accumulation_steps=2,
+                    hidden_dim=16,
+                    num_layers=1,
+                    dropout=0.0,
+                    waveform_embedding_dim=8,
+                    mass_classification=True,
+                    quality_prediction=True,
+                    split_mode="event",
+                    device="cpu",
+                    num_workers=0,
+                    checkpoint_milestones=(1,),
+                    checkpoint_milestone_full_eval=True,
+                    show_progress=False,
+                )
+            train_log = output.getvalue()
+            self.assertIn("hetero_predict_start", train_log)
+            self.assertIn("hetero_predict_done", train_log)
+            self.assertIn("rows=", train_log)
+            self.assertIn("hetero_logging_warning num_workers=0", train_log)
 
             self.assertEqual(result["checkpoint"], str(checkpoint_path))
             self.assertEqual(result["metrics_json"], str(checkpoint_path) + ".metrics.json")
@@ -1253,32 +1355,11 @@ class HeteroGraphIoTest(unittest.TestCase):
                 for index in range(8):
                     write_hetero_graph(handle, index, _synthetic_graph(index))
 
-            train_hetero_model(
-                graph_path,
-                checkpoint_a,
-                epochs=1,
-                batch_size=2,
-                hidden_dim=16,
-                num_layers=1,
-                dropout=0.0,
-                waveform_embedding_dim=8,
-                mass_classification=True,
-                split_mode="event",
-                device="cpu",
-                num_workers=0,
-                validate_every_n_epochs=0,
-                scaler_cache_path=scaler_cache,
-                show_progress=False,
-            )
-            self.assertTrue(scaler_cache.exists())
-            payload = json.loads(scaler_cache.read_text())
-            self.assertGreater(payload["metadata"]["train_graph_count"], 0)
-            self.assertEqual(payload["metadata"]["graph_format"], "grouped_hdf5")
-
-            with mock.patch.object(hetero_training, "fit_hetero_scalers", side_effect=AssertionError):
+            first_log = io.StringIO()
+            with redirect_stdout(first_log):
                 train_hetero_model(
                     graph_path,
-                    checkpoint_b,
+                    checkpoint_a,
                     epochs=1,
                     batch_size=2,
                     hidden_dim=16,
@@ -1291,9 +1372,43 @@ class HeteroGraphIoTest(unittest.TestCase):
                     num_workers=0,
                     validate_every_n_epochs=0,
                     scaler_cache_path=scaler_cache,
-                    reuse_scaler_cache=True,
+                    scaler_progress_interval_sec=1.0e-9,
                     show_progress=False,
                 )
+            first_text = first_log.getvalue()
+            self.assertIn("hetero_scaler_start", first_text)
+            self.assertIn("hetero_scaler_progress", first_text)
+            self.assertIn("hetero_scaler_done", first_text)
+            self.assertTrue(scaler_cache.exists())
+            payload = json.loads(scaler_cache.read_text())
+            self.assertGreater(payload["metadata"]["train_graph_count"], 0)
+            self.assertEqual(payload["metadata"]["graph_format"], "grouped_hdf5")
+
+            with mock.patch.object(hetero_training, "fit_hetero_scalers", side_effect=AssertionError):
+                second_log = io.StringIO()
+                with redirect_stdout(second_log):
+                    train_hetero_model(
+                        graph_path,
+                        checkpoint_b,
+                        epochs=1,
+                        batch_size=2,
+                        hidden_dim=16,
+                        num_layers=1,
+                        dropout=0.0,
+                        waveform_embedding_dim=8,
+                        mass_classification=True,
+                        split_mode="event",
+                        device="cpu",
+                        num_workers=0,
+                        validate_every_n_epochs=0,
+                        scaler_cache_path=scaler_cache,
+                        reuse_scaler_cache=True,
+                        show_progress=False,
+                    )
+                second_text = second_log.getvalue()
+                self.assertIn("hetero_scaler_cache stage=hit", second_text)
+                self.assertIn("hetero_scaler_cache stage=skip reason=hit", second_text)
+                self.assertIn("hetero_train_setup stage=scaler_done cache_hit=1", second_text)
 
     def test_train_hetero_small_max_graphs_smoke_does_not_crash(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

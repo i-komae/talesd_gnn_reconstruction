@@ -92,9 +92,8 @@ def fit_hetero_scalers(
                 edge_stats[relation].update(_finite_rows(features))
         now = time.monotonic()
         if (
-            show_progress
-            and progress_interval_sec > 0.0
-            and (now - last_progress) >= progress_interval_sec
+            progress_interval_sec > 0.0
+            and ((now - last_progress) >= progress_interval_sec or ordinal == total)
         ):
             elapsed = now - start_time
             rate = float(ordinal) / elapsed if elapsed > 0 else 0.0
@@ -410,17 +409,32 @@ def _estimate_graph_bytes(
     indices: Sequence[int],
     *,
     max_samples: int,
+    mode: str = "full",
 ) -> dict[str, Any]:
     sampled = _sample_indices(indices, max_samples=max_samples)
-    values = np.asarray([dataset.graph_nbytes(index) for index in sampled], dtype=np.float64)
+    mode = str(mode)
+    if mode == "training":
+        values = np.asarray(
+            [
+                dataset.graph_training_nbytes(index) if hasattr(dataset, "graph_training_nbytes") else dataset.graph_nbytes(index)
+                for index in sampled
+            ],
+            dtype=np.float64,
+        )
+    elif mode == "full":
+        values = np.asarray([dataset.graph_nbytes(index) for index in sampled], dtype=np.float64)
+    else:
+        raise ValueError("graph byte estimate mode must be training or full")
     if values.size == 0:
         return {
+            "graph_bytes_mode": mode,
             "sampled_graphs": 0,
             "mean_graph_bytes": 0,
             "p95_graph_bytes": 0,
             "max_graph_bytes": 0,
         }
     return {
+        "graph_bytes_mode": mode,
         "sampled_graphs": int(values.size),
         "mean_graph_bytes": int(np.mean(values)),
         "p95_graph_bytes": int(np.percentile(values, 95)),
@@ -1250,7 +1264,8 @@ def _predict_hetero_numpy(
         f"split={split_label} "
         f"desc={desc!r} "
         f"batches={total_batches} "
-        f"graphs={total_graphs}",
+        f"graphs={total_graphs} "
+        f"graphs_estimate={total_graphs}",
         flush=True,
     )
     if len(loader) == 0:
@@ -1262,7 +1277,8 @@ def _predict_hetero_numpy(
         empty_target = np.zeros((0, int(target_dim)), dtype=np.float32)
         print(
             "hetero_predict_done "
-            f"split={split_label} elapsed={_format_duration(time.monotonic() - predict_start)} graphs_per_sec=0",
+            f"split={split_label} rows=0 elapsed={_format_duration(time.monotonic() - predict_start)} "
+            "rows_per_sec=0 graphs_per_sec=0",
             flush=True,
         )
         return empty_target, empty_target, None, None, None, None
@@ -1327,6 +1343,7 @@ def _predict_hetero_numpy(
                     f"graphs={graphs_seen}/{total_graphs} "
                     f"elapsed={_format_duration(elapsed)} "
                     f"rate={rate:.6g}/s "
+                    f"batches_per_sec={batch_rate:.6g} "
                     f"graphs_per_sec={rate:.6g} "
                     f"eta={_format_duration(eta) if np.isfinite(eta) else 'unknown'}",
                     flush=True,
@@ -1341,17 +1358,21 @@ def _predict_hetero_numpy(
         empty_target = np.zeros((0, int(target_dim)), dtype=np.float32)
         print(
             "hetero_predict_done "
-            f"split={split_label} elapsed={_format_duration(time.monotonic() - predict_start)} graphs_per_sec=0",
+            f"split={split_label} rows=0 elapsed={_format_duration(time.monotonic() - predict_start)} "
+            "rows_per_sec=0 graphs_per_sec=0",
             flush=True,
         )
         return empty_target, empty_target, None, None, None, None
     elapsed = time.monotonic() - predict_start
+    row_count = int(sum(row.shape[0] for row in pred_rows))
     print(
         "hetero_predict_done "
         f"split={split_label} "
         f"batches={total_batches} "
         f"graphs={graphs_seen}/{total_graphs} "
+        f"rows={row_count} "
         f"elapsed={_format_duration(elapsed)} "
+        f"rows_per_sec={float(row_count) / elapsed if elapsed > 0 else 0.0:.6g} "
         f"graphs_per_sec={float(graphs_seen) / elapsed if elapsed > 0 else 0.0:.6g}",
         flush=True,
     )
@@ -1465,6 +1486,11 @@ def train_hetero_model(
     hetero_relations: str | None = None,
     dataloader_timeout_sec: float | None = None,
     data_wait_warn_sec: float | None = None,
+    train_progress_interval_sec: float | None = None,
+    validation_progress_interval_sec: float | None = None,
+    predict_progress_interval_sec: float | None = None,
+    scaler_progress_interval_sec: float | None = None,
+    flat_cache_progress_interval_sec: float | None = None,
     show_progress: bool = True,
 ) -> dict[str, Any]:
     import torch
@@ -1517,11 +1543,31 @@ def train_hetero_model(
         dataloader_timeout_sec = float(os.environ.get("TALESD_GNN_DATALOADER_TIMEOUT_SEC", "120"))
     if data_wait_warn_sec is None:
         data_wait_warn_sec = float(os.environ.get("TALESD_GNN_DATA_WAIT_WARN_SEC", "30"))
-    train_progress_interval_sec = float(os.environ.get("TALESD_GNN_TRAIN_PROGRESS_INTERVAL_SEC", "60"))
-    validation_progress_interval_sec = float(os.environ.get("TALESD_GNN_VALIDATION_PROGRESS_INTERVAL_SEC", "60"))
-    predict_progress_interval_sec = float(os.environ.get("TALESD_GNN_PREDICT_PROGRESS_INTERVAL_SEC", "60"))
-    scaler_progress_interval_sec = float(os.environ.get("TALESD_GNN_SCALER_PROGRESS_INTERVAL_SEC", "60"))
-    flat_cache_progress_interval_sec = float(os.environ.get("HETERO_FLAT_CACHE_PROGRESS_INTERVAL_SEC", "60"))
+    train_progress_interval_sec = (
+        float(os.environ.get("TALESD_GNN_TRAIN_PROGRESS_INTERVAL_SEC", "60"))
+        if train_progress_interval_sec is None
+        else float(train_progress_interval_sec)
+    )
+    validation_progress_interval_sec = (
+        float(os.environ.get("TALESD_GNN_VALIDATION_PROGRESS_INTERVAL_SEC", "60"))
+        if validation_progress_interval_sec is None
+        else float(validation_progress_interval_sec)
+    )
+    predict_progress_interval_sec = (
+        float(os.environ.get("TALESD_GNN_PREDICT_PROGRESS_INTERVAL_SEC", "60"))
+        if predict_progress_interval_sec is None
+        else float(predict_progress_interval_sec)
+    )
+    scaler_progress_interval_sec = (
+        float(os.environ.get("TALESD_GNN_SCALER_PROGRESS_INTERVAL_SEC", "60"))
+        if scaler_progress_interval_sec is None
+        else float(scaler_progress_interval_sec)
+    )
+    flat_cache_progress_interval_sec = (
+        float(os.environ.get("HETERO_FLAT_CACHE_PROGRESS_INTERVAL_SEC", "60"))
+        if flat_cache_progress_interval_sec is None
+        else float(flat_cache_progress_interval_sec)
+    )
     _raise_nofile_limit(context="main")
     pin_memory = device.startswith("cuda") if pin_memory is None else bool(pin_memory)
     loss_mode = str(loss_mode).lower()
@@ -1550,10 +1596,7 @@ def train_hetero_model(
         error_prediction = True
         error_loss_weight = 0.0
     setup_step_start = time.perf_counter()
-    print(
-        "hetero_setup stage=dataset_init_start",
-        flush=True,
-    )
+    print("hetero_train_setup stage=dataset_start", flush=True)
     base_dataset_class = hetero_dataset_class_for_paths(graphs_path)
     base_dataset = base_dataset_class(
         graphs_path,
@@ -1563,15 +1606,16 @@ def train_hetero_model(
     if len(base_dataset) < 2:
         raise ValueError("hetero training needs at least two graphs with MC targets")
     print(
-        "hetero_setup "
-        f"stage=dataset_init_done graphs={len(base_dataset)} "
+        "hetero_train_setup "
+        f"stage=dataset_done graphs={len(base_dataset)} "
+        f"format={base_dataset_class.__name__} "
         f"dataset_class={base_dataset_class.__name__} "
         f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
         flush=True,
     )
     setup_step_start = time.perf_counter()
     print(
-        "hetero_setup "
+        "hetero_train_setup "
         f"stage=split_start split_mode={split_mode} graphs={len(base_dataset)} split_workers={int(split_workers)}",
         flush=True,
     )
@@ -1590,7 +1634,7 @@ def train_hetero_model(
     train_indices = split["train"]
     val_indices = split["val"]
     print(
-        "hetero_setup "
+        "hetero_train_setup "
         f"stage=split_done train_graphs={len(train_indices)} "
         f"val_graphs={len(val_indices)} test_graphs={len(split['test'])} "
         f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
@@ -1603,30 +1647,33 @@ def train_hetero_model(
         val_indices_for_epoch = list(val_indices)
     setup_step_start = time.perf_counter()
     print(
-        "hetero_setup "
-        f"stage=relation_stats_start max_samples={max(int(loader_memory_estimate_samples), 1)}",
+        "hetero_train_setup "
+        f"stage=relation_stats_start samples={max(int(loader_memory_estimate_samples), 1)}",
         flush=True,
     )
     _log_relation_stats(base_dataset, train_indices, max_samples=max(int(loader_memory_estimate_samples), 1))
     print(
-        "hetero_setup "
+        "hetero_train_setup "
         f"stage=relation_stats_done elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
         flush=True,
     )
     setup_step_start = time.perf_counter()
     print(
-        "hetero_setup "
-        f"stage=graph_byte_estimate_start max_samples={max(int(loader_memory_estimate_samples), 1)}",
+        "hetero_train_setup "
+        f"stage=graph_bytes_start samples={max(int(loader_memory_estimate_samples), 1)}",
         flush=True,
     )
+    graph_bytes_mode = "training" if training_data_format == "fast_tensor" else "full"
     graph_byte_summary = _estimate_graph_bytes(
         base_dataset,
         train_indices,
         max_samples=max(int(loader_memory_estimate_samples), 1),
+        mode=graph_bytes_mode,
     )
     print(
-        "hetero_setup "
-        f"stage=graph_byte_estimate_done sampled_graphs={graph_byte_summary['sampled_graphs']} "
+        "hetero_train_setup "
+        f"stage=graph_bytes_done sampled_graphs={graph_byte_summary['sampled_graphs']} "
+        f"graph_bytes_mode={graph_byte_summary['graph_bytes_mode']} "
         f"p95_graph_bytes={graph_byte_summary['p95_graph_bytes']} "
         f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
         flush=True,
@@ -1644,6 +1691,7 @@ def train_hetero_model(
     nofile_soft, nofile_hard = _nofile_limit()
     print(
         "hetero_loader_memory "
+        f"graph_bytes_mode={graph_byte_summary['graph_bytes_mode']} "
         f"sampled_graphs={graph_byte_summary['sampled_graphs']} "
         f"mean_graph_bytes={graph_byte_summary['mean_graph_bytes']} "
         f"p95_graph_bytes={graph_byte_summary['p95_graph_bytes']} "
@@ -1706,7 +1754,6 @@ def train_hetero_model(
         if float(value) > 0.0
     ]
     expected_max_silent_sec = max(positive_intervals) if positive_intervals else 0.0
-    warning = ' warning="num_workers=0 may block without DataLoader timeout"' if int(num_workers) <= 0 else ""
     print(
         "hetero_logging_config "
         f"train_progress_interval_sec={train_progress_interval_sec:.6g} "
@@ -1717,13 +1764,19 @@ def train_hetero_model(
         f"dataloader_timeout_sec={float(dataloader_timeout_sec):.6g} "
         f"dataloader_timeout_effective={dataloader_timeout_effective:.6g} "
         f"data_wait_warn_sec={float(data_wait_warn_sec):.6g} "
-        f"expected_max_silent_sec={expected_max_silent_sec:.6g}"
-        f"{warning}",
+        f"expected_max_silent_sec={expected_max_silent_sec:.6g}",
         flush=True,
     )
+    if int(num_workers) <= 0:
+        print(
+            'hetero_logging_warning num_workers=0 dataloader_timeout_effective=0 '
+            'message="DataLoader may block without timeout"',
+            flush=True,
+        )
     setup_step_start = time.perf_counter()
     print(
-        "hetero_setup stage=waveform_shape_start",
+        "hetero_train_setup "
+        f"stage=waveform_shape_start train_graphs={len(train_indices)}",
         flush=True,
     )
     _waveform_channels, resolved_waveform_length = _resolve_waveform_shape(
@@ -1732,7 +1785,7 @@ def train_hetero_model(
         waveform_length=waveform_length,
     )
     print(
-        "hetero_setup "
+        "hetero_train_setup "
         f"stage=waveform_shape_done channels={int(_waveform_channels)} "
         f"waveform_length={int(resolved_waveform_length)} "
         f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
@@ -1744,13 +1797,19 @@ def train_hetero_model(
     scaler_cache_hit = False
     setup_step_start = time.perf_counter()
     print(
-        "hetero_setup "
-        f"stage=scaler_start cache_path={resolved_scaler_cache_path} reuse={int(reuse_scaler_cache)}",
+        "hetero_train_setup "
+        f"stage=scaler_start train_graphs={len(train_indices)} "
+        f"cache_path={resolved_scaler_cache_path} reuse={int(reuse_scaler_cache)}",
         flush=True,
     )
     if resolved_scaler_cache_path is not None and reuse_scaler_cache:
         scalers = _read_scaler_cache(resolved_scaler_cache_path, scaler_metadata)
         scaler_cache_hit = scalers is not None
+        if scaler_cache_hit:
+            print(
+                f"hetero_scaler_cache stage=skip reason=hit path={resolved_scaler_cache_path}",
+                flush=True,
+            )
     elif resolved_scaler_cache_path is not None:
         print(
             f"hetero_scaler_cache stage=disabled reuse=0 path={resolved_scaler_cache_path}",
@@ -1766,7 +1825,7 @@ def train_hetero_model(
         if resolved_scaler_cache_path is not None:
             _write_scaler_cache(resolved_scaler_cache_path, scaler_metadata, scalers)
     print(
-        "hetero_setup "
+        "hetero_train_setup "
         f"stage=scaler_done cache_hit={int(scaler_cache_hit)} "
         f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
         flush=True,
@@ -1777,7 +1836,7 @@ def train_hetero_model(
     error_dim = 3 if error_prediction else 0
     setup_step_start = time.perf_counter()
     print(
-        "hetero_setup "
+        "hetero_train_setup "
         f"stage=model_init_start architecture={model_architecture} waveform_encoder={waveform_encoder}",
         flush=True,
     )
@@ -1804,7 +1863,7 @@ def train_hetero_model(
     total_parameters = sum(int(parameter.numel()) for parameter in model.parameters())
     trainable_parameters = sum(int(parameter.numel()) for parameter in model.parameters() if parameter.requires_grad)
     print(
-        "hetero_setup "
+        "hetero_train_setup "
         f"stage=model_init_done parameters={total_parameters} "
         f"trainable_parameters={trainable_parameters} "
         f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
@@ -1835,7 +1894,7 @@ def train_hetero_model(
 
     setup_step_start = time.perf_counter()
     print(
-        "hetero_setup "
+        "hetero_train_setup "
         f"stage=dataloader_start training_data_format={training_data_format} "
         f"final_eval_data_format={final_eval_data_format}",
         flush=True,
@@ -1910,7 +1969,7 @@ def train_hetero_model(
         data_format=final_eval_data_format,
     )
     print(
-        "hetero_setup "
+        "hetero_train_setup "
         f"stage=dataloader_done train_batches={len(train_loader)} "
         f"val_batches={len(val_loader)} final_val_batches={len(final_val_loader)} "
         f"test_batches={len(test_loader)} "
@@ -2554,6 +2613,7 @@ def train_hetero_model(
                             f"graphs={val_graphs_seen}/{len(val_indices_for_epoch)} "
                             f"elapsed={_format_duration(elapsed)} "
                             f"rate={graph_rate:.6g}/s "
+                            f"batches_per_sec={batch_rate:.6g} "
                             f"graphs_per_sec={graph_rate:.6g} "
                             f"eta={_format_duration(eta) if np.isfinite(eta) else 'unknown'} "
                             f"loss={_mean_tensor_value(val_loss_sum, val_loss_count):.6g}",
