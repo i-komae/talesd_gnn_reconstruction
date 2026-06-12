@@ -143,6 +143,15 @@ def _pulse_weights_from_features(
     return weights
 
 
+def core_anchor_weight_column(pulse_feature_columns: list[str] | tuple[str, ...]) -> str:
+    columns = [str(column) for column in pulse_feature_columns]
+    if "log10_pulse_rho" in columns:
+        return "log10_pulse_rho"
+    if "sqrt_pulse_rho" in columns:
+        return "sqrt_pulse_rho"
+    return "uniform"
+
+
 def signal_barycenter_anchor(
     *,
     pulse_positions_km: np.ndarray,

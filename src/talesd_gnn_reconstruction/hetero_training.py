@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 
 from .core_coordinates import coordinate_mode_summary
+from .core_coordinates import core_anchor_weight_column
 from .core_coordinates import inverse_transform_core_target
 from .core_coordinates import normalize_coordinate_feature_mode
 from .core_coordinates import normalize_core_target_mode
@@ -1802,6 +1803,34 @@ def train_hetero_model(
         f"has_pulse_relative_scalar_xyz={int(coordinate_summary['has_pulse_relative_scalar_xyz'])}",
         flush=True,
     )
+    base_columns = parse_columns_json(getattr(base_dataset, "columns_json", "{}"))
+    anchor_mode = str(getattr(base_dataset, "core_anchor_mode", core_target_mode))
+    if anchor_mode == "signal_bary_relative":
+        weight_column = core_anchor_weight_column(list(base_columns.get("pulse_features", [])))
+        print(
+            "hetero_core_anchor "
+            f"mode={anchor_mode} "
+            f"weight_column={weight_column} "
+            f"warning={'no_rho_column' if weight_column == 'uniform' else 'none'}",
+            flush=True,
+        )
+        source = (
+            "stored_core_anchor_all"
+            if _dataset_format_label(base_dataset) == "flat_hdf5"
+            else "recomputed_from_pulse_positions"
+        )
+        note = (
+            ' note="future exports should store core_anchor explicitly"'
+            if source == "recomputed_from_pulse_positions"
+            else ""
+        )
+        print(f"hetero_core_anchor_source source={source}{note}", flush=True)
+    elif anchor_mode == "absolute":
+        print("hetero_core_anchor mode=absolute weight_column=none warning=none", flush=True)
+        print("hetero_core_anchor_source source=zero_anchor", flush=True)
+    elif anchor_mode == "fit_core_relative":
+        print("hetero_core_anchor mode=fit_core_relative weight_column=none warning=none", flush=True)
+        print("hetero_core_anchor_source source=metadata_reference_core", flush=True)
     if core_target_mode == "absolute" and not (
         coordinate_summary["has_detector_absolute_scalar_xyz"] or coordinate_summary["has_pulse_absolute_scalar_xyz"]
     ):

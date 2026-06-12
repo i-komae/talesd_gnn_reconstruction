@@ -437,12 +437,19 @@ def _verify_flat_cache_samples(
     *,
     verify_samples: int,
     cache_mode: str = "training",
+    core_anchor_mode: str = "absolute",
     progress_interval_sec: float = 60.0,
 ) -> int:
     indices = _verification_indices(len(source), verify_samples)
     if not indices:
         return 0
-    flat = H5FlatHeteroGraphDataset(flat_path, require_target=source.require_target, load_attrs=False)
+    flat = H5FlatHeteroGraphDataset(
+        flat_path,
+        require_target=source.require_target,
+        load_attrs=False,
+        core_target_mode=source.core_target_mode,
+        core_anchor_mode=core_anchor_mode,
+    )
     try:
         start = time.monotonic()
         last_log = start
@@ -843,6 +850,7 @@ def convert_hetero_to_flat_cache(
             output,
             verify_samples=int(verify_samples),
             cache_mode=cache_mode,
+            core_anchor_mode=core_anchor_mode,
             progress_interval_sec=progress_interval_sec,
         )
         _log_h5_layout(
@@ -901,10 +909,7 @@ class H5HeteroGraphDataset:
         self.load_attrs = bool(load_attrs)
         self.core_target_mode = normalize_core_target_mode(core_target_mode)
         self.coordinate_feature_mode = normalize_coordinate_feature_mode(coordinate_feature_mode)
-        self.core_anchor_mode = normalize_core_target_mode(
-            core_anchor_mode
-            or ("signal_bary_relative" if self.core_target_mode == "absolute" else self.core_target_mode)
-        )
+        self.core_anchor_mode = normalize_core_target_mode(core_anchor_mode or self.core_target_mode)
         self._handles: dict[int, h5py.File] = {}
         self._path_lengths: list[int] = []
         self._cumulative_lengths: list[int] = []
@@ -1245,10 +1250,7 @@ class H5FlatHeteroGraphDataset:
         self.load_attrs = bool(load_attrs)
         self.core_target_mode = normalize_core_target_mode(core_target_mode)
         self.coordinate_feature_mode = normalize_coordinate_feature_mode(coordinate_feature_mode)
-        self.core_anchor_mode = normalize_core_target_mode(
-            core_anchor_mode
-            or ("signal_bary_relative" if self.core_target_mode == "absolute" else self.core_target_mode)
-        )
+        self.core_anchor_mode = normalize_core_target_mode(core_anchor_mode or self.core_target_mode)
         self._handles: dict[int, h5py.File] = {}
         self._path_lengths: list[int] = []
         self._cumulative_lengths: list[int] = []
@@ -1315,6 +1317,8 @@ class H5FlatHeteroGraphDataset:
         return filtered_columns(list(self.columns.get("pulse_features", [])), self.coordinate_feature_mode)
 
     def _core_anchor(self, handle: h5py.File, local_index: int) -> np.ndarray:
+        if self.core_anchor_mode == "absolute":
+            return np.zeros((2,), dtype=np.float32)
         if "core_anchor_all" in handle:
             return handle["core_anchor_all"][local_index].astype(np.float32).reshape(-1)[:2]
         arrays = handle.get("arrays")

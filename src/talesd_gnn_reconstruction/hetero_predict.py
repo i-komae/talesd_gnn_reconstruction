@@ -9,6 +9,7 @@ import numpy as np
 
 from .core_coordinates import (
     core_anchor_from_sample,
+    core_anchor_weight_column,
     filter_feature_matrix,
     filtered_columns,
     inverse_transform_core_target,
@@ -297,6 +298,26 @@ def reconstruct_dst(
         f"coordinate_feature_mode={coordinate_feature_mode}",
         flush=True,
     )
+    if core_anchor_mode == "signal_bary_relative":
+        weight_column = core_anchor_weight_column(list(columns.get("pulse_features", [])))
+        print(
+            "hetero_core_anchor "
+            f"mode={core_anchor_mode} "
+            f"weight_column={weight_column} "
+            f"warning={'no_rho_column' if weight_column == 'uniform' else 'none'}",
+            flush=True,
+        )
+        print(
+            'hetero_core_anchor_source source=recomputed_from_pulse_positions '
+            'note="future exports should store core_anchor explicitly"',
+            flush=True,
+        )
+    elif core_anchor_mode == "absolute":
+        print("hetero_core_anchor mode=absolute weight_column=none warning=none", flush=True)
+        print("hetero_core_anchor_source source=zero_anchor", flush=True)
+    elif core_anchor_mode == "fit_core_relative":
+        print("hetero_core_anchor mode=fit_core_relative weight_column=none warning=none", flush=True)
+        print("hetero_core_anchor_source source=metadata_reference_core", flush=True)
 
     input_list = [Path(inputs).expanduser()] if isinstance(inputs, (str, Path)) else [Path(item).expanduser() for item in inputs]
     graphs = tale_graph.iter_graphs(

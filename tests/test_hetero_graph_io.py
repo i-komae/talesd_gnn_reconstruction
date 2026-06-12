@@ -23,7 +23,11 @@ from talesd_gnn_reconstruction.hetero_data import (
     hetero_sample_to_tensors,
     sample_to_hetero_data,
 )
-from talesd_gnn_reconstruction.core_coordinates import core_anchor_from_sample, inverse_transform_core_target
+from talesd_gnn_reconstruction.core_coordinates import (
+    core_anchor_from_sample,
+    core_anchor_weight_column,
+    inverse_transform_core_target,
+)
 from talesd_gnn_reconstruction.hetero_attention_analysis import save_hetero_attention_maps
 from talesd_gnn_reconstruction.hetero_feature_analysis import (
     save_hetero_feature_group_importance,
@@ -195,6 +199,57 @@ def _synthetic_graph(index: int) -> SimpleNamespace:
 
 
 class SyntheticHeteroGraphIoTest(unittest.TestCase):
+    def test_core_anchor_weight_column_priority(self) -> None:
+        self.assertEqual(
+            core_anchor_weight_column(["dx_from_reference_core_km", "log10_pulse_rho", "sqrt_pulse_rho"]),
+            "log10_pulse_rho",
+        )
+        self.assertEqual(
+            core_anchor_weight_column(["dx_from_reference_core_km", "sqrt_pulse_rho"]),
+            "sqrt_pulse_rho",
+        )
+        self.assertEqual(core_anchor_weight_column(["dx_from_reference_core_km"]), "uniform")
+
+    def test_core_anchor_mode_defaults_to_target_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            grouped = Path(tmpdir) / "grouped.h5"
+            flat = Path(tmpdir) / "flat.h5"
+            with create_hetero_graph_file(grouped) as handle:
+                write_hetero_graph(handle, 0, _synthetic_graph(0))
+            convert_hetero_to_flat_cache(
+                grouped,
+                flat,
+                compression="none",
+                cache_mode="training",
+                core_anchor_mode="signal_bary_relative",
+                verify_samples=1,
+            )
+            grouped_dataset = H5HeteroGraphDataset(grouped, require_target=True, core_target_mode="absolute")
+            flat_dataset = H5FlatHeteroGraphDataset(flat, require_target=True, core_target_mode="absolute")
+            explicit_dataset = H5HeteroGraphDataset(
+                grouped,
+                require_target=True,
+                core_target_mode="absolute",
+                core_anchor_mode="signal_bary_relative",
+            )
+            try:
+                self.assertEqual(grouped_dataset.core_anchor_mode, "absolute")
+                self.assertEqual(flat_dataset.core_anchor_mode, "absolute")
+                self.assertEqual(explicit_dataset.core_anchor_mode, "signal_bary_relative")
+                np.testing.assert_allclose(
+                    grouped_dataset.training_sample(0)["core_anchor"],
+                    np.zeros((2,), dtype=np.float32),
+                )
+                np.testing.assert_allclose(
+                    flat_dataset.training_sample(0)["core_anchor"],
+                    np.zeros((2,), dtype=np.float32),
+                )
+                self.assertGreater(float(np.linalg.norm(explicit_dataset.training_sample(0)["core_anchor"])), 0.0)
+            finally:
+                grouped_dataset.close()
+                flat_dataset.close()
+                explicit_dataset.close()
+
     def test_core_target_signal_bary_relative_roundtrip(self) -> None:
         graph = _synthetic_graph(3)
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -347,9 +402,13 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 ),
                 mock.patch.object(tale_graph, "iter_graphs", return_value=iter([graph])),
             ):
-                result = reconstruct_dst("dummy.dst.gz", "checkpoint.pt", output_csv, device="cpu", batch_size=1)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    result = reconstruct_dst("dummy.dst.gz", "checkpoint.pt", output_csv, device="cpu", batch_size=1)
 
             self.assertEqual(result["events_written"], 1)
+            self.assertIn("hetero_core_anchor mode=fit_core_relative weight_column=none warning=none", output.getvalue())
+            self.assertIn("hetero_core_anchor_source source=metadata_reference_core", output.getvalue())
             with output_csv.open() as handle:
                 row = next(csv.DictReader(handle))
             self.assertAlmostEqual(float(row["core_x_km"]), -4.8, places=5)
@@ -411,9 +470,13 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 ),
                 mock.patch.object(tale_graph, "iter_graphs", return_value=iter([graph])),
             ):
-                result = reconstruct_dst("dummy.dst.gz", "checkpoint.pt", output_csv, device="cpu", batch_size=1)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    result = reconstruct_dst("dummy.dst.gz", "checkpoint.pt", output_csv, device="cpu", batch_size=1)
 
             self.assertEqual(result["events_written"], 1)
+            self.assertIn("hetero_core_anchor mode=absolute weight_column=none warning=none", output.getvalue())
+            self.assertIn("hetero_core_anchor_source source=zero_anchor", output.getvalue())
             with output_csv.open() as handle:
                 row = next(csv.DictReader(handle))
             self.assertAlmostEqual(float(row["core_x_km"]), 1.25, places=5)
@@ -1538,6 +1601,8 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertIn("hetero_predict_done", train_log)
             self.assertIn("rows=", train_log)
             self.assertIn("hetero_logging_warning num_workers=0", train_log)
+            self.assertIn("hetero_core_anchor mode=signal_bary_relative weight_column=log10_pulse_rho warning=none", train_log)
+            self.assertIn("hetero_core_anchor_source source=recomputed_from_pulse_positions", train_log)
             self.assertIn("hetero_milestone_eval_start epoch=1", train_log)
             self.assertIn("hetero_milestone_metrics epoch=1 split=validation model=current", train_log)
 
@@ -1770,23 +1835,26 @@ class HeteroGraphIoTest(unittest.TestCase):
                     write_hetero_graph(handle, index, _synthetic_graph(index))
             convert_hetero_to_flat_cache(graph_path, flat_path, compression="none")
 
-            train_hetero_model(
-                flat_path,
-                checkpoint_path,
-                epochs=1,
-                batch_size=2,
-                gradient_accumulation_steps=2,
-                hidden_dim=16,
-                num_layers=1,
-                dropout=0.0,
-                waveform_embedding_dim=8,
-                mass_classification=True,
-                split_mode="event",
-                device="cpu",
-                num_workers=0,
-                training_data_format="fast_tensor",
-                show_progress=False,
-            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                train_hetero_model(
+                    flat_path,
+                    checkpoint_path,
+                    epochs=1,
+                    batch_size=2,
+                    gradient_accumulation_steps=2,
+                    hidden_dim=16,
+                    num_layers=1,
+                    dropout=0.0,
+                    waveform_embedding_dim=8,
+                    mass_classification=True,
+                    split_mode="event",
+                    device="cpu",
+                    num_workers=0,
+                    training_data_format="fast_tensor",
+                    show_progress=False,
+                )
+            self.assertIn("hetero_core_anchor_source source=stored_core_anchor_all", output.getvalue())
 
             checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
             self.assertEqual(checkpoint["runtime"]["training_data_format"], "fast_tensor")
