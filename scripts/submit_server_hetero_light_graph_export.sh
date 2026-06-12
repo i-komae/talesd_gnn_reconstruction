@@ -46,6 +46,7 @@ MEM="${MEM:-96G}"
 TIME_LIMIT="${TIME_LIMIT:-1-00:00:00}"
 EXPORT_WORKERS="${EXPORT_WORKERS:-32}"
 MAX_SOURCE_GROUPS_PER_STRATUM="${MAX_SOURCE_GROUPS_PER_STRATUM:-}"
+ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA:-0}"
 SHARD_SIZE="${SHARD_SIZE:-100000}"
 MIN_EVENT_DATE="${MIN_EVENT_DATE:-191002}"
 OPEN_RETRIES="${OPEN_RETRIES:-3}"
@@ -114,6 +115,10 @@ max_groups_line=""
 if [[ -n "${MAX_SOURCE_GROUPS_PER_STRATUM}" ]]; then
   printf -v max_groups_line '  --max-source-groups-per-stratum "%s" \\\n' "${MAX_SOURCE_GROUPS_PER_STRATUM}"
 fi
+allow_underfull_line=""
+if [[ "${ALLOW_UNDERFULL_STRATA}" == "1" ]]; then
+  printf -v allow_underfull_line '  --allow-underfull-strata \\\n'
+fi
 core_line=""
 if [[ "${REQUIRE_REFERENCE_CORE}" == "1" ]]; then
   printf -v core_line '  --require-reference-core \\\n'
@@ -154,6 +159,7 @@ echo "graph_output=${GRAPH_OUTPUT}"
 echo "graphs_per_source_group=${GRAPHS_PER_SOURCE_GROUP}"
 echo "source_group_overdraw_factor=${SOURCE_GROUP_OVERDRAW_FACTOR}"
 echo "max_source_groups_per_stratum=${MAX_SOURCE_GROUPS_PER_STRATUM}"
+echo "allow_underfull_strata=${ALLOW_UNDERFULL_STRATA}"
 echo "export_workers=${EXPORT_WORKERS}"
 echo "run_uv_sync=${RUN_UV_SYNC}"
 echo "make_input_distributions=${MAKE_INPUT_DISTRIBUTIONS}"
@@ -177,6 +183,7 @@ fi
   --graphs-per-source-group "${GRAPHS_PER_SOURCE_GROUP}" \\
   --source-group-overdraw-factor "${SOURCE_GROUP_OVERDRAW_FACTOR}" \\
 ${max_groups_line}\
+${allow_underfull_line}\
   --seed "${SEED}" \\
   --workers "${EXPORT_WORKERS}" \\
   --h5-progress-interval-sec "${H5_PROGRESS_INTERVAL_SEC}" \\
@@ -218,6 +225,7 @@ selection_summary: ${SELECTION_SUMMARY}
 graphs_per_source_group: ${GRAPHS_PER_SOURCE_GROUP}
 source_group_overdraw_factor: ${SOURCE_GROUP_OVERDRAW_FACTOR}
 max_source_groups_per_stratum: ${MAX_SOURCE_GROUPS_PER_STRATUM}
+allow_underfull_strata: ${ALLOW_UNDERFULL_STRATA}
 seed: ${SEED}
 export_workers: ${EXPORT_WORKERS}
 run_uv_sync: ${RUN_UV_SYNC}

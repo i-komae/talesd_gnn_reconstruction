@@ -4048,6 +4048,7 @@ def _cmd_export_hetero_light(args: argparse.Namespace) -> None:
         "graphs_per_source_group": int(args.graphs_per_source_group),
         "source_group_overdraw_factor": float(args.source_group_overdraw_factor),
         "max_source_groups_per_stratum": args.max_source_groups_per_stratum,
+        "allow_underfull_strata": bool(args.allow_underfull_strata),
         "selection_summary": selection_summary,
         "min_event_date": min_event_date,
         "skip_missing_mc_calibration": bool(args.skip_missing_mc_calibration),
@@ -4079,8 +4080,13 @@ def _cmd_export_hetero_light(args: argparse.Namespace) -> None:
         summary_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
         _progress_write(f"hetero light selection summary: {summary_path}")
 
-    if not bool(result.get("complete", False)):
+    if not bool(result.get("complete", False)) and not bool(args.allow_underfull_strata):
         raise SystemExit("hetero light export is incomplete: " + json.dumps(result.get("incomplete_strata", []), sort_keys=True))
+    if not bool(result.get("complete", False)):
+        _progress_write(
+            "hetero light export underfull strata allowed: "
+            + json.dumps(result.get("incomplete_strata", []), sort_keys=True)
+        )
 
     print(
         "wrote "
@@ -4789,6 +4795,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="particle:DAT energy code stratumごとに使うsource group数の上限。未指定なら最小stratumに合わせる",
+    )
+    export_hetero_light.add_argument(
+        "--allow-underfull-strata",
+        action="store_true",
+        help="target graph数に届かないstratumがあってもHDF5を書き出してsummaryに記録する",
     )
     export_hetero_light.add_argument("--seed", type=int, default=12345, help="source group選択のdeterministic seed")
     export_hetero_light.add_argument("--workers", type=int, default=1, help="source group単位のparallel worker数")
