@@ -644,14 +644,16 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 self.assertIn("detector_features_all", handle)
                 self.assertIn("detector_waveforms_all", handle)
                 self.assertNotIn("detector_positions_km_all", handle)
-                self.assertNotIn("pulse_bounds_all", handle)
+                self.assertIn("pulse_detector_index_all", handle)
+                self.assertIn("pulse_bounds_all", handle)
                 self.assertNotIn("metadata_json", handle["metadata"])
 
             flat = H5FlatHeteroGraphDataset(flat_path, require_target=True, require_particle_label=True)
             try:
                 training_sample = flat.training_sample(0)
                 self.assertIn("detector_waveforms", training_sample)
-                self.assertNotIn("pulse_bounds", training_sample)
+                self.assertIn("pulse_detector_index", training_sample)
+                self.assertIn("pulse_bounds", training_sample)
                 with self.assertRaisesRegex(ValueError, "cache_mode=training"):
                     _ = flat[0]
                 tensor_dataset = H5TensorHeteroGraphDataset(flat_path, require_target=True, require_particle_label=True)
@@ -719,11 +721,14 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 self.assertNotIn("metadata", fast_sample)
                 self.assertNotIn("pos", fast_sample["detector"])
                 self.assertNotIn("lid", fast_sample["detector"])
-                self.assertNotIn("pulse_bounds", fast_sample["pulse"])
+                self.assertIn("detector_index", fast_sample["pulse"])
+                self.assertIn("pulse_bounds", fast_sample["pulse"])
                 batch = _collate_tensor_hetero_graphs([dataset[0], dataset[1]])
                 self.assertEqual(batch["num_graphs"], 2)
                 self.assertEqual(batch["detector"]["x"].shape[0], 6)
                 self.assertEqual(batch["pulse"]["x"].shape[0], 8)
+                self.assertEqual(batch["pulse"]["detector_index"].tolist(), [0, 1, 1, 2, 3, 4, 4, 5])
+                self.assertEqual(batch["pulse"]["pulse_bounds"].shape, (8, 4))
                 self.assertEqual(batch["target"].shape, (2, 6))
                 self.assertGreater(batch["edge_index_by_type"]["pulse__near_space__pulse"].shape[1], 0)
 
@@ -824,13 +829,13 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                     "detector_lids",
                     "pulse_positions_km",
                     "pulse_lids",
-                    "pulse_detector_index",
-                    "pulse_bounds",
                     "metadata",
                     "attrs",
                 ):
                     self.assertNotIn(key, sample)
                 self.assertIn("detector_waveforms", sample)
+                self.assertIn("pulse_detector_index", sample)
+                self.assertIn("pulse_bounds", sample)
                 self.assertIn("edge_index_by_type", sample)
             finally:
                 dataset.close()

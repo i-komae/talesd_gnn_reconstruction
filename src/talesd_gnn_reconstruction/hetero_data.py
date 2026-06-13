@@ -190,8 +190,10 @@ def hetero_sample_to_training_tensors(
 ) -> dict[str, Any]:
     """Convert a minimal HDF5 sample to the tensor dict used for training.
 
-    This path intentionally does not require positions, lids, pulse bounds, or
-    metadata. Attention maps and visual diagnostics use hetero_sample_to_tensors.
+    This path intentionally does not require positions, lids, or metadata.
+    It keeps pulse_detector_index and pulse_bounds because the training model
+    uses them to extract pulse-window waveform embeddings from detector-level
+    waveforms.
     """
 
     resolved_device = torch.device(device) if device is not None else None
@@ -240,6 +242,12 @@ def hetero_sample_to_training_tensors(
         },
         "pulse": {
             "x": pulse_features,
+            "detector_index": _long_tensor(sample["pulse_detector_index"], device=resolved_device)
+            if "pulse_detector_index" in sample
+            else torch.zeros(pulse_features.shape[0], dtype=torch.long, device=resolved_device),
+            "pulse_bounds": _tensor(sample["pulse_bounds"], dtype=torch.float32, device=resolved_device)
+            if "pulse_bounds" in sample
+            else torch.zeros(pulse_features.shape[0], 4, dtype=torch.float32, device=resolved_device),
         },
         "edge_index_by_type": edge_index_by_type,
         "edge_features_by_type": edge_features_by_type,

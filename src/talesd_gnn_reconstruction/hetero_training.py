@@ -571,6 +571,8 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
     detector_valid_rows = []
     detector_batch_rows = []
     pulse_x_rows = []
+    pulse_detector_index_rows = []
+    pulse_bounds_rows = []
     pulse_batch_rows = []
     target_rows = []
     core_anchor_rows = []
@@ -589,6 +591,19 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
         detector_valid_rows.append(detector["waveform_valid"].reshape(-1))
         detector_batch_rows.append(torch.full((n_detector,), int(graph_index), dtype=torch.long))
         pulse_x_rows.append(pulse["x"])
+        if "detector_index" in pulse:
+            pulse_detector_index_rows.append(pulse["detector_index"].to(dtype=torch.long).reshape(-1) + node_offsets["detector"])
+        else:
+            pulse_detector_index_rows.append(torch.zeros((n_pulse,), dtype=torch.long))
+        if "pulse_bounds" in pulse:
+            bounds = pulse["pulse_bounds"].to(dtype=torch.float32)
+            if bounds.ndim == 1:
+                bounds = bounds.reshape(-1, 4)
+            if bounds.shape[0] != n_pulse or bounds.shape[1] < 4:
+                bounds = torch.zeros((n_pulse, 4), dtype=torch.float32)
+            pulse_bounds_rows.append(bounds[:, :4])
+        else:
+            pulse_bounds_rows.append(torch.zeros((n_pulse, 4), dtype=torch.float32))
         pulse_batch_rows.append(torch.full((n_pulse,), int(graph_index), dtype=torch.long))
         if sample["target"] is not None:
             target_rows.append(sample["target"].reshape(1, -1))
@@ -631,6 +646,8 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
         },
         "pulse": {
             "x": torch.cat(pulse_x_rows, dim=0),
+            "detector_index": torch.cat(pulse_detector_index_rows, dim=0),
+            "pulse_bounds": torch.cat(pulse_bounds_rows, dim=0),
             "batch": torch.cat(pulse_batch_rows, dim=0),
         },
         "edge_index_by_type": collated_edges,
@@ -2116,6 +2133,14 @@ def train_hetero_model(
         f"stage=model_init_done parameters={total_parameters} "
         f"trainable_parameters={trainable_parameters} "
         f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
+        flush=True,
+    )
+    model_config_for_log = getattr(model, "config", {})
+    print(
+        "hetero_pulse_waveform_config "
+        f"embedding_dim={int(model_config_for_log.get('pulse_waveform_embedding_dim', 0) or 0)} "
+        f"window_length={int(model_config_for_log.get('pulse_waveform_window_length', 0) or 0)} "
+        f"rise_anchor_bin={int(model_config_for_log.get('pulse_waveform_rise_anchor_bin', 0) or 0)}",
         flush=True,
     )
     amp_enabled = bool(device.startswith("cuda") and amp_mode != "off")
