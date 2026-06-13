@@ -32,6 +32,11 @@ WAVEFORM_TRANSFORMER_HEADS="${WAVEFORM_TRANSFORMER_HEADS:-4}"
 WAVEFORM_TRANSFORMER_LAYERS="${WAVEFORM_TRANSFORMER_LAYERS:-1}"
 WAVEFORM_TRANSFORMER_MAX_TOKENS="${WAVEFORM_TRANSFORMER_MAX_TOKENS:-128}"
 WAVEFORM_TRANSFORMER_DOWNSAMPLE="${WAVEFORM_TRANSFORMER_DOWNSAMPLE:-adaptive_avg}"
+USE_PULSE_PARENT_WAVEFORM="${USE_PULSE_PARENT_WAVEFORM:-1}"
+USE_PULSE_BOUNDS="${USE_PULSE_BOUNDS:-1}"
+PULSE_WAVEFORM_ENCODER="${PULSE_WAVEFORM_ENCODER:-bounds}"
+DETECTOR_READOUT_MASK="${DETECTOR_READOUT_MASK:-all}"
+PULSE_READOUT_MASK="${PULSE_READOUT_MASK:-all}"
 SPEED_BENCHMARK="${SPEED_BENCHMARK:-0}"
 PREPARE_FAST_CACHE_WAS_SET=0
 if [[ -n "${PREPARE_FAST_CACHE:-}" ]]; then
@@ -145,6 +150,7 @@ FINAL_EVAL_DATA_FORMAT="${FINAL_EVAL_DATA_FORMAT:-${HETERO_TRAINING_DATA_FORMAT}
 CORE_TARGET_MODE="${CORE_TARGET_MODE:-signal_bary_relative}"
 COORDINATE_FEATURE_MODE="${COORDINATE_FEATURE_MODE:-relative_only}"
 HETERO_RELATIONS="${HETERO_RELATIONS:-all}"
+HETERO_RELATION_PRESET="${HETERO_RELATION_PRESET:-}"
 DATALOADER_TIMEOUT_SEC="${DATALOADER_TIMEOUT_SEC:-120}"
 DATA_WAIT_WARN_SEC="${DATA_WAIT_WARN_SEC:-30}"
 TRAIN_PROGRESS_INTERVAL_SEC="${TALESD_GNN_TRAIN_PROGRESS_INTERVAL_SEC:-${TRAIN_PROGRESS_INTERVAL_SEC:-60}}"
@@ -241,6 +247,8 @@ recommended_speed_benchmark:
   SPEED_BENCHMARK=1 WAVEFORM_ENCODER=transformer PREPARE_FAST_CACHE=0 DEVICE=cuda scripts/submit_server_hetero_reco_mass_quality_training.sh
 recommended_production_start:
   WAVEFORM_ENCODER=transformer WAVEFORM_TRANSFORMER_MAX_TOKENS=128 BATCH_SIZE=32 GRADIENT_ACCUMULATION_STEPS=4 AMP=fp16 PREPARE_FAST_CACHE=0 HETERO_TRAINING_DATA_FORMAT=fast_tensor FINAL_EVAL_DATA_FORMAT=fast_tensor PERSISTENT_WORKERS=1 PREFETCH_FACTOR=1 TRAIN_WORKERS=4 PIN_MEMORY=0 FEATURE_IMPORTANCE=0 ATTENTION_MAPS=0 DIAGNOSTICS=0 scripts/submit_server_hetero_reco_mass_quality_training.sh
+recommended_waveform_ablation:
+  WAVEFORM_ENCODER=cnn-gru PULSE_WAVEFORM_ENCODER=bounds USE_PULSE_PARENT_WAVEFORM=1 USE_PULSE_BOUNDS=1 HETERO_RELATION_PRESET=minimal scripts/submit_server_hetero_reco_mass_quality_training.sh
 EOF
 
 if [[ "${LOSS_MODE}" == "physics-nll" || "${LOSS_MODE}" == "nll" ]]; then
@@ -335,6 +343,11 @@ WAVEFORM_TRANSFORMER_HEADS=${WAVEFORM_TRANSFORMER_HEADS}
 WAVEFORM_TRANSFORMER_LAYERS=${WAVEFORM_TRANSFORMER_LAYERS}
 WAVEFORM_TRANSFORMER_MAX_TOKENS=${WAVEFORM_TRANSFORMER_MAX_TOKENS}
 WAVEFORM_TRANSFORMER_DOWNSAMPLE=${WAVEFORM_TRANSFORMER_DOWNSAMPLE}
+USE_PULSE_PARENT_WAVEFORM=${USE_PULSE_PARENT_WAVEFORM}
+USE_PULSE_BOUNDS=${USE_PULSE_BOUNDS}
+PULSE_WAVEFORM_ENCODER=${PULSE_WAVEFORM_ENCODER}
+DETECTOR_READOUT_MASK=${DETECTOR_READOUT_MASK}
+PULSE_READOUT_MASK=${PULSE_READOUT_MASK}
 TRAIN_EPOCHS=${TRAIN_EPOCHS}
 BATCH_SIZE=${BATCH_SIZE}
 GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS}
@@ -399,6 +412,7 @@ MILESTONE_EVAL_BEST_MODEL=${MILESTONE_EVAL_BEST_MODEL}
 HETERO_TRAINING_DATA_FORMAT=${HETERO_TRAINING_DATA_FORMAT}
 FINAL_EVAL_DATA_FORMAT=${FINAL_EVAL_DATA_FORMAT}
 HETERO_RELATIONS=${HETERO_RELATIONS}
+HETERO_RELATION_PRESET=${HETERO_RELATION_PRESET}
 DATALOADER_TIMEOUT_SEC=${DATALOADER_TIMEOUT_SEC}
 DATA_WAIT_WARN_SEC=${DATA_WAIT_WARN_SEC}
 TRAIN_PROGRESS_INTERVAL_SEC=${TRAIN_PROGRESS_INTERVAL_SEC}
@@ -425,7 +439,7 @@ ATTENTION_MAPS_DEVICE=${ATTENTION_MAPS_DEVICE}
 SEED=${SEED}
 EOF
 
-echo "hetero_training_script_config speed_benchmark=${SPEED_BENCHMARK} waveform_encoder=${WAVEFORM_ENCODER} batch_size=${BATCH_SIZE} gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} prepare_fast_cache=${PREPARE_FAST_CACHE} training_data_format=${HETERO_TRAINING_DATA_FORMAT} final_eval_data_format=${FINAL_EVAL_DATA_FORMAT} core_target_mode=${CORE_TARGET_MODE} coordinate_feature_mode=${COORDINATE_FEATURE_MODE} checkpoint_milestones='${CHECKPOINT_MILESTONES}' checkpoint_milestone_full_eval=${CHECKPOINT_MILESTONE_FULL_EVAL} milestone_eval_epochs='${MILESTONE_EVAL_EPOCHS}' milestone_eval_split='${MILESTONE_EVAL_SPLIT}' milestone_eval_max_graphs=${MILESTONE_EVAL_MAX_GRAPHS} milestone_eval_current_model=${MILESTONE_EVAL_CURRENT_MODEL} milestone_eval_best_model=${MILESTONE_EVAL_BEST_MODEL} diagnostics=${DIAGNOSTICS} attention_maps=${ATTENTION_MAPS} feature_importance=${FEATURE_IMPORTANCE} profile=${PROFILE} pin_memory=${PIN_MEMORY} prefetch_factor=${PREFETCH_FACTOR} persistent_workers=${PERSISTENT_WORKERS} train_workers=${TRAIN_WORKERS} train_progress_interval_sec=${TRAIN_PROGRESS_INTERVAL_SEC} validation_progress_interval_sec=${VALIDATION_PROGRESS_INTERVAL_SEC} predict_progress_interval_sec=${PREDICT_PROGRESS_INTERVAL_SEC} scaler_progress_interval_sec=${SCALER_PROGRESS_INTERVAL_SEC} flat_cache_progress_interval_sec=${FLAT_CACHE_PROGRESS_INTERVAL_SEC} dataloader_timeout_sec=${DATALOADER_TIMEOUT_SEC} data_wait_warn_sec=${DATA_WAIT_WARN_SEC}"
+echo "hetero_training_script_config speed_benchmark=${SPEED_BENCHMARK} waveform_encoder=${WAVEFORM_ENCODER} pulse_waveform_encoder=${PULSE_WAVEFORM_ENCODER} use_pulse_parent_waveform=${USE_PULSE_PARENT_WAVEFORM} use_pulse_bounds=${USE_PULSE_BOUNDS} detector_readout_mask=${DETECTOR_READOUT_MASK} pulse_readout_mask=${PULSE_READOUT_MASK} relation_preset=${HETERO_RELATION_PRESET:-custom} batch_size=${BATCH_SIZE} gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} prepare_fast_cache=${PREPARE_FAST_CACHE} training_data_format=${HETERO_TRAINING_DATA_FORMAT} final_eval_data_format=${FINAL_EVAL_DATA_FORMAT} core_target_mode=${CORE_TARGET_MODE} coordinate_feature_mode=${COORDINATE_FEATURE_MODE} checkpoint_milestones='${CHECKPOINT_MILESTONES}' checkpoint_milestone_full_eval=${CHECKPOINT_MILESTONE_FULL_EVAL} milestone_eval_epochs='${MILESTONE_EVAL_EPOCHS}' milestone_eval_split='${MILESTONE_EVAL_SPLIT}' milestone_eval_max_graphs=${MILESTONE_EVAL_MAX_GRAPHS} milestone_eval_current_model=${MILESTONE_EVAL_CURRENT_MODEL} milestone_eval_best_model=${MILESTONE_EVAL_BEST_MODEL} diagnostics=${DIAGNOSTICS} attention_maps=${ATTENTION_MAPS} feature_importance=${FEATURE_IMPORTANCE} profile=${PROFILE} pin_memory=${PIN_MEMORY} prefetch_factor=${PREFETCH_FACTOR} persistent_workers=${PERSISTENT_WORKERS} train_workers=${TRAIN_WORKERS} train_progress_interval_sec=${TRAIN_PROGRESS_INTERVAL_SEC} validation_progress_interval_sec=${VALIDATION_PROGRESS_INTERVAL_SEC} predict_progress_interval_sec=${PREDICT_PROGRESS_INTERVAL_SEC} scaler_progress_interval_sec=${SCALER_PROGRESS_INTERVAL_SEC} flat_cache_progress_interval_sec=${FLAT_CACHE_PROGRESS_INTERVAL_SEC} dataloader_timeout_sec=${DATALOADER_TIMEOUT_SEC} data_wait_warn_sec=${DATA_WAIT_WARN_SEC}"
 echo "hetero_milestone_eval_config enabled=$([[ -n "${MILESTONE_EVAL_EPOCHS}" ]] && echo 1 || echo 0) epochs=${MILESTONE_EVAL_EPOCHS} splits=${MILESTONE_EVAL_SPLIT} current_model=${MILESTONE_EVAL_CURRENT_MODEL} best_model=${MILESTONE_EVAL_BEST_MODEL} max_graphs=${MILESTONE_EVAL_MAX_GRAPHS} diagnostics=0 attention_maps=0 feature_importance=0"
 echo "hetero_logging_config train_progress_interval_sec=${TRAIN_PROGRESS_INTERVAL_SEC} validation_progress_interval_sec=${VALIDATION_PROGRESS_INTERVAL_SEC} predict_progress_interval_sec=${PREDICT_PROGRESS_INTERVAL_SEC} scaler_progress_interval_sec=${SCALER_PROGRESS_INTERVAL_SEC} flat_cache_progress_interval_sec=${FLAT_CACHE_PROGRESS_INTERVAL_SEC} dataloader_timeout_sec=${DATALOADER_TIMEOUT_SEC} data_wait_warn_sec=${DATA_WAIT_WARN_SEC} expected_max_silent_sec=${DATALOADER_TIMEOUT_SEC}"
 echo "hetero_scaler_cache default_scope=run_local reuse_across_runs=0 path=${SCALER_CACHE}"
@@ -452,6 +466,9 @@ cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli train-hetero
   --waveform-transformer-layers "${WAVEFORM_TRANSFORMER_LAYERS}"
   --waveform-transformer-max-tokens "${WAVEFORM_TRANSFORMER_MAX_TOKENS}"
   --waveform-transformer-downsample "${WAVEFORM_TRANSFORMER_DOWNSAMPLE}"
+  --pulse-waveform-encoder "${PULSE_WAVEFORM_ENCODER}"
+  --detector-readout-mask "${DETECTOR_READOUT_MASK}"
+  --pulse-readout-mask "${PULSE_READOUT_MASK}"
   --loss-mode "${LOSS_MODE}"
   --energy-loss-weight "${ENERGY_WEIGHT}"
   --core-loss-weight "${CORE_WEIGHT}"
@@ -505,6 +522,7 @@ cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli train-hetero
   --coordinate-feature-mode "${COORDINATE_FEATURE_MODE}"
   --scaler-cache "${SCALER_CACHE}"
   --hetero-relations "${HETERO_RELATIONS}"
+  --hetero-relation-preset "${HETERO_RELATION_PRESET:-all}"
   --dataloader-timeout-sec "${DATALOADER_TIMEOUT_SEC}"
   --data-wait-warn-sec "${DATA_WAIT_WARN_SEC}"
   --diagnostic-energy-bin-width 0.1
@@ -515,6 +533,16 @@ if [[ "${PERSISTENT_WORKERS}" == "1" ]]; then
 fi
 if [[ "${PIN_MEMORY}" == "0" ]]; then
   cmd+=(--no-pin-memory)
+fi
+if [[ "${USE_PULSE_PARENT_WAVEFORM}" == "1" ]]; then
+  cmd+=(--use-pulse-parent-waveform)
+else
+  cmd+=(--no-use-pulse-parent-waveform)
+fi
+if [[ "${USE_PULSE_BOUNDS}" == "1" ]]; then
+  cmd+=(--use-pulse-bounds)
+else
+  cmd+=(--no-use-pulse-bounds)
 fi
 if [[ -n "${TRAIN_LOADER_MEMORY_BUDGET_GIB}" ]]; then
   cmd+=(--loader-memory-budget-gib "${TRAIN_LOADER_MEMORY_BUDGET_GIB}")

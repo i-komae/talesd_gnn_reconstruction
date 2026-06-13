@@ -21,6 +21,7 @@ import torch
 import dstio.tale.graph as tale_graph
 from talesd_gnn_reconstruction.hetero_data import (
     TorchGeometricUnavailableError,
+    hetero_data_to_tensors,
     hetero_sample_to_tensors,
     sample_to_hetero_data,
 )
@@ -54,9 +55,11 @@ from talesd_gnn_reconstruction.hetero_model import MinimalHeteroTaleSdGNN
 from talesd_gnn_reconstruction.hetero_predict import reconstruct_dst
 from talesd_gnn_reconstruction.hetero_training import (
     H5TensorHeteroGraphDataset,
+    RELATION_PRESETS,
     _collate_tensor_hetero_graphs,
     _estimate_graph_bytes,
     _filter_batch_relations,
+    _parse_relation_filter,
     _resolve_loader_settings,
     _split_dataset,
     evaluate_hetero_checkpoint,
@@ -527,6 +530,11 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             self.assertIn("feature_importance=0", submit_result.stdout)
             self.assertIn("waveform_transformer_max_tokens=128", submit_result.stdout)
             self.assertIn("hetero_training_data_format=fast_tensor", submit_result.stdout)
+            self.assertIn("use_pulse_parent_waveform=1", submit_result.stdout)
+            self.assertIn("use_pulse_bounds=1", submit_result.stdout)
+            self.assertIn("pulse_waveform_encoder=bounds", submit_result.stdout)
+            self.assertIn("detector_readout_mask=all", submit_result.stdout)
+            self.assertIn("pulse_readout_mask=all", submit_result.stdout)
             sbatch_path = (
                 tmp
                 / "output"
@@ -554,6 +562,11 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             self.assertIn("--waveform-transformer-max-tokens 128", direct_result.stdout)
             self.assertIn("--training-data-format fast_tensor", direct_result.stdout)
             self.assertIn("--final-eval-data-format fast_tensor", direct_result.stdout)
+            self.assertIn("--use-pulse-parent-waveform", direct_result.stdout)
+            self.assertIn("--use-pulse-bounds", direct_result.stdout)
+            self.assertIn("--pulse-waveform-encoder bounds", direct_result.stdout)
+            self.assertIn("--detector-readout-mask all", direct_result.stdout)
+            self.assertIn("--pulse-readout-mask all", direct_result.stdout)
             self.assertIn("--scaler-cache", direct_result.stdout)
             self.assertIn("--reuse-scaler-cache", direct_result.stdout)
 
@@ -723,12 +736,16 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 self.assertNotIn("lid", fast_sample["detector"])
                 self.assertIn("detector_index", fast_sample["pulse"])
                 self.assertIn("pulse_bounds", fast_sample["pulse"])
+                self.assertIn("has_signal", fast_sample["detector"])
+                self.assertIn("has_ising_kept", fast_sample["detector"])
                 batch = _collate_tensor_hetero_graphs([dataset[0], dataset[1]])
                 self.assertEqual(batch["num_graphs"], 2)
                 self.assertEqual(batch["detector"]["x"].shape[0], 6)
                 self.assertEqual(batch["pulse"]["x"].shape[0], 8)
                 self.assertEqual(batch["pulse"]["detector_index"].tolist(), [0, 1, 1, 2, 3, 4, 4, 5])
                 self.assertEqual(batch["pulse"]["pulse_bounds"].shape, (8, 4))
+                self.assertEqual(batch["detector"]["has_signal"].shape, (6,))
+                self.assertEqual(batch["detector"]["has_ising_kept"].shape, (6,))
                 self.assertEqual(batch["target"].shape, (2, 6))
                 self.assertGreater(batch["edge_index_by_type"]["pulse__near_space__pulse"].shape[1], 0)
 
@@ -762,6 +779,55 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 self.assertNotIn("detector_lid", attention["node_metadata"])
             finally:
                 dataset.close()
+
+    def test_relation_presets_expand_expected_edges(self) -> None:
+        self.assertEqual(_parse_relation_filter("all", preset="minimal"), RELATION_PRESETS["minimal"])
+        self.assertNotIn("pulse__near_space__pulse", _parse_relation_filter("all", preset="no_pulse_near"))
+        self.assertIn("pulse__time_causal__pulse", _parse_relation_filter("all", preset="no_pulse_near"))
+        self.assertNotIn("pulse__time_causal__pulse", _parse_relation_filter("all", preset="no_pulse_causal"))
+        self.assertIn("pulse__near_space__pulse", _parse_relation_filter("all", preset="no_pulse_causal"))
+        self.assertEqual(_parse_relation_filter("pulse__near_space__pulse", preset="minimal"), {"pulse__near_space__pulse"})
+
+    def test_pulse_bounds_change_pulse_node_input_before_message_passing(self) -> None:
+        graph = _synthetic_graph(0)
+        graph.pulse_features[2] = graph.pulse_features[1]
+        graph.pulse_detector_index[2] = graph.pulse_detector_index[1]
+        graph.pulse_bounds[1] = np.asarray([2, 4, 6, 9], dtype=np.float32)
+        graph.pulse_bounds[2] = np.asarray([8, 10, 12, 15], dtype=np.float32)
+        sample = graph.__dict__
+        batch = hetero_sample_to_tensors(sample)
+        model = MinimalHeteroTaleSdGNN.from_sample(
+            sample,
+            target_dim=6,
+            classification_dim=1,
+            hidden_dim=16,
+            num_layers=0,
+            dropout=0.0,
+            waveform_encoder="none",
+            waveform_embedding_dim=8,
+            use_pulse_parent_waveform=False,
+            use_pulse_bounds=True,
+            pulse_waveform_encoder="bounds",
+        )
+        captured: list[torch.Tensor] = []
+
+        def _capture_input(_module, args):
+            captured.append(args[0].detach().clone())
+
+        handle = model.pulse_node_encoder[0].register_forward_pre_hook(_capture_input)
+        try:
+            model.eval()
+            with torch.no_grad():
+                output = model(batch)
+        finally:
+            handle.remove()
+
+        self.assertEqual(tuple(output.shape), (1, 7))
+        self.assertEqual(len(captured), 1)
+        pulse_node_input = captured[0]
+        self.assertEqual(pulse_node_input.shape[0], graph.pulse_features.shape[0])
+        self.assertFalse(torch.allclose(pulse_node_input[1], pulse_node_input[2]))
+        self.assertFalse(torch.allclose(pulse_node_input[1, -4:], pulse_node_input[2, -4:]))
 
     def test_fast_tensor_dataset_uses_training_sample_not_getitem(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1631,6 +1697,8 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.skipTest("torch_geometric is not installed")
         self.assertEqual(data["detector"].x.shape[1], DETECTOR_FEATURE_DIM)
         self.assertEqual(data["pulse"].x.shape[1], PULSE_FEATURE_DIM)
+        self.assertTrue(hasattr(data["detector"], "has_signal"))
+        self.assertTrue(hasattr(data["detector"], "has_ising_kept"))
         self.assertIn(("detector", "observes", "pulse"), data.edge_types)
         self.assertIn(("pulse", "observed_by", "detector"), data.edge_types)
 
@@ -1656,6 +1724,9 @@ class HeteroGraphIoTest(unittest.TestCase):
 
         loader = DataLoader([data, data], batch_size=2)
         batch = next(iter(loader))
+        tensor_batch = hetero_data_to_tensors(batch)
+        self.assertIn("has_signal", tensor_batch["detector"])
+        self.assertIn("has_ising_kept", tensor_batch["detector"])
         model = MinimalHeteroTaleSdGNN.from_sample(
             sample,
             target_dim=6,

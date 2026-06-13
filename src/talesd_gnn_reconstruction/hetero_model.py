@@ -301,6 +301,76 @@ def _pulse_waveform_windows(
     return windows, valid
 
 
+def _pulse_bounds_norm(
+    pulse_bounds: torch.Tensor | None,
+    *,
+    n_pulse: int,
+    waveform_length: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    output = torch.zeros((int(n_pulse), 4), dtype=dtype, device=device)
+    valid = torch.zeros((int(n_pulse),), dtype=torch.bool, device=device)
+    if pulse_bounds is None or int(n_pulse) <= 0:
+        return output, valid
+    bounds = pulse_bounds.to(device=device, dtype=torch.float32)
+    if bounds.ndim != 2 or bounds.shape[0] != int(n_pulse) or bounds.shape[1] < 4:
+        return output, valid
+    finite = torch.isfinite(bounds[:, :4]).all(dim=1)
+    scale = float(max(int(waveform_length) - 1, 1))
+    output = torch.where(finite[:, None], (bounds[:, :4] / scale).to(dtype=dtype), output)
+    return output, finite
+
+
+def _masked_readout_input(
+    state: torch.Tensor,
+    batch: torch.Tensor,
+    mask: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if mask is None:
+        return state, batch
+    keep = mask.to(device=state.device, dtype=torch.bool).reshape(-1)
+    if keep.numel() != state.shape[0]:
+        return state, batch
+    return state[keep], batch.to(device=state.device, dtype=torch.long)[keep]
+
+
+def _detector_readout_mask(detector: Mapping[str, Any], mode: str) -> torch.Tensor | None:
+    mode = str(mode)
+    if mode == "all":
+        return None
+    if mode == "signal":
+        return detector.get("has_signal")
+    if mode == "ising_kept":
+        return detector.get("has_ising_kept")
+    raise ValueError(f"unknown detector_readout_mask: {mode}")
+
+
+def _pulse_readout_mask(pulse: Mapping[str, Any], mode: str) -> torch.Tensor | None:
+    mode = str(mode)
+    if mode == "all":
+        return None
+    if mode != "valid":
+        raise ValueError(f"unknown pulse_readout_mask: {mode}")
+    detector_index = pulse.get("detector_index")
+    pulse_bounds = pulse.get("pulse_bounds")
+    if detector_index is None and pulse_bounds is None:
+        return None
+    masks = []
+    if detector_index is not None:
+        masks.append(detector_index.reshape(-1).to(dtype=torch.long) >= 0)
+    if pulse_bounds is not None:
+        bounds = pulse_bounds
+        if bounds.ndim == 2 and bounds.shape[1] >= 4:
+            masks.append(torch.isfinite(bounds[:, :4]).all(dim=1))
+    if not masks:
+        return None
+    output = masks[0].to(dtype=torch.bool)
+    for mask in masks[1:]:
+        output = output & mask.to(device=output.device, dtype=torch.bool)
+    return output
+
+
 class MinimalHeteroTaleSdGNN(nn.Module):
     def __init__(
         self,
@@ -325,9 +395,14 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         waveform_transformer_layers: int = 1,
         waveform_transformer_max_tokens: int = 128,
         waveform_transformer_downsample: str = "adaptive_avg",
+        use_pulse_parent_waveform: bool = True,
+        use_pulse_bounds: bool = True,
+        pulse_waveform_encoder: str | None = None,
         pulse_waveform_embedding_dim: int | None = None,
         pulse_waveform_window_length: int | None = None,
         pulse_waveform_rise_anchor_bin: int | None = None,
+        detector_readout_mask: str = "all",
+        pulse_readout_mask: str = "all",
         attention_heads: int = 4,
         readout_heads: int = 4,
     ):
@@ -335,6 +410,25 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         architecture = str(architecture)
         if architecture not in {"minimal_hetero", "hetero_attention"}:
             raise ValueError("architecture must be 'minimal_hetero' or 'hetero_attention'")
+        if detector_readout_mask not in {"all", "signal", "ising_kept"}:
+            raise ValueError("detector_readout_mask must be all, signal, or ising_kept")
+        if pulse_readout_mask not in {"all", "valid"}:
+            raise ValueError("pulse_readout_mask must be all or valid")
+        if pulse_waveform_encoder is None:
+            # Backward compatibility: checkpoints created before the explicit
+            # pulse waveform mode stored only a nonzero embedding dimension.
+            resolved_pulse_waveform_encoder = (
+                "crop_same" if pulse_waveform_embedding_dim is not None and int(pulse_waveform_embedding_dim) > 0 else "none"
+            )
+        else:
+            resolved_pulse_waveform_encoder = str(pulse_waveform_encoder)
+        if resolved_pulse_waveform_encoder not in {"none", "bounds", "crop_cnn", "crop_same"}:
+            raise ValueError("pulse_waveform_encoder must be none, bounds, crop_cnn, or crop_same")
+        pulse_window_embedding_dim = (
+            0
+            if resolved_pulse_waveform_encoder in {"none", "bounds"}
+            else max(0, 0 if pulse_waveform_embedding_dim is None else int(pulse_waveform_embedding_dim))
+        )
         self.config = {
             "architecture": architecture,
             "detector_dim": int(detector_dim),
@@ -356,9 +450,10 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             "waveform_transformer_layers": int(waveform_transformer_layers),
             "waveform_transformer_max_tokens": int(waveform_transformer_max_tokens),
             "waveform_transformer_downsample": str(waveform_transformer_downsample),
-            "pulse_waveform_embedding_dim": 0
-            if pulse_waveform_embedding_dim is None
-            else int(pulse_waveform_embedding_dim),
+            "use_pulse_parent_waveform": bool(use_pulse_parent_waveform),
+            "use_pulse_bounds": bool(use_pulse_bounds),
+            "pulse_waveform_encoder": resolved_pulse_waveform_encoder,
+            "pulse_waveform_embedding_dim": int(pulse_window_embedding_dim),
             "pulse_waveform_window_length": int(
                 pulse_waveform_window_length
                 if pulse_waveform_window_length is not None
@@ -382,6 +477,8 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             ),
             "attention_heads": int(attention_heads),
             "readout_heads": int(readout_heads),
+            "detector_readout_mask": str(detector_readout_mask),
+            "pulse_readout_mask": str(pulse_readout_mask),
         }
         self.architecture = architecture
         self.hidden_dim = int(hidden_dim)
@@ -389,12 +486,14 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         self.classification_dim = max(int(classification_dim), 0)
         self.quality_dim = max(int(quality_dim), 0)
         self.error_dim = max(int(error_dim), 0)
-        self.pulse_waveform_embedding_dim = max(
-            0,
-            0 if pulse_waveform_embedding_dim is None else int(pulse_waveform_embedding_dim),
-        )
+        self.use_pulse_parent_waveform = bool(use_pulse_parent_waveform)
+        self.use_pulse_bounds = bool(use_pulse_bounds)
+        self.pulse_waveform_encoder_kind = resolved_pulse_waveform_encoder
+        self.pulse_waveform_embedding_dim = int(pulse_window_embedding_dim)
         self.pulse_waveform_window_length = max(int(self.config["pulse_waveform_window_length"]), 1)
         self.pulse_waveform_rise_anchor_bin = max(int(self.config["pulse_waveform_rise_anchor_bin"]), 0)
+        self.detector_readout_mask = str(detector_readout_mask)
+        self.pulse_readout_mask = str(pulse_readout_mask)
         self.detector_feature_encoder = _make_mlp(detector_dim, hidden_dim, hidden_dim, dropout)
         self.detector_context_encoder = _make_mlp(detector_context_dim, hidden_dim, hidden_dim, dropout)
         self.waveform_encoder = WaveformEncoder(
@@ -414,20 +513,31 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             nn.SiLU(),
             nn.LayerNorm(hidden_dim),
         )
+        pulse_waveform_mode = "none"
+        if self.pulse_waveform_encoder_kind == "crop_cnn":
+            pulse_waveform_mode = "cnn"
+        elif self.pulse_waveform_encoder_kind == "crop_same":
+            pulse_waveform_mode = str(waveform_encoder)
         self.pulse_waveform_encoder = WaveformEncoder(
             waveform_channels=waveform_channels,
             waveform_length=self.pulse_waveform_window_length,
             embedding_dim=self.pulse_waveform_embedding_dim,
-            mode=waveform_encoder,
+            mode=pulse_waveform_mode,
             dropout=dropout,
             transformer_heads=waveform_transformer_heads,
             transformer_layers=waveform_transformer_layers,
             transformer_max_tokens=min(int(waveform_transformer_max_tokens), self.pulse_waveform_window_length),
             transformer_downsample=waveform_transformer_downsample,
         )
-        if self.pulse_waveform_encoder.output_dim > 0:
+        pulse_extra_dim = 0
+        if self.use_pulse_parent_waveform:
+            pulse_extra_dim += self.waveform_encoder.output_dim
+        if self.use_pulse_bounds:
+            pulse_extra_dim += 4
+        pulse_extra_dim += self.pulse_waveform_encoder.output_dim
+        if pulse_extra_dim > 0:
             self.pulse_feature_encoder = _make_mlp(pulse_dim, hidden_dim, hidden_dim, dropout)
-            pulse_input_dim = hidden_dim + self.pulse_waveform_encoder.output_dim
+            pulse_input_dim = hidden_dim + pulse_extra_dim
         else:
             self.pulse_feature_encoder = None
             pulse_input_dim = pulse_dim
@@ -520,17 +630,34 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         waveform_transformer_layers: int = 1,
         waveform_transformer_max_tokens: int = 128,
         waveform_transformer_downsample: str = "adaptive_avg",
+        use_pulse_parent_waveform: bool = True,
+        use_pulse_bounds: bool = True,
+        pulse_waveform_encoder: str = "bounds",
         pulse_waveform_embedding_dim: int | None = None,
         pulse_waveform_window_length: int | None = None,
         pulse_waveform_rise_anchor_bin: int | None = None,
+        detector_readout_mask: str = "all",
+        pulse_readout_mask: str = "all",
         attention_heads: int = 4,
         readout_heads: int = 4,
     ) -> "MinimalHeteroTaleSdGNN":
         waveform_shape = sample["detector_waveforms"].shape
         has_pulse_waveform_reference = "pulse_detector_index" in sample and "pulse_bounds" in sample
+        pulse_waveform_encoder = str(pulse_waveform_encoder)
+        requires_pulse_reference = (
+            bool(use_pulse_parent_waveform)
+            or bool(use_pulse_bounds)
+            or pulse_waveform_encoder not in {"none"}
+        )
+        if requires_pulse_reference and not has_pulse_waveform_reference:
+            raise ValueError(
+                "pulse waveform options require pulse_detector_index and pulse_bounds; "
+                "regenerate the flat training cache or set USE_PULSE_PARENT_WAVEFORM=0, "
+                "USE_PULSE_BOUNDS=0, and PULSE_WAVEFORM_ENCODER=none"
+            )
         resolved_pulse_waveform_embedding_dim = (
             int(waveform_embedding_dim)
-            if pulse_waveform_embedding_dim is None and has_pulse_waveform_reference
+            if pulse_waveform_embedding_dim is None and pulse_waveform_encoder in {"crop_cnn", "crop_same"}
             else pulse_waveform_embedding_dim
         )
         edge_dims = {
@@ -557,9 +684,14 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             waveform_transformer_layers=waveform_transformer_layers,
             waveform_transformer_max_tokens=waveform_transformer_max_tokens,
             waveform_transformer_downsample=waveform_transformer_downsample,
+            use_pulse_parent_waveform=use_pulse_parent_waveform,
+            use_pulse_bounds=use_pulse_bounds,
+            pulse_waveform_encoder=pulse_waveform_encoder,
             pulse_waveform_embedding_dim=resolved_pulse_waveform_embedding_dim,
             pulse_waveform_window_length=pulse_waveform_window_length,
             pulse_waveform_rise_anchor_bin=pulse_waveform_rise_anchor_bin,
+            detector_readout_mask=detector_readout_mask,
+            pulse_readout_mask=pulse_readout_mask,
             architecture=architecture,
             attention_heads=attention_heads,
             readout_heads=readout_heads,
@@ -608,7 +740,14 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         }
         edge_index_by_type = batch["edge_index_by_type"]
         edge_features_by_type = batch["edge_features_by_type"]
-        if self.pulse_waveform_encoder.output_dim > 0:
+        pulse_extra_parts = []
+        needs_pulse_reference = (
+            self.use_pulse_parent_waveform
+            or self.use_pulse_bounds
+            or self.pulse_waveform_encoder.output_dim > 0
+        )
+        pulse_detector_index = None
+        if needs_pulse_reference:
             pulse_detector_index = _detector_index_for_pulses(
                 pulse,
                 edge_index_by_type,
@@ -616,6 +755,39 @@ class MinimalHeteroTaleSdGNN(nn.Module):
                 n_detector=int(detector_x.shape[0]),
                 device=detector_x.device,
             )
+        if self.use_pulse_parent_waveform and self.waveform_encoder.output_dim > 0:
+            parent_waveform = torch.zeros(
+                (pulse_x.shape[0], self.waveform_encoder.output_dim),
+                dtype=pulse_x.dtype,
+                device=pulse_x.device,
+            )
+            if pulse_detector_index is not None and pulse_detector_index.numel() == pulse_x.shape[0]:
+                valid_parent = (pulse_detector_index >= 0) & (pulse_detector_index < detector_x.shape[0])
+                if bool(valid_parent.any()):
+                    safe_parent = pulse_detector_index.clamp(0, max(int(detector_x.shape[0]) - 1, 0))
+                    parent_waveform = waveform_embedding[safe_parent].to(dtype=pulse_x.dtype)
+                    parent_waveform = torch.where(valid_parent[:, None], parent_waveform, torch.zeros_like(parent_waveform))
+            elif not getattr(self, "_warned_missing_pulse_parent_waveform", False):
+                print(
+                    "WARNING: hetero_pulse_parent_waveform missing_detector_index=1 parent_embedding_zero=1",
+                    flush=True,
+                )
+                self._warned_missing_pulse_parent_waveform = True
+            pulse_extra_parts.append(parent_waveform)
+        if self.use_pulse_bounds:
+            pulse_bounds = pulse.get("pulse_bounds")
+            bounds_norm, bounds_valid = _pulse_bounds_norm(
+                pulse_bounds,
+                n_pulse=int(pulse_x.shape[0]),
+                waveform_length=int(detector_waveform.shape[-1]),
+                device=pulse_x.device,
+                dtype=pulse_x.dtype,
+            )
+            if not bool(bounds_valid.any()) and not getattr(self, "_warned_missing_pulse_bounds", False):
+                print("WARNING: hetero_pulse_bounds missing_or_invalid=1 bounds_features_zero=1", flush=True)
+                self._warned_missing_pulse_bounds = True
+            pulse_extra_parts.append(bounds_norm)
+        if self.pulse_waveform_encoder.output_dim > 0:
             pulse_bounds = pulse.get("pulse_bounds")
             pulse_windows, pulse_window_valid = _pulse_waveform_windows(
                 detector_waveform,
@@ -643,8 +815,10 @@ class MinimalHeteroTaleSdGNN(nn.Module):
                 dtype=pulse_x.dtype,
                 valid_mask=pulse_window_valid,
             )
+            pulse_extra_parts.append(pulse_window_embedding)
+        if pulse_extra_parts:
             pulse_feature_embedding = self.pulse_feature_encoder(pulse_x)  # type: ignore[operator]
-            node_states["pulse"] = self.pulse_node_encoder(torch.cat([pulse_feature_embedding, pulse_window_embedding], dim=-1))
+            node_states["pulse"] = self.pulse_node_encoder(torch.cat([pulse_feature_embedding, *pulse_extra_parts], dim=-1))
         else:
             node_states["pulse"] = self.pulse_node_encoder(pulse_x)
         layer_attention = []
@@ -662,17 +836,27 @@ class MinimalHeteroTaleSdGNN(nn.Module):
 
         num_graphs = int(batch.get("num_graphs", 1))
         readout_attention: dict[str, torch.Tensor] = {}
+        detector_readout_state, detector_readout_batch = _masked_readout_input(
+            node_states["detector"],
+            detector["batch"],
+            _detector_readout_mask(detector, self.detector_readout_mask),
+        )
+        pulse_readout_state, pulse_readout_batch = _masked_readout_input(
+            node_states["pulse"],
+            pulse["batch"],
+            _pulse_readout_mask(pulse, self.pulse_readout_mask),
+        )
         if self.architecture == "hetero_attention":
             if return_attention:
                 detector_readout, detector_weights = self.detector_readout(
-                    node_states["detector"],
-                    detector["batch"],
+                    detector_readout_state,
+                    detector_readout_batch,
                     num_graphs,
                     return_attention=True,
                 )
                 pulse_readout, pulse_weights = self.pulse_readout(
-                    node_states["pulse"],
-                    pulse["batch"],
+                    pulse_readout_state,
+                    pulse_readout_batch,
                     num_graphs,
                     return_attention=True,
                 )
@@ -681,8 +865,8 @@ class MinimalHeteroTaleSdGNN(nn.Module):
                     "pulse": pulse_weights,
                 }
             else:
-                detector_readout = self.detector_readout(node_states["detector"], detector["batch"], num_graphs)
-                pulse_readout = self.pulse_readout(node_states["pulse"], pulse["batch"], num_graphs)
+                detector_readout = self.detector_readout(detector_readout_state, detector_readout_batch, num_graphs)
+                pulse_readout = self.pulse_readout(pulse_readout_state, pulse_readout_batch, num_graphs)
             readout = torch.cat(
                 [
                     detector_readout,
@@ -693,8 +877,8 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         else:
             readout = torch.cat(
                 [
-                    self._pool(node_states["detector"], detector["batch"], num_graphs),
-                    self._pool(node_states["pulse"], pulse["batch"], num_graphs),
+                    self._pool(detector_readout_state, detector_readout_batch, num_graphs),
+                    self._pool(pulse_readout_state, pulse_readout_batch, num_graphs),
                 ],
                 dim=-1,
             )

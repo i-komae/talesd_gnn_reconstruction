@@ -4307,6 +4307,11 @@ def _cmd_train(args: argparse.Namespace) -> None:
         waveform_transformer_layers=args.waveform_transformer_layers,
         waveform_transformer_max_tokens=args.waveform_transformer_max_tokens,
         waveform_transformer_downsample=args.waveform_transformer_downsample,
+        use_pulse_parent_waveform=args.use_pulse_parent_waveform,
+        use_pulse_bounds=args.use_pulse_bounds,
+        pulse_waveform_encoder=args.pulse_waveform_encoder,
+        detector_readout_mask=args.detector_readout_mask,
+        pulse_readout_mask=args.pulse_readout_mask,
         loss_mode=args.loss_mode,
         energy_loss_weight=args.energy_loss_weight,
         core_loss_weight=args.core_loss_weight,
@@ -4488,6 +4493,7 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         scaler_cache_path=args.scaler_cache,
         reuse_scaler_cache=args.reuse_scaler_cache,
         hetero_relations=args.hetero_relations,
+        hetero_relation_preset=args.hetero_relation_preset,
         dataloader_timeout_sec=args.dataloader_timeout_sec,
         data_wait_warn_sec=args.data_wait_warn_sec,
         show_progress=not args.no_progress,
@@ -5093,6 +5099,50 @@ def build_parser() -> argparse.ArgumentParser:
         help="detector waveform の固定入力長。未指定ならtrain split内の最大長を使う",
     )
     train_hetero.add_argument(
+        "--use-pulse-parent-waveform",
+        dest="use_pulse_parent_waveform",
+        action="store_true",
+        default=None,
+        help="pulse node に親 detector の waveform embedding を渡す",
+    )
+    train_hetero.add_argument(
+        "--no-use-pulse-parent-waveform",
+        dest="use_pulse_parent_waveform",
+        action="store_false",
+        help="pulse node に親 detector waveform embedding を渡さない",
+    )
+    train_hetero.add_argument(
+        "--use-pulse-bounds",
+        dest="use_pulse_bounds",
+        action="store_true",
+        default=None,
+        help="pulse_bounds を正規化して pulse node 入力に渡す",
+    )
+    train_hetero.add_argument(
+        "--no-use-pulse-bounds",
+        dest="use_pulse_bounds",
+        action="store_false",
+        help="pulse_bounds を pulse node 入力に渡さない",
+    )
+    train_hetero.add_argument(
+        "--pulse-waveform-encoder",
+        choices=["none", "bounds", "crop_cnn"],
+        default=None,
+        help="pulse-local waveform branch。bounds は crop encoder を使わず bounds feature のみ、crop_cnn は短いcropをCNNでencodeする",
+    )
+    train_hetero.add_argument(
+        "--detector-readout-mask",
+        choices=["all", "signal", "ising_kept"],
+        default=None,
+        help="graph readoutに使うdetector nodeのmask",
+    )
+    train_hetero.add_argument(
+        "--pulse-readout-mask",
+        choices=["all", "valid"],
+        default=None,
+        help="graph readoutに使うpulse nodeのmask",
+    )
+    train_hetero.add_argument(
         "--loss-mode",
         choices=["scaled-mse", "weighted-scaled-mse", "hybrid-angle", "physics", "physics-nll", "nll"],
         default="physics",
@@ -5281,6 +5331,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="--scaler-cache を読み込まず、fit後に上書きする",
     )
     train_hetero.add_argument("--hetero-relations", default=None, help="使用relationのcomma list。既定はHETERO_RELATIONSまたはall")
+    train_hetero.add_argument(
+        "--hetero-relation-preset",
+        choices=["all", "minimal", "no_pulse_near", "no_pulse_causal"],
+        default=None,
+        help="relation ablation preset。HETERO_RELATION_PRESET と同じ",
+    )
     train_hetero.add_argument("--dataloader-timeout-sec", type=float, default=None)
     train_hetero.add_argument("--data-wait-warn-sec", type=float, default=None)
     train_hetero.add_argument("--no-progress", action="store_true")

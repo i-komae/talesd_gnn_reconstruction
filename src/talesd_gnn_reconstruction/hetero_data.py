@@ -18,6 +18,8 @@ EDGE_TYPE_BY_RELATION: dict[str, tuple[str, str, str]] = {
 }
 
 DETECTOR_WAVEFORM_VALID_COLUMN = "detector_waveform_valid"
+DETECTOR_HAS_SIGNAL_COLUMN = "detector_has_signal"
+DETECTOR_HAS_ISING_KEPT_COLUMN = "detector_has_ising_kept_pulse"
 V3_DETECTOR_FEATURE_COLUMNS = (
     # v3-compatible name kept by dstio: this is the detector node time,
     # defined as the first Ising-kept pulse onset on the pulse_arrival_usec_rel
@@ -63,6 +65,24 @@ def _detector_feature_index_from_sample(sample: Mapping[str, Any], name: str) ->
         except ValueError:
             return None
     return detector_feature_index(name)
+
+
+def _detector_flag_from_features(
+    sample: Mapping[str, Any],
+    detector_features: torch.Tensor,
+    name: str,
+    *,
+    default: float,
+) -> torch.Tensor:
+    index = _detector_feature_index_from_sample(sample, name)
+    if index is not None and index < detector_features.shape[1]:
+        return detector_features[:, index].to(dtype=torch.float32).clamp(0.0, 1.0)
+    return torch.full(
+        (detector_features.shape[0],),
+        float(default),
+        dtype=torch.float32,
+        device=detector_features.device,
+    )
 
 
 class TorchGeometricUnavailableError(ImportError):
@@ -112,11 +132,15 @@ def hetero_sample_to_tensors(
 ) -> dict[str, Any]:
     resolved_device = torch.device(device) if device is not None else None
     detector_features = _tensor(sample["detector_features"], dtype=torch.float32, device=resolved_device)
-    waveform_valid_index = _detector_feature_index_from_sample(sample, DETECTOR_WAVEFORM_VALID_COLUMN)
-    if waveform_valid_index is not None and waveform_valid_index < detector_features.shape[1]:
-        detector_waveform_valid = detector_features[:, waveform_valid_index].clamp(0.0, 1.0)
-    else:
-        detector_waveform_valid = torch.ones(detector_features.shape[0], dtype=torch.float32, device=resolved_device)
+    detector_waveform_valid = _detector_flag_from_features(
+        sample, detector_features, DETECTOR_WAVEFORM_VALID_COLUMN, default=1.0
+    )
+    detector_has_signal = _detector_flag_from_features(
+        sample, detector_features, DETECTOR_HAS_SIGNAL_COLUMN, default=1.0
+    )
+    detector_has_ising_kept = _detector_flag_from_features(
+        sample, detector_features, DETECTOR_HAS_ISING_KEPT_COLUMN, default=1.0
+    )
     pulse_features = _tensor(sample["pulse_features"], dtype=torch.float32, device=resolved_device)
     edge_index_by_type = {
         relation: _long_tensor(edge_index, device=resolved_device)
@@ -157,6 +181,8 @@ def hetero_sample_to_tensors(
                 waveform_length,
             ),
             "waveform_valid": detector_waveform_valid,
+            "has_signal": detector_has_signal,
+            "has_ising_kept": detector_has_ising_kept,
             "batch": torch.zeros(detector_features.shape[0], dtype=torch.long, device=resolved_device),
         },
         "pulse": {
@@ -198,11 +224,15 @@ def hetero_sample_to_training_tensors(
 
     resolved_device = torch.device(device) if device is not None else None
     detector_features = _tensor(sample["detector_features"], dtype=torch.float32, device=resolved_device)
-    waveform_valid_index = _detector_feature_index_from_sample(sample, DETECTOR_WAVEFORM_VALID_COLUMN)
-    if waveform_valid_index is not None and waveform_valid_index < detector_features.shape[1]:
-        detector_waveform_valid = detector_features[:, waveform_valid_index].clamp(0.0, 1.0)
-    else:
-        detector_waveform_valid = torch.ones(detector_features.shape[0], dtype=torch.float32, device=resolved_device)
+    detector_waveform_valid = _detector_flag_from_features(
+        sample, detector_features, DETECTOR_WAVEFORM_VALID_COLUMN, default=1.0
+    )
+    detector_has_signal = _detector_flag_from_features(
+        sample, detector_features, DETECTOR_HAS_SIGNAL_COLUMN, default=1.0
+    )
+    detector_has_ising_kept = _detector_flag_from_features(
+        sample, detector_features, DETECTOR_HAS_ISING_KEPT_COLUMN, default=1.0
+    )
     detector_features = _scale_tensor(detector_features, _scaler_for(scalers, "detector", "detector_features"))
     detector_context = _scale_tensor(
         _tensor(sample["detector_context_features"], dtype=torch.float32, device=resolved_device),
@@ -239,6 +269,8 @@ def hetero_sample_to_training_tensors(
                 waveform_length,
             ),
             "waveform_valid": detector_waveform_valid,
+            "has_signal": detector_has_signal,
+            "has_ising_kept": detector_has_ising_kept,
         },
         "pulse": {
             "x": pulse_features,
@@ -312,6 +344,8 @@ def sample_to_hetero_data(
     data["detector"].lid = tensors["detector"]["lid"]
     data["detector"].waveform = tensors["detector"]["waveform"]
     data["detector"].waveform_valid = tensors["detector"]["waveform_valid"]
+    data["detector"].has_signal = tensors["detector"]["has_signal"]
+    data["detector"].has_ising_kept = tensors["detector"]["has_ising_kept"]
 
     data["pulse"].x = tensors["pulse"]["x"]
     data["pulse"].pos = tensors["pulse"]["pos"]
@@ -377,6 +411,12 @@ def hetero_data_to_tensors(data: Any) -> dict[str, Any]:
             "waveform": detector["waveform"].to(dtype=torch.float32),
             "waveform_valid": detector["waveform_valid"].to(dtype=torch.float32)
             if "waveform_valid" in detector
+            else torch.ones(detector_x.shape[0], dtype=torch.float32, device=detector_x.device),
+            "has_signal": detector["has_signal"].to(dtype=torch.float32)
+            if "has_signal" in detector
+            else torch.ones(detector_x.shape[0], dtype=torch.float32, device=detector_x.device),
+            "has_ising_kept": detector["has_ising_kept"].to(dtype=torch.float32)
+            if "has_ising_kept" in detector
             else torch.ones(detector_x.shape[0], dtype=torch.float32, device=detector_x.device),
             "batch": _storage_batch(detector, detector_x.shape[0], device=detector_x.device),
         },
