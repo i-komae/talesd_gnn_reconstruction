@@ -59,6 +59,7 @@ INPUT_DISTRIBUTION_MAX_GRAPHS="${INPUT_DISTRIBUTION_MAX_GRAPHS:-100000}"
 INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE="${INPUT_DISTRIBUTION_MAX_VALUES_PER_FEATURE:-200000}"
 SEED="${SEED:-12345}"
 H5_PROGRESS_INTERVAL_SEC="${H5_PROGRESS_INTERVAL_SEC:-30}"
+SOURCE_GROUP_TIMEOUT_SEC="${SOURCE_GROUP_TIMEOUT_SEC:-600}"
 RUN_UV_SYNC="${RUN_UV_SYNC:-0}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-/dicos_ui_home/ikomae/work/uv-cache}"
 UV_LINK_MODE="${UV_LINK_MODE:-copy}"
@@ -161,6 +162,7 @@ echo "source_group_overdraw_factor=${SOURCE_GROUP_OVERDRAW_FACTOR}"
 echo "max_source_groups_per_stratum=${MAX_SOURCE_GROUPS_PER_STRATUM}"
 echo "allow_underfull_strata=${ALLOW_UNDERFULL_STRATA}"
 echo "export_workers=${EXPORT_WORKERS}"
+echo "source_group_timeout_sec=${SOURCE_GROUP_TIMEOUT_SEC}"
 echo "run_uv_sync=${RUN_UV_SYNC}"
 echo "make_input_distributions=${MAKE_INPUT_DISTRIBUTIONS}"
 echo "selection_strategy=filename_source_group_light_v1"
@@ -187,6 +189,7 @@ ${allow_underfull_line}\
   --seed "${SEED}" \\
   --workers "${EXPORT_WORKERS}" \\
   --h5-progress-interval-sec "${H5_PROGRESS_INTERVAL_SEC}" \\
+  --source-group-timeout-sec "${SOURCE_GROUP_TIMEOUT_SEC}" \\
   --selection-summary "${SELECTION_SUMMARY}" \\
   --min-event-date "${MIN_EVENT_DATE}" \\
   --shard-size "${SHARD_SIZE}" \\
@@ -228,6 +231,7 @@ max_source_groups_per_stratum: ${MAX_SOURCE_GROUPS_PER_STRATUM}
 allow_underfull_strata: ${ALLOW_UNDERFULL_STRATA}
 seed: ${SEED}
 export_workers: ${EXPORT_WORKERS}
+source_group_timeout_sec: ${SOURCE_GROUP_TIMEOUT_SEC}
 run_uv_sync: ${RUN_UV_SYNC}
 make_input_distributions: ${MAKE_INPUT_DISTRIBUTIONS}
 sbatch_file: ${SBATCH_FILE}

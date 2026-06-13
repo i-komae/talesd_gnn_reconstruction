@@ -8,6 +8,7 @@ import math
 import os
 import random
 import re
+import signal
 import time
 from collections import deque
 from collections.abc import Iterable, Iterator
@@ -83,6 +84,10 @@ class LightHeteroSourceGroup:
     particle: str
     stratum: str
     paths: tuple[str, ...]
+
+
+class _LightSourceGroupTimeout(TimeoutError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -2574,11 +2579,13 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
     )
     seed = int(payload["seed"])
     progress_interval_sec = float(payload["progress_interval_sec"])
+    source_group_timeout_sec = max(float(payload.get("source_group_timeout_sec", 0.0) or 0.0), 0.0)
     config = dict(payload["config"])
     config["worker_index"] = worker_index
     config["worker_source_groups"] = source_group_count
     config["source_group_overdraw_factor"] = source_group_overdraw_factor
     config["source_group_graph_cap"] = source_group_graph_cap
+    config["source_group_timeout_sec"] = source_group_timeout_sec
 
     shard_index = 0
     shard_path, handle = _open_light_hetero_shard(output_base, shard_index, config)
@@ -2596,31 +2603,48 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
 
     def collect_group_graphs(group: LightHeteroSourceGroup) -> list[tuple[float, int, str, Any]]:
         group_graphs: list[tuple[float, int, str, Any]] = []
-        iterator = tale_graph.iter_graphs(
-            group.paths,
-            kind="mc",
-            cleaning=str(payload["cleaning"]),
-            node_policy=str(payload["node_policy"]),
-            const_dst=payload["const_dst"],
-            mc_calib_dir=payload["mc_calib_dir"],
-            require_trigger_mode0=bool(payload["require_trigger_mode0"]),
-            require_reference_core=bool(payload["require_reference_core"]),
-            skip_errors=bool(payload["skip_errors"]),
-            skip_missing_mc_calibration=bool(payload["skip_missing_mc_calibration"]),
-            min_event_date=payload["min_event_date"],
-            open_retries=int(payload["open_retries"]),
-            open_retry_delay=float(payload["open_retry_delay"]),
-        )
+        iterator = None
+        timer_enabled = source_group_timeout_sec > 0.0 and hasattr(signal, "setitimer")
+        old_handler: Any = None
+
+        def _raise_timeout(_signum: int, _frame: Any) -> None:
+            raise _LightSourceGroupTimeout(
+                f"source_group={group.source_group} exceeded {source_group_timeout_sec:.1f}s"
+            )
+
         try:
+            if timer_enabled:
+                old_handler = signal.getsignal(signal.SIGALRM)
+                signal.signal(signal.SIGALRM, _raise_timeout)
+                signal.setitimer(signal.ITIMER_REAL, source_group_timeout_sec)
+            iterator = tale_graph.iter_graphs(
+                group.paths,
+                kind="mc",
+                cleaning=str(payload["cleaning"]),
+                node_policy=str(payload["node_policy"]),
+                const_dst=payload["const_dst"],
+                mc_calib_dir=payload["mc_calib_dir"],
+                require_trigger_mode0=bool(payload["require_trigger_mode0"]),
+                require_reference_core=bool(payload["require_reference_core"]),
+                skip_errors=bool(payload["skip_errors"]),
+                skip_missing_mc_calibration=bool(payload["skip_missing_mc_calibration"]),
+                min_event_date=payload["min_event_date"],
+                open_retries=int(payload["open_retries"]),
+                open_retry_delay=float(payload["open_retry_delay"]),
+            )
             for graphable_index, graph in enumerate(iterator):
                 score = _light_graph_sample_key(seed, group, graph, graphable_index)
                 group_graphs.append((score, graphable_index, _light_graph_identity(graph, graphable_index), graph))
                 if len(group_graphs) >= source_group_graph_cap:
                     break
         finally:
-            close = getattr(iterator, "close", None)
-            if callable(close):
-                close()
+            if timer_enabled:
+                signal.setitimer(signal.ITIMER_REAL, 0.0)
+                signal.signal(signal.SIGALRM, old_handler)
+            if iterator is not None:
+                close = getattr(iterator, "close", None)
+                if callable(close):
+                    close()
         group_graphs.sort(key=lambda item: (item[0], item[1]))
         return group_graphs
 
@@ -2666,6 +2690,7 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
         f"start strata={len(strata)} source_groups={source_group_count} "
         f"graphs_per_source_group={graphs_per_source_group} "
         f"source_group_graph_cap={source_group_graph_cap} "
+        f"source_group_timeout_sec={source_group_timeout_sec:g} "
         f"shard_size={shard_size} output_base={output_base}"
     )
     log(f"open_shard index={shard_index} path={shard_path}")
@@ -2695,7 +2720,33 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                     f"source_group={group.source_group} files={len(group.paths)}"
                 )
                 attempted_group_order.append(group)
-                group_graphs = collect_group_graphs(group)
+                try:
+                    group_graphs = collect_group_graphs(group)
+                except _LightSourceGroupTimeout as exc:
+                    row = {
+                        **_light_group_to_dict(group),
+                        "graphs_found": 0,
+                        "graphs_written": 0,
+                        "primary_graphs_written": 0,
+                        "refill_graphs_written": 0,
+                        "discarded_graphs": 0,
+                        "overdraw_cap_reached": False,
+                        "source_group_graph_cap": int(source_group_graph_cap),
+                        "complete": False,
+                        "timeout": True,
+                        "skipped_reason": "source_group_timeout",
+                    }
+                    group_rows.append(row)
+                    row_by_group[group.source_group] = row
+                    selected_keys_by_group[group.source_group] = set()
+                    handle.flush()
+                    log(
+                        f"skip_group_timeout index={group_index}/{len(groups)} stratum={group.stratum} "
+                        f"source_group={group.source_group} timeout_sec={source_group_timeout_sec:g} "
+                        f"elapsed={max(time.monotonic() - group_started_at, 1.0e-9):.1f}s "
+                        f"reason={exc}"
+                    )
+                    continue
                 graphable = len(group_graphs)
                 remaining_target = max(target_graphs - stratum_written, 0)
                 primary_quota = min(graphs_per_source_group, remaining_target)
@@ -2757,7 +2808,20 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                     refill_started_at = time.monotonic()
                     remaining_groups = max(len(surplus_groups) - refill_index + 1, 1)
                     refill_quota = max(int(math.ceil(refill_needed / remaining_groups)), 1)
-                    group_graphs = collect_group_graphs(group)
+                    try:
+                        group_graphs = collect_group_graphs(group)
+                    except _LightSourceGroupTimeout as exc:
+                        row["timeout"] = True
+                        row["refill_skipped_reason"] = "source_group_timeout"
+                        handle.flush()
+                        log(
+                            f"skip_refill_timeout index={refill_index}/{len(surplus_groups)} "
+                            f"stratum={group.stratum} source_group={group.source_group} "
+                            f"timeout_sec={source_group_timeout_sec:g} "
+                            f"elapsed={max(time.monotonic() - refill_started_at, 1.0e-9):.1f}s "
+                            f"reason={exc}"
+                        )
+                        continue
                     already_selected = selected_keys_by_group.setdefault(group.source_group, set())
                     refill_candidates = [
                         item
@@ -2796,6 +2860,9 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                     "attempted_source_groups": int(attempted_groups),
                     "complete_source_groups": int(complete_groups),
                     "short_source_groups": int(attempted_groups - complete_groups),
+                    "timeout_source_groups": int(
+                        sum(1 for row in row_by_group.values() if bool(row.get("timeout", False)))
+                    ),
                     "target_met": bool(stratum_written >= target_graphs),
                 }
             )
@@ -2877,6 +2944,7 @@ def _write_light_hetero_graph_h5(
             "open_retry_delay": float(args.open_retry_delay),
             "shard_size": int(args.shard_size),
             "progress_interval_sec": float(args.h5_progress_interval_sec),
+            "source_group_timeout_sec": float(args.source_group_timeout_sec),
             "config": config,
         }
         for worker_index, strata in enumerate(stratum_chunks)
@@ -2913,6 +2981,7 @@ def _write_light_hetero_graph_h5(
             written_counts_by_stratum[str(key)] = written_counts_by_stratum.get(str(key), 0) + int(value)
 
     short_groups = [row for row in group_rows if int(row.get("graphs_written", 0)) < int(args.graphs_per_source_group)]
+    timeout_groups = [row for row in group_rows if bool(row.get("timeout", False))]
     incomplete_strata = [row for row in stratum_rows if not bool(row.get("target_met", False))]
     return {
         "format": "talesd_gnn_hetero_light_export_v1",
@@ -2923,6 +2992,7 @@ def _write_light_hetero_graph_h5(
         "workers": len(payloads),
         "graphs_per_source_group": int(args.graphs_per_source_group),
         "source_group_overdraw_factor": float(args.source_group_overdraw_factor),
+        "source_group_timeout_sec": float(args.source_group_timeout_sec),
         "target_source_groups_per_stratum": int(target_source_groups_per_stratum),
         "target_graphs_per_stratum": int(target_graphs_per_stratum),
         "written_counts_by_stratum": dict(sorted(written_counts_by_stratum.items())),
@@ -2930,6 +3000,7 @@ def _write_light_hetero_graph_h5(
         "incomplete_strata": sorted(incomplete_strata, key=lambda row: str(row["stratum"])),
         "source_groups": sorted(group_rows, key=lambda row: (str(row["stratum"]), str(row["source_group"]))),
         "short_source_groups": short_groups,
+        "timeout_source_groups": timeout_groups,
         "complete_source_groups": sum(1 for row in group_rows if int(row.get("graphs_written", 0)) >= int(args.graphs_per_source_group)),
     }
 
@@ -4812,6 +4883,12 @@ def build_parser() -> argparse.ArgumentParser:
     export_hetero_light.add_argument("--worker-max-files", type=int, default=DEFAULT_WORKER_MAX_FILES, help="workerをNタスクごとに再起動する。0なら無効")
     export_hetero_light.add_argument("--selection-summary", default=None, help="light selection/write summary JSONの出力先")
     export_hetero_light.add_argument("--h5-progress-interval-sec", type=float, default=30.0, help="HDF5 export progress出力間隔")
+    export_hetero_light.add_argument(
+        "--source-group-timeout-sec",
+        type=float,
+        default=0.0,
+        help="1つのsource group処理がN秒を超えたらskipして次へ進む。0なら無効",
+    )
     export_hetero_light.add_argument("--cleaning", choices=["ising", "none"], default="ising", help="dstio.tale.graph cleaning mode")
     export_hetero_light.add_argument(
         "--node-policy",

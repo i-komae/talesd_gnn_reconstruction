@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -1329,6 +1330,76 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
         self.assertEqual(result["strata"][0]["target_met"], False)
         self.assertEqual(result["strata"][0]["short_source_groups"], 2)
         self.assertEqual(len(written), 7)
+
+    def test_light_hetero_worker_skips_timed_out_source_group(self) -> None:
+        class FakeHandle:
+            def flush(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        written: list[tuple[int, str]] = []
+
+        def fake_iter_graphs(_paths: list[str], **_: object) -> object:
+            def iterator() -> object:
+                time.sleep(1.0)
+                yield "late_graph"
+
+            return iterator()
+
+        def fake_write(_handle: FakeHandle, index: int, graph: str) -> None:
+            written.append((index, graph))
+
+        payload = {
+            "worker_index": 0,
+            "strata": [
+                {
+                    "stratum": "iron:40",
+                    "target_graphs": 10,
+                    "groups": [
+                        {
+                            "source_group": "/mc/iron/DAT000140",
+                            "dat_tag": "DAT000140",
+                            "energy_bin_code": "40",
+                            "particle": "iron",
+                            "stratum": "iron:40",
+                            "paths": ["/mc/iron/slow.dst.gz"],
+                        },
+                    ],
+                }
+            ],
+            "output_base": tempfile.mkdtemp(),
+            "graphs_per_source_group": 10,
+            "source_group_overdraw_factor": 10.0,
+            "source_group_timeout_sec": 0.1,
+            "seed": 12345,
+            "cleaning": "ising",
+            "node_policy": "all_candidates_with_ising",
+            "const_dst": None,
+            "mc_calib_dir": None,
+            "require_trigger_mode0": True,
+            "require_reference_core": True,
+            "skip_errors": True,
+            "skip_missing_mc_calibration": True,
+            "min_event_date": None,
+            "open_retries": 0,
+            "open_retry_delay": 0.0,
+            "shard_size": 1000,
+            "progress_interval_sec": 0.0,
+            "config": {},
+        }
+        with mock.patch.object(tale_graph, "create_graph_h5_file", return_value=FakeHandle()):
+            with mock.patch.object(tale_graph, "iter_graphs", side_effect=fake_iter_graphs):
+                with mock.patch.object(tale_graph, "write_graph_h5_event", side_effect=fake_write):
+                    result = _export_light_hetero_worker(payload)
+
+        self.assertEqual(result["graphs_written"], 0)
+        self.assertEqual(written, [])
+        self.assertEqual(result["source_groups"][0]["graphs_written"], 0)
+        self.assertTrue(result["source_groups"][0]["timeout"])
+        self.assertEqual(result["source_groups"][0]["skipped_reason"], "source_group_timeout")
+        self.assertEqual(result["strata"][0]["timeout_source_groups"], 1)
 
     def test_light_hetero_worker_discards_overdrawn_graphs_by_seeded_score(self) -> None:
         class FakeHandle:
