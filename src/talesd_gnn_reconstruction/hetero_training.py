@@ -593,6 +593,7 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
     pulse_batch_rows = []
     target_rows = []
     core_anchor_rows = []
+    position_anchor_rows = []
     label_rows = []
     edge_index_by_type = {relation: [] for relation in EDGE_TYPE_BY_RELATION}
     edge_features_by_type = {relation: [] for relation in EDGE_TYPE_BY_RELATION}
@@ -637,6 +638,9 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
         core_anchor = sample.get("core_anchor")
         if core_anchor is not None:
             core_anchor_rows.append(core_anchor.reshape(1, -1)[:, :2])
+        position_anchor = sample.get("position_anchor")
+        if position_anchor is not None:
+            position_anchor_rows.append(position_anchor.reshape(1, -1)[:, :3])
         if sample["particle_label"] is not None:
             label_rows.append(sample["particle_label"].reshape(-1))
         for relation in EDGE_TYPE_BY_RELATION:
@@ -685,6 +689,7 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
         "edge_features_by_type": collated_edge_features,
         "target": torch.cat(target_rows, dim=0) if target_rows else None,
         "core_anchor": torch.cat(core_anchor_rows, dim=0) if core_anchor_rows else None,
+        "position_anchor": torch.cat(position_anchor_rows, dim=0) if position_anchor_rows else None,
         "particle_label": torch.cat(label_rows, dim=0) if label_rows else None,
         "num_graphs": int(len(samples)),
     }

@@ -171,6 +171,29 @@ def signal_barycenter_anchor(
     return (np.sum(weighted, axis=0) / np.sum(weights[finite])).astype(np.float32)
 
 
+def signal_barycenter_position_anchor(
+    *,
+    pulse_positions_km: np.ndarray,
+    pulse_features: np.ndarray,
+    pulse_feature_columns: list[str] | tuple[str, ...],
+) -> np.ndarray:
+    positions = np.asarray(pulse_positions_km, dtype=np.float32)
+    if positions.ndim != 2 or positions.shape[0] == 0 or positions.shape[1] < 2:
+        raise ValueError("signal_bary_relative position anchor needs pulse_positions_km with x/y columns")
+    weights = _pulse_weights_from_features(pulse_features, pulse_feature_columns)
+    if weights.shape[0] != positions.shape[0]:
+        raise ValueError("pulse feature/position row mismatch while computing signal-bary position anchor")
+    finite = np.isfinite(positions[:, 0]) & np.isfinite(positions[:, 1]) & np.isfinite(weights) & (weights > 0.0)
+    xyz = np.zeros((positions.shape[0], 3), dtype=np.float32)
+    xyz[:, : min(positions.shape[1], 3)] = positions[:, : min(positions.shape[1], 3)]
+    if positions.shape[1] >= 3:
+        finite = finite & np.isfinite(positions[:, 2])
+    if not np.any(finite):
+        raise ValueError("cannot compute signal-bary position anchor: no finite weighted pulse positions")
+    weighted = xyz[finite, :3] * weights[finite, None]
+    return (np.sum(weighted, axis=0) / np.sum(weights[finite])).astype(np.float32)
+
+
 def fit_core_anchor_from_metadata(metadata: Mapping[str, Any] | None) -> np.ndarray:
     if not metadata:
         raise ValueError("fit_core_relative core target needs metadata with reference_core_km")
@@ -185,6 +208,20 @@ def fit_core_anchor_from_metadata(metadata: Mapping[str, Any] | None) -> np.ndar
     if anchor.shape[0] < 2 or not np.all(np.isfinite(anchor[:2])):
         raise ValueError("fit_core_relative core anchor is not finite")
     return anchor[:2].astype(np.float32)
+
+
+def fit_core_position_anchor_from_metadata(metadata: Mapping[str, Any] | None) -> np.ndarray:
+    xy = fit_core_anchor_from_metadata(metadata)
+    anchor = np.zeros((3,), dtype=np.float32)
+    anchor[:2] = xy[:2]
+    if metadata:
+        for key in ("reference_core_km", "ising_core_km", "fit_core_km"):
+            if key in metadata and metadata[key] is not None:
+                value = np.asarray(metadata[key], dtype=np.float32).reshape(-1)
+                if value.shape[0] >= 3 and np.isfinite(value[2]):
+                    anchor[2] = value[2]
+                break
+    return anchor
 
 
 def core_anchor_from_sample(
@@ -206,6 +243,28 @@ def core_anchor_from_sample(
         )
     if mode == "fit_core_relative":
         return fit_core_anchor_from_metadata(sample.get("metadata"))
+    raise AssertionError(mode)
+
+
+def position_anchor_from_sample(
+    sample: Mapping[str, Any],
+    *,
+    columns: Mapping[str, Any] | None,
+    core_anchor_mode: str,
+) -> np.ndarray:
+    mode = normalize_core_target_mode(core_anchor_mode)
+    if mode == "absolute":
+        return np.zeros((3,), dtype=np.float32)
+    if mode == "signal_bary_relative":
+        column_map = dict(columns or {})
+        pulse_columns = list(column_map.get("pulse_features", []))
+        return signal_barycenter_position_anchor(
+            pulse_positions_km=np.asarray(sample.get("pulse_positions_km"), dtype=np.float32),
+            pulse_features=np.asarray(sample.get("pulse_features"), dtype=np.float32),
+            pulse_feature_columns=pulse_columns,
+        )
+    if mode == "fit_core_relative":
+        return fit_core_position_anchor_from_metadata(sample.get("metadata"))
     raise AssertionError(mode)
 
 

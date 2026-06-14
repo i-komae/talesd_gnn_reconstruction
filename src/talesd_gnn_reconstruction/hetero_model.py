@@ -52,6 +52,7 @@ class HeteroMessageLayer(nn.Module):
         node_states: dict[str, torch.Tensor],
         edge_index_by_type: Mapping[str, torch.Tensor],
         edge_features_by_type: Mapping[str, torch.Tensor],
+        node_masks: Mapping[str, torch.Tensor | None] | None = None,
     ) -> dict[str, torch.Tensor]:
         aggregates = {node_type: torch.zeros_like(state) for node_type, state in node_states.items()}
         counts = {
@@ -69,6 +70,19 @@ class HeteroMessageLayer(nn.Module):
             src_type, dst_type = NODE_TYPE_BY_RELATION[relation]
             src_index = edge_index[0].to(device=node_states[src_type].device)
             dst_index = edge_index[1].to(device=node_states[dst_type].device)
+            if node_masks:
+                edge_keep = torch.ones(src_index.shape[0], dtype=torch.bool, device=src_index.device)
+                src_mask = node_masks.get(src_type)
+                dst_mask = node_masks.get(dst_type)
+                if src_mask is not None:
+                    edge_keep &= src_mask.to(device=src_index.device, dtype=torch.bool).reshape(-1)[src_index]
+                if dst_mask is not None:
+                    edge_keep &= dst_mask.to(device=dst_index.device, dtype=torch.bool).reshape(-1)[dst_index]
+                if not bool(edge_keep.any()):
+                    continue
+                src_index = src_index[edge_keep]
+                dst_index = dst_index[edge_keep]
+                edge_attr = edge_attr[edge_keep]
             message_input = torch.cat(
                 [node_states[src_type][src_index], node_states[dst_type][dst_index], edge_attr],
                 dim=-1,
@@ -140,6 +154,7 @@ class HeteroAttentionMessageLayer(nn.Module):
         edge_features_by_type: Mapping[str, torch.Tensor],
         *,
         return_attention: bool = False,
+        node_masks: Mapping[str, torch.Tensor | None] | None = None,
     ) -> dict[str, torch.Tensor] | tuple[dict[str, torch.Tensor], dict[str, Any]]:
         aggregates = {node_type: torch.zeros_like(state) for node_type, state in node_states.items()}
         counts = {
@@ -158,6 +173,20 @@ class HeteroAttentionMessageLayer(nn.Module):
             src_index = edge_index[0].to(device=src_state.device)
             dst_index = edge_index[1].to(device=dst_state.device)
             edge_attr = edge_features_by_type[relation].to(dtype=src_state.dtype, device=src_state.device)
+            if node_masks:
+                edge_keep = torch.ones(src_index.shape[0], dtype=torch.bool, device=src_index.device)
+                src_mask = node_masks.get(src_type)
+                dst_mask = node_masks.get(dst_type)
+                if src_mask is not None:
+                    edge_keep &= src_mask.to(device=src_index.device, dtype=torch.bool).reshape(-1)[src_index]
+                if dst_mask is not None:
+                    edge_keep &= dst_mask.to(device=dst_index.device, dtype=torch.bool).reshape(-1)[dst_index]
+                if not bool(edge_keep.any()):
+                    continue
+                src_index = src_index[edge_keep]
+                dst_index = dst_index[edge_keep]
+                edge_index = edge_index[:, edge_keep]
+                edge_attr = edge_attr[edge_keep]
             src_input = torch.cat([src_state[src_index], edge_attr], dim=-1)
             query = self.query[relation](dst_state[dst_index]).view(-1, self.heads, self.head_dim)
             key = self.key[relation](src_input).view(-1, self.heads, self.head_dim)
@@ -326,7 +355,7 @@ def _relative_position_features(
     node: Mapping[str, Any],
     *,
     n_nodes: int,
-    core_anchor: torch.Tensor | None,
+    position_anchor: torch.Tensor | None,
     device: torch.device,
     dtype: torch.dtype,
 ) -> tuple[torch.Tensor, bool]:
@@ -344,20 +373,21 @@ def _relative_position_features(
         batch_index = batch.to(device=device, dtype=torch.long).reshape(-1)
         if batch_index.numel() != int(n_nodes):
             batch_index = torch.zeros((int(n_nodes),), dtype=torch.long, device=device)
-    if core_anchor is None:
-        anchor_xy = torch.zeros((int(n_nodes), 2), dtype=torch.float32, device=device)
+    if position_anchor is None:
+        anchor = torch.zeros((int(n_nodes), 3), dtype=torch.float32, device=device)
     else:
-        anchors = core_anchor.to(device=device, dtype=torch.float32)
+        anchors = position_anchor.to(device=device, dtype=torch.float32)
         if anchors.ndim == 1:
             anchors = anchors.reshape(1, -1)
         if anchors.shape[1] < 2:
-            anchor_xy = torch.zeros((int(n_nodes), 2), dtype=torch.float32, device=device)
+            anchor = torch.zeros((int(n_nodes), 3), dtype=torch.float32, device=device)
         else:
             safe_batch = batch_index.clamp(0, max(int(anchors.shape[0]) - 1, 0))
-            anchor_xy = anchors[safe_batch, :2]
-    rel_xy = positions[:, :2] - anchor_xy
+            anchor = torch.zeros((int(n_nodes), 3), dtype=torch.float32, device=device)
+            anchor[:, : min(int(anchors.shape[1]), 3)] = anchors[safe_batch, : min(int(anchors.shape[1]), 3)]
+    rel_xy = positions[:, :2] - anchor[:, :2]
     if positions.shape[1] >= 3:
-        rel_z = positions[:, 2:3]
+        rel_z = positions[:, 2:3] - anchor[:, 2:3]
     else:
         rel_z = torch.zeros((int(n_nodes), 1), dtype=torch.float32, device=device)
     radius = torch.sqrt((rel_xy.square().sum(dim=1, keepdim=True) + rel_z.square()).clamp_min(0.0))
@@ -788,11 +818,12 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         edge_index_by_type = batch["edge_index_by_type"]
         edge_features_by_type = batch["edge_features_by_type"]
         core_anchor = batch.get("core_anchor")
+        position_anchor = batch.get("position_anchor", core_anchor)
         if self.use_relative_positions:
             detector_relative_pos, detector_pos_valid = _relative_position_features(
                 detector,
                 n_nodes=int(detector_x.shape[0]),
-                core_anchor=core_anchor,
+                position_anchor=position_anchor,
                 device=detector_x.device,
                 dtype=detector_x.dtype,
             )
@@ -854,7 +885,7 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             pulse_relative_pos, pulse_pos_valid = _relative_position_features(
                 pulse,
                 n_nodes=int(pulse_x.shape[0]),
-                core_anchor=core_anchor,
+                position_anchor=position_anchor,
                 device=pulse_x.device,
                 dtype=pulse_x.dtype,
             )
@@ -896,6 +927,10 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             node_states["pulse"] = self.pulse_node_encoder(torch.cat([pulse_feature_embedding, *pulse_extra_parts], dim=-1))
         else:
             node_states["pulse"] = self.pulse_node_encoder(pulse_x)
+        detector_message_mask = _detector_readout_mask(detector, self.detector_readout_mask)
+        node_message_masks: dict[str, torch.Tensor | None] | None = None
+        if detector_message_mask is not None:
+            node_message_masks = {"detector": detector_message_mask, "pulse": None}
         layer_attention = []
         for layer_index, layer in enumerate(self.layers):
             if return_attention and isinstance(layer, HeteroAttentionMessageLayer):
@@ -904,17 +939,23 @@ class MinimalHeteroTaleSdGNN(nn.Module):
                     edge_index_by_type,
                     edge_features_by_type,
                     return_attention=True,
+                    node_masks=node_message_masks,
                 )
                 layer_attention.append({"layer": int(layer_index), **attention})
             else:
-                node_states = layer(node_states, edge_index_by_type, edge_features_by_type)
+                node_states = layer(
+                    node_states,
+                    edge_index_by_type,
+                    edge_features_by_type,
+                    node_masks=node_message_masks,
+                )
 
         num_graphs = int(batch.get("num_graphs", 1))
         readout_attention: dict[str, torch.Tensor] = {}
         detector_readout_state, detector_readout_batch = _masked_readout_input(
             node_states["detector"],
             detector["batch"],
-            _detector_readout_mask(detector, self.detector_readout_mask),
+            detector_message_mask,
         )
         pulse_readout_state, pulse_readout_batch = _masked_readout_input(
             node_states["pulse"],

@@ -888,6 +888,7 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
         graph = _synthetic_graph(0)
         sample = dict(graph.__dict__)
         sample["core_anchor"] = np.asarray([0.5, -1.25], dtype=np.float32)
+        sample["position_anchor"] = np.asarray([0.5, -1.25, 0.75], dtype=np.float32)
         batch = hetero_sample_to_tensors(sample)
         model = MinimalHeteroTaleSdGNN.from_sample(
             sample,
@@ -923,25 +924,65 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
         self.assertEqual(tuple(output.shape), (1, 7))
         self.assertEqual(len(captured_detector), 1)
         self.assertEqual(len(captured_pulse), 1)
-        anchor = sample["core_anchor"]
-        detector_rel_xy = graph.detector_positions_km[:, :2] - anchor[None, :]
+        anchor = sample["position_anchor"]
+        detector_rel_xy = graph.detector_positions_km[:, :2] - anchor[None, :2]
         detector_expected = np.column_stack(
             [
                 detector_rel_xy,
-                graph.detector_positions_km[:, 2],
-                np.sqrt((detector_rel_xy**2).sum(axis=1) + graph.detector_positions_km[:, 2] ** 2),
+                graph.detector_positions_km[:, 2] - anchor[2],
+                np.sqrt((detector_rel_xy**2).sum(axis=1) + (graph.detector_positions_km[:, 2] - anchor[2]) ** 2),
             ]
         ).astype(np.float32)
-        pulse_rel_xy = graph.pulse_positions_km[:, :2] - anchor[None, :]
+        pulse_rel_xy = graph.pulse_positions_km[:, :2] - anchor[None, :2]
         pulse_expected = np.column_stack(
             [
                 pulse_rel_xy,
-                graph.pulse_positions_km[:, 2],
-                np.sqrt((pulse_rel_xy**2).sum(axis=1) + graph.pulse_positions_km[:, 2] ** 2),
+                graph.pulse_positions_km[:, 2] - anchor[2],
+                np.sqrt((pulse_rel_xy**2).sum(axis=1) + (graph.pulse_positions_km[:, 2] - anchor[2]) ** 2),
             ]
         ).astype(np.float32)
         np.testing.assert_allclose(captured_detector[0][:, -4:].numpy(), detector_expected, rtol=1.0e-6, atol=1.0e-6)
         np.testing.assert_allclose(captured_pulse[0][:, -4:].numpy(), pulse_expected, rtol=1.0e-6, atol=1.0e-6)
+
+    def test_signal_detector_mask_removes_nontriggered_detector_from_messages(self) -> None:
+        graph = _synthetic_graph(0)
+        if "detector_has_signal" not in DETECTOR_FEATURE_INDEX:
+            self.skipTest("dstio detector_has_signal column is unavailable")
+        base_sample = dict(graph.__dict__)
+        for key in ("detector_features", "detector_context_features", "detector_waveforms", "detector_positions_km"):
+            base_sample[key] = getattr(graph, key).copy()
+        base_sample["detector_features"][2, DETECTOR_FEATURE_INDEX["detector_has_signal"]] = 0.0
+        changed_sample = dict(base_sample)
+        for key in ("detector_features", "detector_context_features", "detector_waveforms", "detector_positions_km"):
+            changed_sample[key] = base_sample[key].copy()
+        changed_sample["detector_features"][2] += 1000.0
+        changed_sample["detector_features"][2, DETECTOR_FEATURE_INDEX["detector_has_signal"]] = 0.0
+        changed_sample["detector_context_features"][2] -= 1000.0
+        changed_sample["detector_waveforms"][2] += 1000.0
+        changed_sample["detector_positions_km"][2] += 1000.0
+
+        torch.manual_seed(123)
+        model = MinimalHeteroTaleSdGNN.from_sample(
+            base_sample,
+            target_dim=6,
+            classification_dim=1,
+            hidden_dim=16,
+            num_layers=1,
+            dropout=0.0,
+            waveform_encoder="none",
+            waveform_embedding_dim=8,
+            architecture="minimal_hetero",
+            use_pulse_parent_waveform=False,
+            use_pulse_bounds=False,
+            pulse_waveform_encoder="none",
+            use_relative_positions=True,
+            detector_readout_mask="signal",
+        )
+        model.eval()
+        with torch.no_grad():
+            base_output = model(hetero_sample_to_tensors(base_sample))
+            changed_output = model(hetero_sample_to_tensors(changed_sample))
+        torch.testing.assert_close(base_output, changed_output, rtol=1.0e-6, atol=1.0e-6)
 
     def test_fast_tensor_dataset_uses_training_sample_not_getitem(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
