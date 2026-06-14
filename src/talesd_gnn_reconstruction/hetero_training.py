@@ -580,12 +580,14 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
         raise ValueError("cannot collate an empty hetero graph batch")
     detector_x_rows = []
     detector_context_rows = []
+    detector_pos_rows = []
     detector_waveform_rows = []
     detector_valid_rows = []
     detector_has_signal_rows = []
     detector_has_ising_kept_rows = []
     detector_batch_rows = []
     pulse_x_rows = []
+    pulse_pos_rows = []
     pulse_detector_index_rows = []
     pulse_bounds_rows = []
     pulse_batch_rows = []
@@ -602,6 +604,9 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
         n_pulse = int(pulse["x"].shape[0])
         detector_x_rows.append(detector["x"])
         detector_context_rows.append(detector["context"])
+        detector_pos_rows.append(
+            detector.get("pos", torch.zeros((n_detector, 3), dtype=torch.float32)).to(dtype=torch.float32)
+        )
         detector_waveform_rows.append(detector["waveform"])
         detector_valid_rows.append(detector["waveform_valid"].reshape(-1))
         detector_has_signal_rows.append(
@@ -612,6 +617,7 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
         )
         detector_batch_rows.append(torch.full((n_detector,), int(graph_index), dtype=torch.long))
         pulse_x_rows.append(pulse["x"])
+        pulse_pos_rows.append(pulse.get("pos", torch.zeros((n_pulse, 3), dtype=torch.float32)).to(dtype=torch.float32))
         if "detector_index" in pulse:
             pulse_detector_index_rows.append(pulse["detector_index"].to(dtype=torch.long).reshape(-1) + node_offsets["detector"])
         else:
@@ -661,6 +667,7 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
         "detector": {
             "x": torch.cat(detector_x_rows, dim=0),
             "context": torch.cat(detector_context_rows, dim=0),
+            "pos": torch.cat(detector_pos_rows, dim=0),
             "waveform": torch.cat(detector_waveform_rows, dim=0),
             "waveform_valid": torch.cat(detector_valid_rows, dim=0),
             "has_signal": torch.cat(detector_has_signal_rows, dim=0),
@@ -669,6 +676,7 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
         },
         "pulse": {
             "x": torch.cat(pulse_x_rows, dim=0),
+            "pos": torch.cat(pulse_pos_rows, dim=0),
             "detector_index": torch.cat(pulse_detector_index_rows, dim=0),
             "pulse_bounds": torch.cat(pulse_bounds_rows, dim=0),
             "batch": torch.cat(pulse_batch_rows, dim=0),
@@ -1737,7 +1745,7 @@ def train_hetero_model(
     hidden_dim: int = 128,
     num_layers: int = 2,
     dropout: float = 0.05,
-    model_architecture: str = "hetero_attention",
+    model_architecture: str = "minimal_hetero",
     attention_heads: int = 4,
     readout_heads: int = 4,
     waveform_encoder: str = "cnn",
@@ -1750,6 +1758,7 @@ def train_hetero_model(
     use_pulse_parent_waveform: bool | None = None,
     use_pulse_bounds: bool | None = None,
     pulse_waveform_encoder: str | None = None,
+    use_relative_positions: bool | None = None,
     detector_readout_mask: str | None = None,
     pulse_readout_mask: str | None = None,
     loss_mode: str = "physics",
@@ -1894,12 +1903,15 @@ def train_hetero_model(
         use_pulse_bounds = _env_flag("USE_PULSE_BOUNDS", True)
     use_pulse_bounds = bool(use_pulse_bounds)
     pulse_waveform_encoder = str(
-        pulse_waveform_encoder or os.environ.get("PULSE_WAVEFORM_ENCODER", "bounds")
+        pulse_waveform_encoder or os.environ.get("PULSE_WAVEFORM_ENCODER", "crop_cnn")
     ).strip()
     if pulse_waveform_encoder not in {"none", "bounds", "crop_cnn"}:
         raise ValueError("pulse_waveform_encoder must be none, bounds, or crop_cnn")
+    if use_relative_positions is None:
+        use_relative_positions = _env_flag("USE_RELATIVE_POSITIONS", True)
+    use_relative_positions = bool(use_relative_positions)
     detector_readout_mask = str(
-        detector_readout_mask or os.environ.get("DETECTOR_READOUT_MASK", "all")
+        detector_readout_mask or os.environ.get("DETECTOR_READOUT_MASK", "signal")
     ).strip()
     if detector_readout_mask not in {"all", "signal", "ising_kept"}:
         raise ValueError("detector_readout_mask must be all, signal, or ising_kept")
@@ -2175,6 +2187,7 @@ def train_hetero_model(
         f"use_pulse_parent_waveform={int(use_pulse_parent_waveform)} "
         f"use_pulse_bounds={int(use_pulse_bounds)} "
         f"pulse_waveform_encoder={pulse_waveform_encoder} "
+        f"use_relative_positions={int(use_relative_positions)} "
         f"detector_readout_mask={detector_readout_mask} "
         f"pulse_readout_mask={pulse_readout_mask} "
         f"dataloader_timeout_sec={float(dataloader_timeout_sec):.6g} "
@@ -2326,6 +2339,7 @@ def train_hetero_model(
         use_pulse_parent_waveform=use_pulse_parent_waveform,
         use_pulse_bounds=use_pulse_bounds,
         pulse_waveform_encoder=pulse_waveform_encoder,
+        use_relative_positions=use_relative_positions,
         detector_readout_mask=detector_readout_mask,
         pulse_readout_mask=pulse_readout_mask,
         architecture=model_architecture,
@@ -2350,6 +2364,7 @@ def train_hetero_model(
         f"embedding_dim={int(model_config_for_log.get('pulse_waveform_embedding_dim', 0) or 0)} "
         f"window_length={int(model_config_for_log.get('pulse_waveform_window_length', 0) or 0)} "
         f"rise_anchor_bin={int(model_config_for_log.get('pulse_waveform_rise_anchor_bin', 0) or 0)} "
+        f"use_relative_positions={int(model_config_for_log.get('use_relative_positions', False))} "
         f"detector_readout_mask={model_config_for_log.get('detector_readout_mask', 'all')} "
         f"pulse_readout_mask={model_config_for_log.get('pulse_readout_mask', 'all')}",
         flush=True,
@@ -2592,6 +2607,7 @@ def train_hetero_model(
             "use_pulse_parent_waveform": bool(use_pulse_parent_waveform),
             "use_pulse_bounds": bool(use_pulse_bounds),
             "pulse_waveform_encoder": str(pulse_waveform_encoder),
+            "use_relative_positions": bool(use_relative_positions),
             "detector_readout_mask": str(detector_readout_mask),
             "pulse_readout_mask": str(pulse_readout_mask),
             "data_loader": {
@@ -2625,6 +2641,7 @@ def train_hetero_model(
                 "coordinate_feature_mode": str(coordinate_feature_mode),
                 "use_pulse_parent_waveform": bool(use_pulse_parent_waveform),
                 "use_pulse_bounds": bool(use_pulse_bounds),
+                "use_relative_positions": bool(use_relative_positions),
                 "pulse_waveform_encoder": str(pulse_waveform_encoder),
                 "detector_readout_mask": str(detector_readout_mask),
                 "pulse_readout_mask": str(pulse_readout_mask),

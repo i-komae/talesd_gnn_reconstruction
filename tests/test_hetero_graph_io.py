@@ -533,8 +533,9 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             self.assertIn("hetero_training_data_format=fast_tensor", submit_result.stdout)
             self.assertIn("use_pulse_parent_waveform=1", submit_result.stdout)
             self.assertIn("use_pulse_bounds=1", submit_result.stdout)
-            self.assertIn("pulse_waveform_encoder=bounds", submit_result.stdout)
-            self.assertIn("detector_readout_mask=all", submit_result.stdout)
+            self.assertIn("pulse_waveform_encoder=crop_cnn", submit_result.stdout)
+            self.assertIn("use_relative_positions=1", submit_result.stdout)
+            self.assertIn("detector_readout_mask=signal", submit_result.stdout)
             self.assertIn("pulse_readout_mask=all", submit_result.stdout)
             sbatch_path = (
                 tmp
@@ -565,8 +566,9 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             self.assertIn("--final-eval-data-format fast_tensor", direct_result.stdout)
             self.assertIn("--use-pulse-parent-waveform", direct_result.stdout)
             self.assertIn("--use-pulse-bounds", direct_result.stdout)
-            self.assertIn("--pulse-waveform-encoder bounds", direct_result.stdout)
-            self.assertIn("--detector-readout-mask all", direct_result.stdout)
+            self.assertIn("--pulse-waveform-encoder crop_cnn", direct_result.stdout)
+            self.assertIn("--use-relative-positions", direct_result.stdout)
+            self.assertIn("--detector-readout-mask signal", direct_result.stdout)
             self.assertIn("--pulse-readout-mask all", direct_result.stdout)
             self.assertIn("--scaler-cache", direct_result.stdout)
             self.assertIn("--reuse-scaler-cache", direct_result.stdout)
@@ -685,7 +687,10 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 self.assertEqual(handle.attrs["cache_mode"], "training")
                 self.assertIn("detector_features_all", handle)
                 self.assertIn("detector_waveforms_all", handle)
-                self.assertNotIn("detector_positions_km_all", handle)
+                self.assertIn("detector_positions_km_all", handle)
+                self.assertIn("pulse_positions_km_all", handle)
+                self.assertNotIn("detector_lids_all", handle)
+                self.assertNotIn("pulse_lids_all", handle)
                 self.assertIn("pulse_detector_index_all", handle)
                 self.assertIn("pulse_bounds_all", handle)
                 self.assertNotIn("metadata_json", handle["metadata"])
@@ -694,6 +699,8 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             try:
                 training_sample = flat.training_sample(0)
                 self.assertIn("detector_waveforms", training_sample)
+                self.assertIn("detector_positions_km", training_sample)
+                self.assertIn("pulse_positions_km", training_sample)
                 self.assertIn("pulse_detector_index", training_sample)
                 self.assertIn("pulse_bounds", training_sample)
                 with self.assertRaisesRegex(ValueError, "cache_mode=training"):
@@ -761,8 +768,9 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 with mock.patch.object(H5HeteroGraphDataset, "__getitem__", side_effect=AssertionError):
                     fast_sample = dataset[0]
                 self.assertNotIn("metadata", fast_sample)
-                self.assertNotIn("pos", fast_sample["detector"])
+                self.assertIn("pos", fast_sample["detector"])
                 self.assertNotIn("lid", fast_sample["detector"])
+                self.assertIn("pos", fast_sample["pulse"])
                 self.assertIn("detector_index", fast_sample["pulse"])
                 self.assertIn("pulse_bounds", fast_sample["pulse"])
                 self.assertIn("has_signal", fast_sample["detector"])
@@ -876,6 +884,65 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
         self.assertFalse(torch.allclose(pulse_node_input[1], pulse_node_input[2]))
         self.assertFalse(torch.allclose(pulse_node_input[1, -4:], pulse_node_input[2, -4:]))
 
+    def test_relative_positions_enter_detector_and_pulse_node_inputs(self) -> None:
+        graph = _synthetic_graph(0)
+        sample = dict(graph.__dict__)
+        sample["core_anchor"] = np.asarray([0.5, -1.25], dtype=np.float32)
+        batch = hetero_sample_to_tensors(sample)
+        model = MinimalHeteroTaleSdGNN.from_sample(
+            sample,
+            target_dim=6,
+            classification_dim=1,
+            hidden_dim=16,
+            num_layers=0,
+            dropout=0.0,
+            waveform_encoder="none",
+            waveform_embedding_dim=8,
+            use_pulse_parent_waveform=False,
+            use_pulse_bounds=False,
+            pulse_waveform_encoder="none",
+            use_relative_positions=True,
+        )
+        captured_detector: list[torch.Tensor] = []
+        captured_pulse: list[torch.Tensor] = []
+
+        detector_handle = model.detector_node_encoder[0].register_forward_pre_hook(
+            lambda _module, args: captured_detector.append(args[0].detach().clone())
+        )
+        pulse_handle = model.pulse_node_encoder[0].register_forward_pre_hook(
+            lambda _module, args: captured_pulse.append(args[0].detach().clone())
+        )
+        try:
+            model.eval()
+            with torch.no_grad():
+                output = model(batch)
+        finally:
+            detector_handle.remove()
+            pulse_handle.remove()
+
+        self.assertEqual(tuple(output.shape), (1, 7))
+        self.assertEqual(len(captured_detector), 1)
+        self.assertEqual(len(captured_pulse), 1)
+        anchor = sample["core_anchor"]
+        detector_rel_xy = graph.detector_positions_km[:, :2] - anchor[None, :]
+        detector_expected = np.column_stack(
+            [
+                detector_rel_xy,
+                graph.detector_positions_km[:, 2],
+                np.sqrt((detector_rel_xy**2).sum(axis=1) + graph.detector_positions_km[:, 2] ** 2),
+            ]
+        ).astype(np.float32)
+        pulse_rel_xy = graph.pulse_positions_km[:, :2] - anchor[None, :]
+        pulse_expected = np.column_stack(
+            [
+                pulse_rel_xy,
+                graph.pulse_positions_km[:, 2],
+                np.sqrt((pulse_rel_xy**2).sum(axis=1) + graph.pulse_positions_km[:, 2] ** 2),
+            ]
+        ).astype(np.float32)
+        np.testing.assert_allclose(captured_detector[0][:, -4:].numpy(), detector_expected, rtol=1.0e-6, atol=1.0e-6)
+        np.testing.assert_allclose(captured_pulse[0][:, -4:].numpy(), pulse_expected, rtol=1.0e-6, atol=1.0e-6)
+
     def test_fast_tensor_dataset_uses_training_sample_not_getitem(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             graph_path = Path(tmpdir) / "synthetic_hetero.h5"
@@ -937,15 +1004,10 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             dataset = H5HeteroGraphDataset(output, require_target=True, require_particle_label=True)
             try:
                 sample = dataset.training_sample(0)
-                for key in (
-                    "detector_positions_km",
-                    "detector_lids",
-                    "pulse_positions_km",
-                    "pulse_lids",
-                    "metadata",
-                    "attrs",
-                ):
+                for key in ("detector_lids", "pulse_lids", "metadata", "attrs"):
                     self.assertNotIn(key, sample)
+                self.assertIn("detector_positions_km", sample)
+                self.assertIn("pulse_positions_km", sample)
                 self.assertIn("detector_waveforms", sample)
                 self.assertIn("pulse_detector_index", sample)
                 self.assertIn("pulse_bounds", sample)
@@ -1882,8 +1944,8 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertEqual(result["metrics_json"], str(checkpoint_path) + ".metrics.json")
             self.assertEqual(result["milestone_metrics_jsonl"], str(checkpoint_path) + ".milestone_metrics.jsonl")
             checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-            self.assertEqual(checkpoint["model_config"]["architecture"], "hetero_attention")
-            self.assertEqual(checkpoint["runtime"]["model_architecture"], "hetero_attention")
+            self.assertEqual(checkpoint["model_config"]["architecture"], "minimal_hetero")
+            self.assertEqual(checkpoint["runtime"]["model_architecture"], "minimal_hetero")
             self.assertEqual(checkpoint["model_config"]["quality_dim"], 1)
             self.assertEqual(checkpoint["model_config"]["error_dim"], 0)
             self.assertEqual(checkpoint["runtime"]["gradient_accumulation_steps"], 2)
@@ -2030,6 +2092,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                 num_layers=1,
                 dropout=0.0,
                 waveform_embedding_dim=8,
+                model_architecture="hetero_attention",
                 mass_classification=True,
                 split_mode="event",
                 device="cpu",
@@ -2050,6 +2113,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                 num_layers=1,
                 dropout=0.0,
                 waveform_embedding_dim=8,
+                model_architecture="hetero_attention",
                 mass_classification=True,
                 split_mode="event",
                 device="cpu",
@@ -2325,6 +2389,7 @@ class HeteroGraphIoTest(unittest.TestCase):
                 num_layers=1,
                 dropout=0.0,
                 waveform_embedding_dim=8,
+                model_architecture="hetero_attention",
                 mass_classification=True,
                 split_mode="event",
                 device="cpu",

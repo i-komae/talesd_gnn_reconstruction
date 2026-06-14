@@ -4423,6 +4423,12 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         waveform_transformer_layers=args.waveform_transformer_layers,
         waveform_transformer_max_tokens=args.waveform_transformer_max_tokens,
         waveform_transformer_downsample=args.waveform_transformer_downsample,
+        use_pulse_parent_waveform=args.use_pulse_parent_waveform,
+        use_pulse_bounds=args.use_pulse_bounds,
+        pulse_waveform_encoder=args.pulse_waveform_encoder,
+        use_relative_positions=args.use_relative_positions,
+        detector_readout_mask=args.detector_readout_mask,
+        pulse_readout_mask=args.pulse_readout_mask,
         loss_mode=args.loss_mode,
         energy_loss_weight=args.energy_loss_weight,
         core_loss_weight=args.core_loss_weight,
@@ -5077,8 +5083,8 @@ def build_parser() -> argparse.ArgumentParser:
     train_hetero.add_argument(
         "--model-architecture",
         choices=["minimal_hetero", "hetero_attention"],
-        default="hetero_attention",
-        help="hetero model architecture。通常は relation attention を持つ hetero_attention を使う",
+        default="minimal_hetero",
+        help="hetero model architecture。既定は minimal_hetero。hetero_attention はrelation attention ablation用",
     )
     train_hetero.add_argument("--attention-heads", type=int, default=4, help="hetero relation attention head数")
     train_hetero.add_argument("--readout-heads", type=int, default=4, help="detector/pulse type別 attention readout head数")
@@ -5129,6 +5135,19 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["none", "bounds", "crop_cnn"],
         default=None,
         help="pulse-local waveform branch。bounds は crop encoder を使わず bounds feature のみ、crop_cnn は短いcropをCNNでencodeする",
+    )
+    train_hetero.add_argument(
+        "--use-relative-positions",
+        dest="use_relative_positions",
+        action="store_true",
+        default=None,
+        help="detector/pulse positions を graph-level core_anchor からの相対座標として node 入力へ渡す",
+    )
+    train_hetero.add_argument(
+        "--no-use-relative-positions",
+        dest="use_relative_positions",
+        action="store_false",
+        help="detector/pulse relative position features を node 入力へ渡さない",
     )
     train_hetero.add_argument(
         "--detector-readout-mask",

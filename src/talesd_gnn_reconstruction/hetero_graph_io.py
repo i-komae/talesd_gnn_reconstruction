@@ -602,7 +602,7 @@ def convert_hetero_to_flat_cache(
         if cache_mode == "training":
             print(
                 "hetero_flat_cache_note "
-                "cache_mode=training stores training tensors, pulse waveform references, and minimal split metadata; "
+                "cache_mode=training stores training tensors, relative-position inputs, pulse waveform references, and minimal split metadata; "
                 "use grouped HDF5 for visualization and attention maps",
                 flush=True,
             )
@@ -679,8 +679,8 @@ def convert_hetero_to_flat_cache(
                 dtype=np.float32,
                 **filter_kwargs,
             )
+            arrays.create_dataset("detector_positions_km", shape=(detector_total, 3), dtype=np.float32, **filter_kwargs)
             if full_cache:
-                arrays.create_dataset("detector_positions_km", shape=(detector_total, 3), dtype=np.float32, **filter_kwargs)
                 arrays.create_dataset("detector_lids", shape=(detector_total,), dtype=np.int64, **filter_kwargs)
             arrays.create_dataset(
                 "detector_waveforms",
@@ -689,8 +689,8 @@ def convert_hetero_to_flat_cache(
                 **filter_kwargs,
             )
             arrays.create_dataset("pulse_features", shape=(pulse_total, pulse_dim), dtype=np.float32, **filter_kwargs)
+            arrays.create_dataset("pulse_positions_km", shape=(pulse_total, 3), dtype=np.float32, **filter_kwargs)
             if full_cache:
-                arrays.create_dataset("pulse_positions_km", shape=(pulse_total, 3), dtype=np.float32, **filter_kwargs)
                 arrays.create_dataset("pulse_lids", shape=(pulse_total,), dtype=np.int64, **filter_kwargs)
             arrays.create_dataset("pulse_detector_index", shape=(pulse_total,), dtype=np.int64, **filter_kwargs)
             arrays.create_dataset("pulse_bounds", shape=(pulse_total, 4), dtype=np.float32, **filter_kwargs)
@@ -725,13 +725,13 @@ def convert_hetero_to_flat_cache(
             # transition.
             handle["detector_features_all"] = arrays["detector_features"]
             handle["detector_context_features_all"] = arrays["detector_context_features"]
+            handle["detector_positions_km_all"] = arrays["detector_positions_km"]
             if full_cache:
-                handle["detector_positions_km_all"] = arrays["detector_positions_km"]
                 handle["detector_lids_all"] = arrays["detector_lids"]
             handle["detector_waveforms_all"] = arrays["detector_waveforms"]
             handle["pulse_features_all"] = arrays["pulse_features"]
+            handle["pulse_positions_km_all"] = arrays["pulse_positions_km"]
             if full_cache:
-                handle["pulse_positions_km_all"] = arrays["pulse_positions_km"]
                 handle["pulse_lids_all"] = arrays["pulse_lids"]
             handle["pulse_detector_index_all"] = arrays["pulse_detector_index"]
             handle["pulse_bounds_all"] = arrays["pulse_bounds"]
@@ -760,16 +760,16 @@ def convert_hetero_to_flat_cache(
                 pulse_slice = slice(pulse_cursor, pulse_cursor + n_pulse)
                 arrays["detector_features"][detector_slice] = sample["detector_features"]
                 arrays["detector_context_features"][detector_slice] = sample["detector_context_features"]
+                arrays["detector_positions_km"][detector_slice] = sample["detector_positions_km"]
                 if full_cache:
-                    arrays["detector_positions_km"][detector_slice] = sample["detector_positions_km"]
                     arrays["detector_lids"][detector_slice] = sample["detector_lids"]
                 arrays["detector_waveforms"][detector_slice] = _pad_waveforms(
                     sample["detector_waveforms"],
                     waveform_length,
                 )
                 arrays["pulse_features"][pulse_slice] = sample["pulse_features"]
+                arrays["pulse_positions_km"][pulse_slice] = sample["pulse_positions_km"]
                 if full_cache:
-                    arrays["pulse_positions_km"][pulse_slice] = sample["pulse_positions_km"]
                     arrays["pulse_lids"][pulse_slice] = sample["pulse_lids"]
                 arrays["pulse_detector_index"][pulse_slice] = sample["pulse_detector_index"]
                 arrays["pulse_bounds"][pulse_slice] = sample["pulse_bounds"]
@@ -1114,8 +1114,10 @@ class H5HeteroGraphDataset:
         for name in (
             "detector_features",
             "detector_context_features",
+            "detector_positions_km",
             "detector_waveforms",
             "pulse_features",
+            "pulse_positions_km",
         ):
             total += self._dataset_nbytes(group[name])
         if "target" in group:
@@ -1176,8 +1178,10 @@ class H5HeteroGraphDataset:
         return {
             "detector_features": self._filter_detector_features(group["detector_features"][()].astype(np.float32)),
             "detector_context_features": group["detector_context_features"][()].astype(np.float32),
+            "detector_positions_km": group["detector_positions_km"][()].astype(np.float32),
             "detector_waveforms": group["detector_waveforms"][()].astype(np.float32),
             "pulse_features": self._filter_pulse_features(raw_pulse_features),
+            "pulse_positions_km": group["pulse_positions_km"][()].astype(np.float32),
             "pulse_detector_index": group["pulse_detector_index"][()].astype(np.int64),
             "pulse_bounds": group["pulse_bounds"][()].astype(np.float32),
             "edge_index_by_type": self._read_edge_group(group["edge_index_by_type"]),
@@ -1495,8 +1499,10 @@ class H5FlatHeteroGraphDataset:
         for name, rows in (
             ("detector_features", n_detector),
             ("detector_context_features", n_detector),
+            ("detector_positions_km", n_detector),
             ("detector_waveforms", n_detector),
             ("pulse_features", n_pulse),
+            ("pulse_positions_km", n_pulse),
             ("pulse_detector_index", n_pulse),
             ("pulse_bounds", n_pulse),
         ):
@@ -1585,10 +1591,12 @@ class H5FlatHeteroGraphDataset:
                 self._array_dataset(handle, "detector_features")[detector_slice].astype(np.float32)
             ),
             "detector_context_features": self._array_dataset(handle, "detector_context_features")[detector_slice].astype(np.float32),
+            "detector_positions_km": self._array_dataset(handle, "detector_positions_km")[detector_slice].astype(np.float32),
             "detector_waveforms": self._array_dataset(handle, "detector_waveforms")[detector_slice].astype(np.float32),
             "pulse_features": self._filter_pulse_features(
                 self._array_dataset(handle, "pulse_features")[pulse_slice].astype(np.float32)
             ),
+            "pulse_positions_km": self._array_dataset(handle, "pulse_positions_km")[pulse_slice].astype(np.float32),
             "edge_index_by_type": edge_index_by_type,
             "edge_features_by_type": edge_features_by_type,
             "target": self._prepare_target(target, core_anchor),

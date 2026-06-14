@@ -216,10 +216,10 @@ def hetero_sample_to_training_tensors(
 ) -> dict[str, Any]:
     """Convert a minimal HDF5 sample to the tensor dict used for training.
 
-    This path intentionally does not require positions, lids, or metadata.
-    It keeps pulse_detector_index and pulse_bounds because the training model
-    uses them to extract pulse-window waveform embeddings from detector-level
-    waveforms.
+    This path intentionally does not require lids or metadata. It keeps
+    positions, pulse_detector_index, and pulse_bounds because the training
+    model uses positions for relative coordinate features and pulse references
+    to extract pulse-window waveform embeddings from detector-level waveforms.
     """
 
     resolved_device = torch.device(device) if device is not None else None
@@ -260,10 +260,21 @@ def hetero_sample_to_training_tensors(
         target_tensor = _scale_tensor(target_tensor, _scaler_for(scalers, "target"))
     particle_label = sample.get("particle_label")
     core_anchor = sample.get("core_anchor")
+    detector_positions = sample.get("detector_positions_km")
+    if detector_positions is None:
+        detector_positions_tensor = torch.zeros(detector_features.shape[0], 3, dtype=torch.float32, device=resolved_device)
+    else:
+        detector_positions_tensor = _tensor(detector_positions, dtype=torch.float32, device=resolved_device)
+    pulse_positions = sample.get("pulse_positions_km")
+    if pulse_positions is None:
+        pulse_positions_tensor = torch.zeros(pulse_features.shape[0], 3, dtype=torch.float32, device=resolved_device)
+    else:
+        pulse_positions_tensor = _tensor(pulse_positions, dtype=torch.float32, device=resolved_device)
     return {
         "detector": {
             "x": detector_features,
             "context": detector_context,
+            "pos": detector_positions_tensor,
             "waveform": normalize_detector_waveforms(
                 _tensor(sample["detector_waveforms"], dtype=torch.float32, device=resolved_device),
                 waveform_length,
@@ -274,6 +285,7 @@ def hetero_sample_to_training_tensors(
         },
         "pulse": {
             "x": pulse_features,
+            "pos": pulse_positions_tensor,
             "detector_index": _long_tensor(sample["pulse_detector_index"], device=resolved_device)
             if "pulse_detector_index" in sample
             else torch.zeros(pulse_features.shape[0], dtype=torch.long, device=resolved_device),
