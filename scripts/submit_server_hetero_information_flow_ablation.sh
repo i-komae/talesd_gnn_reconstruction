@@ -8,9 +8,10 @@ usage() {
 Usage:
   GRAPH_INPUT=/path/to/hetero_graphs scripts/submit_server_hetero_information_flow_ablation.sh
 
-Submit five 2-epoch hetero information-flow ablations:
+Submit six 2-epoch hetero information-flow ablations:
   A current baseline, B parent waveform, C parent waveform + bounds,
-  D parent waveform + bounds + minimal relations, E waveform off + minimal.
+  D parent waveform + bounds + minimal relations, E waveform off + minimal,
+  F old-like pulse waveform crop + minimal relations.
 
 This submitter keeps the training task/loss/split/resource defaults from the
 normal hetero reco+mass quality submitter and only changes the information-flow
@@ -83,3 +84,4 @@ submit_one "b_parent_waveform" "1" "0" "none" "all" "${WAVEFORM_ENCODER:-transfo
 submit_one "c_parent_waveform_bounds" "1" "1" "bounds" "all" "${WAVEFORM_ENCODER:-transformer}"
 submit_one "d_parent_bounds_minimal" "1" "1" "bounds" "minimal" "${WAVEFORM_ENCODER:-transformer}"
 submit_one "e_waveform_off_minimal" "0" "1" "bounds" "minimal" "none"
+submit_one "f_pulse_crop_cnn_minimal" "1" "1" "crop_cnn" "minimal" "${WAVEFORM_ENCODER:-cnn-gru}"

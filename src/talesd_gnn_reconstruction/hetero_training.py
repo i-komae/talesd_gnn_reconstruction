@@ -1593,6 +1593,26 @@ def _append_component_mean(row: dict[str, Any], prefix: str, component_sums: dic
             row[f"{prefix}_{name}_loss"] = _mean_tensor_value(value_sum, count)
 
 
+def _format_epoch_component_losses(row: Mapping[str, Any], prefix: str) -> str:
+    parts = []
+    prefix_text = f"{prefix}_"
+    for key in sorted(row):
+        if not key.startswith(prefix_text) or not key.endswith("_loss"):
+            continue
+        if key in {f"{prefix}_loss"}:
+            continue
+        value = row.get(key)
+        try:
+            value_float = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(value_float):
+            continue
+        label = key[len(prefix_text) : -len("_loss")]
+        parts.append(f"{label}:{value_float:.6g}")
+    return ",".join(parts)
+
+
 def _parse_epoch_list(value: Sequence[int] | str | None, *, env_name: str, default: str) -> tuple[int, ...]:
     if value is None:
         value = os.environ.get(env_name, default)
@@ -3313,13 +3333,17 @@ def train_hetero_model(
         history.append(epoch_row)
         epoch_elapsed = time.monotonic() - epoch_start
         train_graphs_per_sec = float(len(train_indices)) / epoch_elapsed if epoch_elapsed > 0 else 0.0
+        train_components_text = _format_epoch_component_losses(epoch_row, "train")
+        val_components_text = _format_epoch_component_losses(epoch_row, "val")
         print(
             "hetero_train_epoch "
             f"stage=done epoch={epoch}/{int(epochs)} "
             f"elapsed={_format_duration(epoch_elapsed)} "
             f"train_graphs_per_sec={train_graphs_per_sec:.6g} "
             f"train_loss={epoch_row['train_loss']:.6g} "
-            f"val_loss={epoch_row['val_loss']:.6g}"
+            f"val_loss={epoch_row['val_loss']:.6g} "
+            f"train_components={train_components_text or 'none'} "
+            f"val_components={val_components_text or 'none'}"
         )
         if profile_enabled:
             cuda_allocated_mb = float("nan")

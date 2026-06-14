@@ -59,6 +59,7 @@ from talesd_gnn_reconstruction.hetero_training import (
     _collate_tensor_hetero_graphs,
     _estimate_graph_bytes,
     _filter_batch_relations,
+    _format_epoch_component_losses,
     _parse_relation_filter,
     _resolve_loader_settings,
     _split_dataset,
@@ -570,6 +571,34 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             self.assertIn("--scaler-cache", direct_result.stdout)
             self.assertIn("--reuse-scaler-cache", direct_result.stdout)
 
+    def test_information_flow_ablation_includes_old_like_pulse_crop(self) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            graph_dir = tmp / "graphs"
+            graph_dir.mkdir()
+            env = os.environ.copy()
+            env.update(
+                {
+                    "GRAPH_INPUT": str(graph_dir),
+                    "OUTPUT_ROOT": str(tmp / "output"),
+                    "RUN_ID": "dry_infoflow",
+                    "DRY_RUN": "1",
+                }
+            )
+            result = subprocess.run(
+                ["bash", "scripts/submit_server_hetero_information_flow_ablation.sh"],
+                cwd=repo,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertIn("tag=f_pulse_crop_cnn_minimal", result.stdout)
+            self.assertIn("pulse_waveform_encoder=crop_cnn", result.stdout)
+            self.assertIn("relation_preset=minimal", result.stdout)
+            self.assertIn("waveform_encoder=cnn-gru", result.stdout)
+
     def test_dstio_v3_columns_are_used(self) -> None:
         self.assertEqual(GRAPH_DEFINITION, tale_graph.GRAPH_DEFINITION)
         self.assertEqual(GRAPH_DEFINITION, "tale_sd_hetero_ising_pulse_detector_graph_v3")
@@ -787,6 +816,24 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
         self.assertNotIn("pulse__time_causal__pulse", _parse_relation_filter("all", preset="no_pulse_causal"))
         self.assertIn("pulse__near_space__pulse", _parse_relation_filter("all", preset="no_pulse_causal"))
         self.assertEqual(_parse_relation_filter("pulse__near_space__pulse", preset="minimal"), {"pulse__near_space__pulse"})
+
+    def test_epoch_component_loss_formatter(self) -> None:
+        text = _format_epoch_component_losses(
+            {
+                "train_loss": 10.0,
+                "train_core_loss": 2.5,
+                "train_direction_loss": 3.5,
+                "train_energy_loss": 1.5,
+                "val_core_loss": 9.0,
+                "train_nan_loss": float("nan"),
+            },
+            "train",
+        )
+        self.assertIn("core:2.5", text)
+        self.assertIn("direction:3.5", text)
+        self.assertIn("energy:1.5", text)
+        self.assertNotIn("loss:10", text)
+        self.assertNotIn("nan", text)
 
     def test_pulse_bounds_change_pulse_node_input_before_message_passing(self) -> None:
         graph = _synthetic_graph(0)
