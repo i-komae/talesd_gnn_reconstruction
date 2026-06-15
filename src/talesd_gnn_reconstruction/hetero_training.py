@@ -590,6 +590,7 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
     pulse_pos_rows = []
     pulse_detector_index_rows = []
     pulse_bounds_rows = []
+    pulse_ising_keep_rows = []
     pulse_batch_rows = []
     target_rows = []
     core_anchor_rows = []
@@ -632,6 +633,9 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
             pulse_bounds_rows.append(bounds[:, :4])
         else:
             pulse_bounds_rows.append(torch.zeros((n_pulse, 4), dtype=torch.float32))
+        pulse_ising_keep_rows.append(
+            pulse.get("ising_keep", torch.ones((n_pulse,), dtype=torch.float32)).reshape(-1).to(dtype=torch.float32)
+        )
         pulse_batch_rows.append(torch.full((n_pulse,), int(graph_index), dtype=torch.long))
         if sample["target"] is not None:
             target_rows.append(sample["target"].reshape(1, -1))
@@ -683,6 +687,7 @@ def _collate_tensor_hetero_graphs(samples: Sequence[dict[str, Any]]) -> dict[str
             "pos": torch.cat(pulse_pos_rows, dim=0),
             "detector_index": torch.cat(pulse_detector_index_rows, dim=0),
             "pulse_bounds": torch.cat(pulse_bounds_rows, dim=0),
+            "ising_keep": torch.cat(pulse_ising_keep_rows, dim=0),
             "batch": torch.cat(pulse_batch_rows, dim=0),
         },
         "edge_index_by_type": collated_edges,
@@ -1921,8 +1926,8 @@ def train_hetero_model(
     if detector_readout_mask not in {"all", "signal", "ising_kept"}:
         raise ValueError("detector_readout_mask must be all, signal, or ising_kept")
     pulse_readout_mask = str(pulse_readout_mask or os.environ.get("PULSE_READOUT_MASK", "all")).strip()
-    if pulse_readout_mask not in {"all", "valid"}:
-        raise ValueError("pulse_readout_mask must be all or valid")
+    if pulse_readout_mask not in {"all", "valid", "ising_kept"}:
+        raise ValueError("pulse_readout_mask must be all, valid, or ising_kept")
     core_target_mode = normalize_core_target_mode(
         core_target_mode or os.environ.get("CORE_TARGET_MODE", "signal_bary_relative")
     )

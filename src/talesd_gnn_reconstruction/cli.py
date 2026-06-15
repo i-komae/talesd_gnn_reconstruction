@@ -5157,9 +5157,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train_hetero.add_argument(
         "--pulse-readout-mask",
-        choices=["all", "valid"],
+        choices=["all", "valid", "ising_kept"],
         default=None,
-        help="graph readoutに使うpulse nodeのmask",
+        help="graph readout/message passingに使うpulse nodeのmask",
     )
     train_hetero.add_argument(
         "--loss-mode",

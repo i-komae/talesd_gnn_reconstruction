@@ -422,6 +422,11 @@ def _pulse_readout_mask(pulse: Mapping[str, Any], mode: str) -> torch.Tensor | N
     mode = str(mode)
     if mode == "all":
         return None
+    if mode == "ising_kept":
+        ising_keep = pulse.get("ising_keep")
+        if ising_keep is None:
+            return None
+        return ising_keep.reshape(-1).to(dtype=torch.float32) > 0.5
     if mode != "valid":
         raise ValueError(f"unknown pulse_readout_mask: {mode}")
     detector_index = pulse.get("detector_index")
@@ -485,8 +490,8 @@ class MinimalHeteroTaleSdGNN(nn.Module):
             raise ValueError("architecture must be 'minimal_hetero' or 'hetero_attention'")
         if detector_readout_mask not in {"all", "signal", "ising_kept"}:
             raise ValueError("detector_readout_mask must be all, signal, or ising_kept")
-        if pulse_readout_mask not in {"all", "valid"}:
-            raise ValueError("pulse_readout_mask must be all or valid")
+        if pulse_readout_mask not in {"all", "valid", "ising_kept"}:
+            raise ValueError("pulse_readout_mask must be all, valid, or ising_kept")
         if pulse_waveform_encoder is None:
             # Backward compatibility: checkpoints created before the explicit
             # pulse waveform mode stored only a nonzero embedding dimension.
@@ -928,9 +933,10 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         else:
             node_states["pulse"] = self.pulse_node_encoder(pulse_x)
         detector_message_mask = _detector_readout_mask(detector, self.detector_readout_mask)
+        pulse_message_mask = _pulse_readout_mask(pulse, self.pulse_readout_mask)
         node_message_masks: dict[str, torch.Tensor | None] | None = None
-        if detector_message_mask is not None:
-            node_message_masks = {"detector": detector_message_mask, "pulse": None}
+        if detector_message_mask is not None or pulse_message_mask is not None:
+            node_message_masks = {"detector": detector_message_mask, "pulse": pulse_message_mask}
         layer_attention = []
         for layer_index, layer in enumerate(self.layers):
             if return_attention and isinstance(layer, HeteroAttentionMessageLayer):
@@ -960,7 +966,7 @@ class MinimalHeteroTaleSdGNN(nn.Module):
         pulse_readout_state, pulse_readout_batch = _masked_readout_input(
             node_states["pulse"],
             pulse["batch"],
-            _pulse_readout_mask(pulse, self.pulse_readout_mask),
+            pulse_message_mask,
         )
         if self.architecture == "hetero_attention":
             if return_attention:

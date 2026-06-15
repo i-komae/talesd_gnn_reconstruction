@@ -20,6 +20,7 @@ EDGE_TYPE_BY_RELATION: dict[str, tuple[str, str, str]] = {
 DETECTOR_WAVEFORM_VALID_COLUMN = "detector_waveform_valid"
 DETECTOR_HAS_SIGNAL_COLUMN = "detector_has_signal"
 DETECTOR_HAS_ISING_KEPT_COLUMN = "detector_has_ising_kept_pulse"
+PULSE_ISING_KEEP_COLUMN = "ising_keep"
 V3_DETECTOR_FEATURE_COLUMNS = (
     # v3-compatible name kept by dstio: this is the detector node time,
     # defined as the first Ising-kept pulse onset on the pulse_arrival_usec_rel
@@ -85,6 +86,34 @@ def _detector_flag_from_features(
     )
 
 
+def _pulse_feature_index_from_sample(sample: Mapping[str, Any], name: str) -> int | None:
+    columns = sample.get("pulse_feature_columns")
+    if columns is None:
+        return None
+    try:
+        return int([str(column) for column in columns].index(str(name)))
+    except ValueError:
+        return None
+
+
+def _pulse_flag_from_features(
+    sample: Mapping[str, Any],
+    pulse_features: torch.Tensor,
+    name: str,
+    *,
+    default: float,
+) -> torch.Tensor:
+    index = _pulse_feature_index_from_sample(sample, name)
+    if index is not None and index < pulse_features.shape[1]:
+        return pulse_features[:, index].to(dtype=torch.float32).clamp(0.0, 1.0)
+    return torch.full(
+        (pulse_features.shape[0],),
+        float(default),
+        dtype=torch.float32,
+        device=pulse_features.device,
+    )
+
+
 class TorchGeometricUnavailableError(ImportError):
     """Raised when PyG conversion is requested without torch_geometric installed."""
 
@@ -142,6 +171,7 @@ def hetero_sample_to_tensors(
         sample, detector_features, DETECTOR_HAS_ISING_KEPT_COLUMN, default=1.0
     )
     pulse_features = _tensor(sample["pulse_features"], dtype=torch.float32, device=resolved_device)
+    pulse_ising_keep = _pulse_flag_from_features(sample, pulse_features, PULSE_ISING_KEEP_COLUMN, default=1.0)
     edge_index_by_type = {
         relation: _long_tensor(edge_index, device=resolved_device)
         for relation, edge_index in sample["edge_index_by_type"].items()
@@ -192,6 +222,7 @@ def hetero_sample_to_tensors(
             "lid": _long_tensor(sample["pulse_lids"], device=resolved_device),
             "detector_index": _long_tensor(sample["pulse_detector_index"], device=resolved_device),
             "pulse_bounds": _tensor(sample["pulse_bounds"], dtype=torch.float32, device=resolved_device),
+            "ising_keep": pulse_ising_keep,
             "batch": torch.zeros(pulse_features.shape[0], dtype=torch.long, device=resolved_device),
         },
         "edge_index_by_type": edge_index_by_type,
@@ -242,10 +273,9 @@ def hetero_sample_to_training_tensors(
         _tensor(sample["detector_context_features"], dtype=torch.float32, device=resolved_device),
         _scaler_for(scalers, "detector_context", "detector_context_features"),
     )
-    pulse_features = _scale_tensor(
-        _tensor(sample["pulse_features"], dtype=torch.float32, device=resolved_device),
-        _scaler_for(scalers, "pulse", "pulse_features"),
-    )
+    raw_pulse_features = _tensor(sample["pulse_features"], dtype=torch.float32, device=resolved_device)
+    pulse_ising_keep = _pulse_flag_from_features(sample, raw_pulse_features, PULSE_ISING_KEEP_COLUMN, default=1.0)
+    pulse_features = _scale_tensor(raw_pulse_features, _scaler_for(scalers, "pulse", "pulse_features"))
     edge_index_by_type = {
         relation: _long_tensor(edge_index, device=resolved_device)
         for relation, edge_index in sample["edge_index_by_type"].items()
@@ -297,6 +327,7 @@ def hetero_sample_to_training_tensors(
             "pulse_bounds": _tensor(sample["pulse_bounds"], dtype=torch.float32, device=resolved_device)
             if "pulse_bounds" in sample
             else torch.zeros(pulse_features.shape[0], 4, dtype=torch.float32, device=resolved_device),
+            "ising_keep": pulse_ising_keep,
         },
         "edge_index_by_type": edge_index_by_type,
         "edge_features_by_type": edge_features_by_type,
@@ -372,6 +403,7 @@ def sample_to_hetero_data(
     data["pulse"].lid = tensors["pulse"]["lid"]
     data["pulse"].detector_index = tensors["pulse"]["detector_index"]
     data["pulse"].pulse_bounds = tensors["pulse"]["pulse_bounds"]
+    data["pulse"].ising_keep = tensors["pulse"]["ising_keep"]
 
     for relation, edge_type in EDGE_TYPE_BY_RELATION.items():
         edge_index = tensors["edge_index_by_type"].get(relation)
@@ -449,6 +481,9 @@ def hetero_data_to_tensors(data: Any) -> dict[str, Any]:
             "lid": pulse["lid"].to(dtype=torch.long),
             "detector_index": pulse["detector_index"].to(dtype=torch.long),
             "pulse_bounds": pulse["pulse_bounds"].to(dtype=torch.float32),
+            "ising_keep": pulse["ising_keep"].to(dtype=torch.float32)
+            if "ising_keep" in pulse
+            else torch.ones(pulse_x.shape[0], dtype=torch.float32, device=pulse_x.device),
             "batch": _storage_batch(pulse, pulse_x.shape[0], device=pulse_x.device),
         },
         "edge_index_by_type": edge_index_by_type,

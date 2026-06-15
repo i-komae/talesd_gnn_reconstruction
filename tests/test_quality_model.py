@@ -5,7 +5,7 @@ import unittest
 
 import torch
 
-from talesd_gnn_reconstruction.hetero_model import HeteroAttentionMessageLayer, HeteroAttentiveReadout
+from talesd_gnn_reconstruction.hetero_model import HeteroAttentionMessageLayer, HeteroAttentiveReadout, _pulse_readout_mask
 from talesd_gnn_reconstruction.model import PhysicsTaleSdGNN, WaveformEncoder, _scatter_softmax, build_model_from_config
 from talesd_gnn_reconstruction.train import (
     _angular_loss_from_vectors,
@@ -18,6 +18,17 @@ from talesd_gnn_reconstruction.train import (
 
 
 class QualityModelTest(unittest.TestCase):
+    def test_pulse_ising_kept_mask_uses_ising_keep_flag(self) -> None:
+        pulse = {
+            "ising_keep": torch.tensor([1.0, 0.0, 1.0, 0.0]),
+            "detector_index": torch.tensor([0, 1, 2, 3]),
+            "pulse_bounds": torch.zeros(4, 4),
+        }
+
+        mask = _pulse_readout_mask(pulse, "ising_kept")
+
+        self.assertTrue(torch.equal(mask, torch.tensor([True, False, True, False])))
+
     def test_waveform_transformer_masks_invalid_rows_and_caps_tokens(self) -> None:
         torch.manual_seed(123)
         encoder = WaveformEncoder(
