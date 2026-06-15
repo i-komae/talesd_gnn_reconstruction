@@ -4485,6 +4485,7 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         milestone_eval_max_graphs=args.milestone_eval_max_graphs,
         milestone_eval_current_model=args.milestone_eval_current_model,
         milestone_eval_best_model=args.milestone_eval_best_model,
+        milestone_eval_diagnostics=args.milestone_eval_diagnostics,
         pin_memory=None if not args.no_pin_memory else False,
         loader_memory_budget_gib=args.loader_memory_budget_gib,
         loader_memory_estimate_samples=args.loader_memory_estimate_samples,
@@ -5289,6 +5290,19 @@ def build_parser() -> argparse.ArgumentParser:
         dest="milestone_eval_best_model",
         action="store_false",
         help="milestoneでbest modelを評価しない",
+    )
+    train_hetero.add_argument(
+        "--milestone-eval-diagnostics",
+        dest="milestone_eval_diagnostics",
+        action="store_true",
+        default=None,
+        help="milestone評価時にvalidation/testの診断PDF/JSONも保存する",
+    )
+    train_hetero.add_argument(
+        "--no-milestone-eval-diagnostics",
+        dest="milestone_eval_diagnostics",
+        action="store_false",
+        help="milestone評価時の診断PDF/JSON保存を止める",
     )
     train_hetero.add_argument("--no-pin-memory", action="store_true", help="CUDA転送用のpinned memoryを使わない")
     train_hetero.add_argument(

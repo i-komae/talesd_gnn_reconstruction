@@ -1966,9 +1966,10 @@ class HeteroGraphIoTest(unittest.TestCase):
                     checkpoint_milestones=(1,),
                     checkpoint_milestone_full_eval=True,
                     milestone_eval_epochs=(1,),
-                    milestone_eval_split="validation",
-                    milestone_eval_current_model=True,
-                    milestone_eval_best_model=False,
+                    milestone_eval_split="validation,test",
+                    milestone_eval_current_model=False,
+                    milestone_eval_best_model=True,
+                    milestone_eval_diagnostics=True,
                     show_progress=False,
                 )
             train_log = output.getvalue()
@@ -1979,7 +1980,9 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertIn("hetero_core_anchor mode=signal_bary_relative weight_column=log10_pulse_rho warning=none", train_log)
             self.assertIn("hetero_core_anchor_source source=recomputed_from_pulse_positions", train_log)
             self.assertIn("hetero_milestone_eval_start epoch=1", train_log)
-            self.assertIn("hetero_milestone_metrics epoch=1 split=validation model=current", train_log)
+            self.assertIn("hetero_milestone_metrics epoch=1 split=validation model=best", train_log)
+            self.assertIn("hetero_milestone_metrics epoch=1 split=test model=best", train_log)
+            self.assertIn("hetero_milestone_diagnostics_done epoch=1 model=best", train_log)
 
             self.assertEqual(result["checkpoint"], str(checkpoint_path))
             self.assertEqual(result["metrics_json"], str(checkpoint_path) + ".metrics.json")
@@ -2015,21 +2018,31 @@ class HeteroGraphIoTest(unittest.TestCase):
             self.assertTrue(checkpoint["runtime"]["quality_prediction"])
             self.assertFalse(checkpoint["runtime"]["error_prediction"])
             self.assertEqual(checkpoint["runtime"]["milestone_eval_epochs"], [1])
-            self.assertEqual(checkpoint["runtime"]["milestone_eval_splits"], ["validation"])
+            self.assertEqual(checkpoint["runtime"]["milestone_eval_splits"], ["validation", "test"])
+            self.assertTrue(checkpoint["runtime"]["milestone_eval_best_model"])
+            self.assertFalse(checkpoint["runtime"]["milestone_eval_current_model"])
+            self.assertTrue(checkpoint["runtime"]["milestone_eval_diagnostics"])
             self.assertTrue((Path(str(checkpoint_path) + ".metrics.json")).exists())
             milestone_jsonl = Path(str(checkpoint_path) + ".milestone_metrics.jsonl")
-            milestone_json = checkpoint_path.with_name("checkpoint.milestone_epoch0001.current.validation.json")
+            milestone_json = checkpoint_path.with_name("checkpoint.milestone_epoch0001.best.validation.json")
+            milestone_test_json = checkpoint_path.with_name("checkpoint.milestone_epoch0001.best.test.json")
             self.assertTrue(milestone_jsonl.exists())
             self.assertTrue(milestone_json.exists())
+            self.assertTrue(milestone_test_json.exists())
             milestone_record = json.loads(milestone_json.read_text())
             self.assertEqual(milestone_record["epoch"], 1)
-            self.assertEqual(milestone_record["model_kind"], "current")
+            self.assertEqual(milestone_record["model_kind"], "best")
             self.assertEqual(milestone_record["split"], "validation")
             self.assertIn("rmse_log10_energy", milestone_record["metrics"])
             self.assertIn("core_68_km", milestone_record["metrics"])
             self.assertIn("angular_68_deg", milestone_record["metrics"])
             self.assertIn("mass_auc", milestone_record["metrics"])
             self.assertIn("val_core_loss", milestone_record["loss"])
+            milestone_diag_dir = checkpoint_path.with_name("checkpoint.milestone_epoch0001.best.pt.diagnostics")
+            self.assertTrue((milestone_diag_dir / "learning_curve.pdf").exists())
+            self.assertTrue((milestone_diag_dir / "loss_component_curves.pdf").exists())
+            self.assertTrue((milestone_diag_dir / "prediction_cache.npz").exists())
+            self.assertTrue((milestone_diag_dir / "summary.json").exists())
             eval_path = Path(tmpdir) / "checkpoint_eval.json"
             eval_payload = evaluate_hetero_checkpoint(
                 graph_path,

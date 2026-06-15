@@ -1646,9 +1646,9 @@ def _parse_epoch_list(value: Sequence[int] | str | None, *, env_name: str, defau
 
 def _parse_milestone_splits(value: Sequence[str] | str | None) -> tuple[str, ...]:
     if value is None:
-        value = os.environ.get("MILESTONE_EVAL_SPLIT", "validation")
+        value = os.environ.get("MILESTONE_EVAL_SPLIT", "validation test")
     if isinstance(value, str):
-        raw_values = [item.strip().lower() for item in value.split(",") if item.strip()]
+        raw_values = [item.strip().lower() for item in value.replace(",", " ").split() if item.strip()]
     else:
         raw_values = [str(item).strip().lower() for item in value if str(item).strip()]
     normalized: list[str] = []
@@ -1827,6 +1827,7 @@ def train_hetero_model(
     milestone_eval_max_graphs: int | None = None,
     milestone_eval_current_model: bool | None = None,
     milestone_eval_best_model: bool | None = None,
+    milestone_eval_diagnostics: bool | None = None,
     pin_memory: bool | None = None,
     loader_memory_budget_gib: float | None = None,
     loader_memory_estimate_samples: int = 512,
@@ -1886,11 +1887,14 @@ def train_hetero_model(
         milestone_eval_max_graphs = int(os.environ.get("MILESTONE_EVAL_MAX_GRAPHS", "0") or 0)
     milestone_eval_max_graphs = max(int(milestone_eval_max_graphs), 0)
     if milestone_eval_current_model is None:
-        milestone_eval_current_model = _env_flag("MILESTONE_EVAL_CURRENT_MODEL", True)
+        milestone_eval_current_model = _env_flag("MILESTONE_EVAL_CURRENT_MODEL", False)
     milestone_eval_current_model = bool(milestone_eval_current_model)
     if milestone_eval_best_model is None:
-        milestone_eval_best_model = _env_flag("MILESTONE_EVAL_BEST_MODEL", False)
+        milestone_eval_best_model = _env_flag("MILESTONE_EVAL_BEST_MODEL", True)
     milestone_eval_best_model = bool(milestone_eval_best_model)
+    if milestone_eval_diagnostics is None:
+        milestone_eval_diagnostics = _env_flag("MILESTONE_EVAL_DIAGNOSTICS", True)
+    milestone_eval_diagnostics = bool(milestone_eval_diagnostics)
     milestone_eval_enabled = bool(
         milestone_eval_epochs_resolved and milestone_eval_splits and (milestone_eval_current_model or milestone_eval_best_model)
     )
@@ -2189,6 +2193,7 @@ def train_hetero_model(
         f"milestone_eval_max_graphs={int(milestone_eval_max_graphs)} "
         f"milestone_eval_current_model={int(milestone_eval_current_model)} "
         f"milestone_eval_best_model={int(milestone_eval_best_model)} "
+        f"milestone_eval_diagnostics={int(milestone_eval_diagnostics)} "
         f"val_graphs_per_epoch={len(val_indices_for_epoch)} "
         f"val_num_workers={int(val_num_workers)} "
         f"final_eval_data_format={final_eval_data_format} "
@@ -2219,7 +2224,8 @@ def train_hetero_model(
         f"current_model={int(milestone_eval_current_model)} "
         f"best_model={int(milestone_eval_best_model)} "
         f"max_graphs={int(milestone_eval_max_graphs)} "
-        "diagnostics=0 attention_maps=0 feature_importance=0",
+        f"diagnostics={int(milestone_eval_diagnostics)} "
+        "attention_maps=0 feature_importance=0",
         flush=True,
     )
     dataloader_timeout_effective = float(dataloader_timeout_sec) if int(num_workers) > 0 else 0.0
@@ -2601,6 +2607,7 @@ def train_hetero_model(
             "milestone_eval_max_graphs": int(milestone_eval_max_graphs),
             "milestone_eval_current_model": bool(milestone_eval_current_model),
             "milestone_eval_best_model": bool(milestone_eval_best_model),
+            "milestone_eval_diagnostics": bool(milestone_eval_diagnostics),
             "final_eval_data_format": str(final_eval_data_format),
             "core_target_mode": str(core_target_mode),
             "core_anchor_mode": str(getattr(base_dataset, "core_anchor_mode", core_target_mode)),
@@ -2646,6 +2653,7 @@ def train_hetero_model(
                 "milestone_eval_max_graphs": int(milestone_eval_max_graphs),
                 "milestone_eval_current_model": bool(milestone_eval_current_model),
                 "milestone_eval_best_model": bool(milestone_eval_best_model),
+                "milestone_eval_diagnostics": bool(milestone_eval_diagnostics),
                 "final_eval_data_format": str(final_eval_data_format),
                 "core_target_mode": str(core_target_mode),
                 "coordinate_feature_mode": str(coordinate_feature_mode),
@@ -2883,6 +2891,8 @@ def train_hetero_model(
             current_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
             model.load_state_dict({key: value.to(device) for key, value in best_state.items()})
         try:
+            prediction_payloads: dict[str, tuple[Any, ...]] = {}
+            records: list[tuple[dict[str, Any], float, int, dict[str, Any]]] = []
             for split_name in milestone_eval_splits:
                 loader, graph_count = _milestone_loader(split_name, epoch=epoch, model_kind=model_kind)
                 start = time.monotonic()
@@ -2909,6 +2919,14 @@ def train_hetero_model(
                 )
                 elapsed = time.monotonic() - start
                 metrics_payload = _milestone_metric_summary(pred, target, mass_logit, mass_label, quality_score, error_pred)
+                prediction_payloads[split_name] = (
+                    pred,
+                    target,
+                    mass_logit,
+                    mass_label,
+                    quality_score,
+                    error_pred,
+                )
                 runtime_payload = {
                     "elapsed_sec": float(elapsed),
                     "graphs": int(graph_count),
@@ -2927,7 +2945,61 @@ def train_hetero_model(
                     "loss": dict(loss_row),
                     "runtime": runtime_payload,
                 }
+                records.append((record, elapsed, graph_count, metrics_payload))
+            diagnostics_payload: dict[str, Any] = {}
+            if milestone_eval_diagnostics:
+                missing_splits = [split_name for split_name in ("validation", "test") if split_name not in prediction_payloads]
+                if missing_splits:
+                    print(
+                        "hetero_milestone_diagnostics_skip "
+                        f"epoch={int(epoch)} model={model_kind} "
+                        f"reason=missing_split missing={','.join(missing_splits)} "
+                        "required=validation,test",
+                        flush=True,
+                    )
+                else:
+                    diag_start = time.monotonic()
+                    val_payload = prediction_payloads["validation"]
+                    test_payload = prediction_payloads["test"]
+                    milestone_diag_output = output.with_name(
+                        f"{output.stem}.milestone_epoch{int(epoch):04d}.{model_kind}{output.suffix}"
+                    )
+                    diagnostics_payload = save_training_diagnostics(
+                        milestone_diag_output,
+                        history,
+                        validation=(val_payload[0], val_payload[1]),
+                        test=(test_payload[0], test_payload[1]),
+                        validation_mass=(val_payload[2], val_payload[3])
+                        if val_payload[2] is not None and val_payload[3] is not None
+                        else None,
+                        test_mass=(test_payload[2], test_payload[3])
+                        if test_payload[2] is not None and test_payload[3] is not None
+                        else None,
+                        validation_particle_labels=val_payload[3],
+                        test_particle_labels=test_payload[3],
+                        validation_quality=val_payload[4],
+                        test_quality=test_payload[4],
+                        validation_predicted_errors=val_payload[5],
+                        test_predicted_errors=test_payload[5],
+                        energy_bin_width=diagnostic_energy_bin_width,
+                        min_bin_count=diagnostic_min_bin_count,
+                        save_reconstruction=target_dim >= 6,
+                    )
+                    print(
+                        "hetero_milestone_diagnostics_done "
+                        f"epoch={int(epoch)} model={model_kind} "
+                        f"elapsed={_format_duration(time.monotonic() - diag_start)} "
+                        f"directory={diagnostics_payload.get('directory')} "
+                        f"summary={diagnostics_payload.get('summary_json')}",
+                        flush=True,
+                    )
+            for record, elapsed, graph_count, metrics_payload in records:
+                if diagnostics_payload:
+                    record["runtime"]["diagnostics"] = True
+                    record["runtime"]["diagnostics_directory"] = diagnostics_payload.get("directory")
+                    record["runtime"]["diagnostics_summary"] = diagnostics_payload.get("summary_json")
                 _write_milestone_record(record)
+                split_name = str(record["split"])
                 print(
                     "hetero_milestone_eval_done "
                     f"epoch={int(epoch)} split={split_name} "

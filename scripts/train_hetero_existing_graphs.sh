@@ -132,7 +132,6 @@ MAX_VAL_GRAPHS="${MAX_VAL_GRAPHS:-}"
 MAX_GRAPHS="${MAX_GRAPHS:-}"
 EARLY_STOPPING_PATIENCE="${EARLY_STOPPING_PATIENCE:-12}"
 EARLY_STOPPING_MIN_EPOCHS="${EARLY_STOPPING_MIN_EPOCHS:-32}"
-CHECKPOINT_MILESTONES="${CHECKPOINT_MILESTONES:-}"
 CHECKPOINT_MILESTONE_FULL_EVAL="${CHECKPOINT_MILESTONE_FULL_EVAL:-0}"
 ALLOW_TRAIN_LOSS_CHECKPOINT="${ALLOW_TRAIN_LOSS_CHECKPOINT:-0}"
 if [[ -z "${MILESTONE_EVAL_EPOCHS+x}" ]]; then
@@ -142,10 +141,14 @@ if [[ -z "${MILESTONE_EVAL_EPOCHS+x}" ]]; then
     MILESTONE_EVAL_EPOCHS="8,16,32,64"
   fi
 fi
-MILESTONE_EVAL_SPLIT="${MILESTONE_EVAL_SPLIT:-validation}"
+if [[ -z "${CHECKPOINT_MILESTONES+x}" ]]; then
+  CHECKPOINT_MILESTONES="${MILESTONE_EVAL_EPOCHS}"
+fi
+MILESTONE_EVAL_SPLIT="${MILESTONE_EVAL_SPLIT:-validation test}"
 MILESTONE_EVAL_MAX_GRAPHS="${MILESTONE_EVAL_MAX_GRAPHS:-0}"
-MILESTONE_EVAL_CURRENT_MODEL="${MILESTONE_EVAL_CURRENT_MODEL:-1}"
-MILESTONE_EVAL_BEST_MODEL="${MILESTONE_EVAL_BEST_MODEL:-0}"
+MILESTONE_EVAL_CURRENT_MODEL="${MILESTONE_EVAL_CURRENT_MODEL:-0}"
+MILESTONE_EVAL_BEST_MODEL="${MILESTONE_EVAL_BEST_MODEL:-1}"
+MILESTONE_EVAL_DIAGNOSTICS="${MILESTONE_EVAL_DIAGNOSTICS:-1}"
 HETERO_TRAINING_DATA_FORMAT="${HETERO_TRAINING_DATA_FORMAT:-fast_tensor}"
 FINAL_EVAL_DATA_FORMAT="${FINAL_EVAL_DATA_FORMAT:-${HETERO_TRAINING_DATA_FORMAT}}"
 CORE_TARGET_MODE="${CORE_TARGET_MODE:-signal_bary_relative}"
@@ -411,6 +414,7 @@ MILESTONE_EVAL_SPLIT=${MILESTONE_EVAL_SPLIT}
 MILESTONE_EVAL_MAX_GRAPHS=${MILESTONE_EVAL_MAX_GRAPHS}
 MILESTONE_EVAL_CURRENT_MODEL=${MILESTONE_EVAL_CURRENT_MODEL}
 MILESTONE_EVAL_BEST_MODEL=${MILESTONE_EVAL_BEST_MODEL}
+MILESTONE_EVAL_DIAGNOSTICS=${MILESTONE_EVAL_DIAGNOSTICS}
 HETERO_TRAINING_DATA_FORMAT=${HETERO_TRAINING_DATA_FORMAT}
 FINAL_EVAL_DATA_FORMAT=${FINAL_EVAL_DATA_FORMAT}
 HETERO_RELATIONS=${HETERO_RELATIONS}
@@ -441,8 +445,8 @@ ATTENTION_MAPS_DEVICE=${ATTENTION_MAPS_DEVICE}
 SEED=${SEED}
 EOF
 
-echo "hetero_training_script_config speed_benchmark=${SPEED_BENCHMARK} waveform_encoder=${WAVEFORM_ENCODER} pulse_waveform_encoder=${PULSE_WAVEFORM_ENCODER} use_pulse_parent_waveform=${USE_PULSE_PARENT_WAVEFORM} use_pulse_bounds=${USE_PULSE_BOUNDS} use_relative_positions=${USE_RELATIVE_POSITIONS} detector_readout_mask=${DETECTOR_READOUT_MASK} pulse_readout_mask=${PULSE_READOUT_MASK} relation_preset=${HETERO_RELATION_PRESET:-custom} batch_size=${BATCH_SIZE} gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} prepare_fast_cache=${PREPARE_FAST_CACHE} training_data_format=${HETERO_TRAINING_DATA_FORMAT} final_eval_data_format=${FINAL_EVAL_DATA_FORMAT} core_target_mode=${CORE_TARGET_MODE} coordinate_feature_mode=${COORDINATE_FEATURE_MODE} checkpoint_milestones='${CHECKPOINT_MILESTONES}' checkpoint_milestone_full_eval=${CHECKPOINT_MILESTONE_FULL_EVAL} milestone_eval_epochs='${MILESTONE_EVAL_EPOCHS}' milestone_eval_split='${MILESTONE_EVAL_SPLIT}' milestone_eval_max_graphs=${MILESTONE_EVAL_MAX_GRAPHS} milestone_eval_current_model=${MILESTONE_EVAL_CURRENT_MODEL} milestone_eval_best_model=${MILESTONE_EVAL_BEST_MODEL} diagnostics=${DIAGNOSTICS} attention_maps=${ATTENTION_MAPS} feature_importance=${FEATURE_IMPORTANCE} profile=${PROFILE} pin_memory=${PIN_MEMORY} prefetch_factor=${PREFETCH_FACTOR} persistent_workers=${PERSISTENT_WORKERS} train_workers=${TRAIN_WORKERS} train_progress_interval_sec=${TRAIN_PROGRESS_INTERVAL_SEC} validation_progress_interval_sec=${VALIDATION_PROGRESS_INTERVAL_SEC} predict_progress_interval_sec=${PREDICT_PROGRESS_INTERVAL_SEC} scaler_progress_interval_sec=${SCALER_PROGRESS_INTERVAL_SEC} flat_cache_progress_interval_sec=${FLAT_CACHE_PROGRESS_INTERVAL_SEC} dataloader_timeout_sec=${DATALOADER_TIMEOUT_SEC} data_wait_warn_sec=${DATA_WAIT_WARN_SEC}"
-echo "hetero_milestone_eval_config enabled=$([[ -n "${MILESTONE_EVAL_EPOCHS}" ]] && echo 1 || echo 0) epochs=${MILESTONE_EVAL_EPOCHS} splits=${MILESTONE_EVAL_SPLIT} current_model=${MILESTONE_EVAL_CURRENT_MODEL} best_model=${MILESTONE_EVAL_BEST_MODEL} max_graphs=${MILESTONE_EVAL_MAX_GRAPHS} diagnostics=0 attention_maps=0 feature_importance=0"
+echo "hetero_training_script_config speed_benchmark=${SPEED_BENCHMARK} waveform_encoder=${WAVEFORM_ENCODER} pulse_waveform_encoder=${PULSE_WAVEFORM_ENCODER} use_pulse_parent_waveform=${USE_PULSE_PARENT_WAVEFORM} use_pulse_bounds=${USE_PULSE_BOUNDS} use_relative_positions=${USE_RELATIVE_POSITIONS} detector_readout_mask=${DETECTOR_READOUT_MASK} pulse_readout_mask=${PULSE_READOUT_MASK} relation_preset=${HETERO_RELATION_PRESET:-custom} batch_size=${BATCH_SIZE} gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} prepare_fast_cache=${PREPARE_FAST_CACHE} training_data_format=${HETERO_TRAINING_DATA_FORMAT} final_eval_data_format=${FINAL_EVAL_DATA_FORMAT} core_target_mode=${CORE_TARGET_MODE} coordinate_feature_mode=${COORDINATE_FEATURE_MODE} checkpoint_milestones='${CHECKPOINT_MILESTONES}' checkpoint_milestone_full_eval=${CHECKPOINT_MILESTONE_FULL_EVAL} milestone_eval_epochs='${MILESTONE_EVAL_EPOCHS}' milestone_eval_split='${MILESTONE_EVAL_SPLIT}' milestone_eval_max_graphs=${MILESTONE_EVAL_MAX_GRAPHS} milestone_eval_current_model=${MILESTONE_EVAL_CURRENT_MODEL} milestone_eval_best_model=${MILESTONE_EVAL_BEST_MODEL} milestone_eval_diagnostics=${MILESTONE_EVAL_DIAGNOSTICS} diagnostics=${DIAGNOSTICS} attention_maps=${ATTENTION_MAPS} feature_importance=${FEATURE_IMPORTANCE} profile=${PROFILE} pin_memory=${PIN_MEMORY} prefetch_factor=${PREFETCH_FACTOR} persistent_workers=${PERSISTENT_WORKERS} train_workers=${TRAIN_WORKERS} train_progress_interval_sec=${TRAIN_PROGRESS_INTERVAL_SEC} validation_progress_interval_sec=${VALIDATION_PROGRESS_INTERVAL_SEC} predict_progress_interval_sec=${PREDICT_PROGRESS_INTERVAL_SEC} scaler_progress_interval_sec=${SCALER_PROGRESS_INTERVAL_SEC} flat_cache_progress_interval_sec=${FLAT_CACHE_PROGRESS_INTERVAL_SEC} dataloader_timeout_sec=${DATALOADER_TIMEOUT_SEC} data_wait_warn_sec=${DATA_WAIT_WARN_SEC}"
+echo "hetero_milestone_eval_config enabled=$([[ -n "${MILESTONE_EVAL_EPOCHS}" ]] && echo 1 || echo 0) epochs=${MILESTONE_EVAL_EPOCHS} splits=${MILESTONE_EVAL_SPLIT} current_model=${MILESTONE_EVAL_CURRENT_MODEL} best_model=${MILESTONE_EVAL_BEST_MODEL} max_graphs=${MILESTONE_EVAL_MAX_GRAPHS} diagnostics=${MILESTONE_EVAL_DIAGNOSTICS} attention_maps=0 feature_importance=0"
 echo "hetero_logging_config train_progress_interval_sec=${TRAIN_PROGRESS_INTERVAL_SEC} validation_progress_interval_sec=${VALIDATION_PROGRESS_INTERVAL_SEC} predict_progress_interval_sec=${PREDICT_PROGRESS_INTERVAL_SEC} scaler_progress_interval_sec=${SCALER_PROGRESS_INTERVAL_SEC} flat_cache_progress_interval_sec=${FLAT_CACHE_PROGRESS_INTERVAL_SEC} dataloader_timeout_sec=${DATALOADER_TIMEOUT_SEC} data_wait_warn_sec=${DATA_WAIT_WARN_SEC} expected_max_silent_sec=${DATALOADER_TIMEOUT_SEC}"
 echo "hetero_scaler_cache default_scope=run_local reuse_across_runs=0 path=${SCALER_CACHE}"
 echo "hetero_scaler_cache recommendation='set SCALER_CACHE=/path/to/shared/hetero_scalers.json for cross-run reuse'"
@@ -578,6 +582,11 @@ if [[ "${MILESTONE_EVAL_BEST_MODEL}" == "1" ]]; then
   cmd+=(--milestone-eval-best-model)
 else
   cmd+=(--no-milestone-eval-best-model)
+fi
+if [[ "${MILESTONE_EVAL_DIAGNOSTICS}" == "1" ]]; then
+  cmd+=(--milestone-eval-diagnostics)
+else
+  cmd+=(--no-milestone-eval-diagnostics)
 fi
 if [[ "${REUSE_SCALER_CACHE}" == "1" ]]; then
   cmd+=(--reuse-scaler-cache)
