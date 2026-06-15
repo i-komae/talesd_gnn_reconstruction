@@ -38,6 +38,21 @@ edges look like in one event.
    same detector, gray pulse--pulse edges are near-space relations, and orange
    pulse--pulse edges are the time-causal subset.
 
+The next display uses the same DATA event and the same plotting style, but
+shows the homogeneous pulse graph view. Detector nodes, detector--detector
+edges, and detector--pulse edges are omitted. Only used pulse nodes and
+pulse--pulse relations are colored. Ising-rejected pulse candidates that are
+not used by this homogeneous view are shown as white circles with black
+outlines, so they do not affect the time colorbar.
+
+.. figure:: ../fig/homogeneous_graph_event_display.png
+   :alt: Three-dimensional homogeneous TALE-SD pulse graph event display with unused Ising-rejected pulses shown as white circles with black outlines.
+   :width: 100%
+
+   Homogeneous pulse-graph comparison view of the same DATA event. The colorbar
+   is normalized only by the used pulse nodes. Unused rejected pulse candidates
+   remain visible as white circles with black outlines.
+
 The schema diagram below shows the same information in a simplified graph form.
 It shows the actual node and edge types used inside one ``GraphEvent``.
 Detector nodes and pulse nodes are different node types.

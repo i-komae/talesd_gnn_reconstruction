@@ -35,6 +35,19 @@ Graph schema
    緑線は同一 detector 内の連続 pulse、灰色の pulse--pulse 線は near-space relation、
    橙色の pulse--pulse 線は time-causal subset です。
 
+次の図は、同じ DATA event を同じ描画 style で表示した homogeneous pulse graph の比較図です。
+detector node、detector--detector edge、detector--pulse edge は描きません。
+色を付けるのは使用する pulse node と pulse--pulse relation だけです。
+この homogeneous 表示で使用しない Ising-rejected pulse candidate は白塗り黒枠の丸で示し、
+time colorbar の正規化には入れません。
+
+.. figure:: ../fig/homogeneous_graph_event_display.png
+   :alt: 使用しない Ising-rejected pulse を白塗り黒枠で示した TALE-SD homogeneous pulse graph の3D event display。
+   :width: 100%
+
+   同じ DATA event の homogeneous pulse graph 比較図です。colorbar は使用する pulse node の時刻だけで正規化します。
+   使用しない rejected pulse candidate は白塗り黒枠で残し、色は付けません。
+
 下の schema 図は、同じ情報を単純化した graph として示します。
 1つの ``GraphEvent`` の中で使う node type と edge type を graph として示します。
 detector node と pulse node は別の node type です。
