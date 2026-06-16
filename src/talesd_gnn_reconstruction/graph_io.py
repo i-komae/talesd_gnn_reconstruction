@@ -11,6 +11,37 @@ from .constants import WAVEFORM_SCHEMA
 from .event_graph import GraphEvent, graph_columns
 
 
+def _metadata_json_default(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, set):
+        return sorted(value)
+    return str(value)
+
+
+def _hdf5_attr_value(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return _hdf5_attr_value(value.item())
+        if value.dtype.kind in {"b", "i", "u", "f"}:
+            return value
+    return json.dumps(value, default=_metadata_json_default, sort_keys=True)
+
+
 def create_graph_file(path: str | Path, config: dict[str, Any] | None = None) -> h5py.File:
     output = Path(path).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -64,7 +95,7 @@ def write_graph(handle: h5py.File, index: int, graph: GraphEvent) -> None:
     if graph.particle_label is not None:
         group.create_dataset("particle_label", data=np.asarray(graph.particle_label, dtype=np.float32))
     for key, value in graph.metadata.items():
-        group.attrs[key] = value
+        group.attrs[str(key)] = _hdf5_attr_value(value)
     _append_metadata(handle, index, graph)
 
 

@@ -221,6 +221,8 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
         graph.pulse_detector_index = np.asarray([0, 1, 2, 3], dtype=np.int64)
         graph.pulse_lids = np.asarray([101, 102, 103, 104], dtype=np.int64)
         graph.pulse_positions_km = graph.detector_positions_km.copy()
+        graph.metadata["reference_core_km"] = [-5.0, 16.0, 0.0]
+        graph.metadata["conversion_debug"] = {"source_groups": ["DAT000016"], "weights": np.asarray([1.0, 2.0])}
         keep_index = GRAPH_COLUMNS["pulse_features"].index("ising_keep")
         graph.pulse_features[:, keep_index] = 1.0
         graph.edge_index_by_type["detector__observes__pulse"] = np.asarray(
@@ -238,6 +240,10 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 write_hetero_graph(handle, 0, graph)
             summary = convert_hetero_to_homogeneous([hetero_path], homo_dir, pulse_mask="ising_kept")
             self.assertEqual(summary["written"], 1)
+            with h5py.File(homo_dir / "graphs_0000.h5", "r") as handle:
+                attrs = handle["events/00000000"].attrs
+                self.assertEqual(json.loads(attrs["reference_core_km"]), [-5.0, 16.0, 0.0])
+                self.assertEqual(json.loads(attrs["conversion_debug"])["source_groups"], ["DAT000016"])
             dataset = H5GraphDataset(homo_dir / "graphs_0000.h5", require_target=True, require_particle_label=True)
             try:
                 sample = dataset[0]
