@@ -70,6 +70,7 @@ from talesd_gnn_reconstruction.hetero_training import (
     train_hetero_model,
 )
 from talesd_gnn_reconstruction.cli import (
+    build_parser,
     _cmd_export_hetero,
     _cmd_reshard_hetero,
     _expand_h5_graph_paths,
@@ -207,6 +208,36 @@ def _synthetic_graph(index: int) -> SimpleNamespace:
 
 
 class SyntheticHeteroGraphIoTest(unittest.TestCase):
+    def test_homogeneous_train_cli_does_not_require_hetero_only_args(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "train",
+                "--graphs",
+                "graphs.h5",
+                "-o",
+                "checkpoint.pt",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "2",
+                "--no-diagnostics",
+            ]
+        )
+        result = {
+            "checkpoint": "checkpoint.pt",
+            "metrics_path": "checkpoint.pt.metrics.json",
+            "diagnostics": {},
+        }
+        with mock.patch("talesd_gnn_reconstruction.train.train_model", return_value=result) as train_model:
+            args.func(args)
+        kwargs = train_model.call_args.kwargs
+        self.assertNotIn("use_pulse_parent_waveform", kwargs)
+        self.assertNotIn("use_pulse_bounds", kwargs)
+        self.assertNotIn("pulse_waveform_encoder", kwargs)
+        self.assertNotIn("detector_readout_mask", kwargs)
+        self.assertNotIn("pulse_readout_mask", kwargs)
+
     def test_convert_hetero_to_homogeneous_writes_current_schema(self) -> None:
         graph = _synthetic_graph(0)
         graph.detector_features = np.vstack([graph.detector_features, graph.detector_features[-1:]]).astype(np.float32)
