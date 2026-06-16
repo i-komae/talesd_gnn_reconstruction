@@ -38,6 +38,23 @@ def _pulse_column(graph: GraphEvent, name: str) -> np.ndarray:
     return graph.pulse_features[:, PULSE_FEATURE_COLUMNS.index(name)]
 
 
+def _used_time_limits(arrival: np.ndarray, used: np.ndarray) -> tuple[float, float]:
+    used_times = np.asarray(arrival, dtype=np.float64)[np.asarray(used, dtype=bool)]
+    used_times = used_times[np.isfinite(used_times)]
+    if used_times.size:
+        min_t = float(np.nanmin(used_times))
+        max_t = float(np.nanmax(used_times))
+        if not np.isfinite(min_t) or not np.isfinite(max_t):
+            min_t = 0.0
+            max_t = 1.0
+        elif max_t <= min_t:
+            max_t = min_t + 1.0
+    else:
+        min_t = 0.0
+        max_t = 1.0
+    return min_t, max_t
+
+
 def _load_data_graph(dst_path: Path, const_dst: Path, *, event_index: int = 0) -> GraphEvent:
     import dstio.tale.graph as tale_graph
 
@@ -92,13 +109,7 @@ def plot_homogeneous_graph_from_hetero(
     used = keep & np.isfinite(arrival)
     unused = ~used
 
-    used_times = arrival[used]
-    if used_times.size:
-        min_t = min(float(np.nanmin(used_times)), 0.0)
-        max_t = max(float(np.nanmax(used_times)), 1.0)
-    else:
-        min_t = 0.0
-        max_t = 1.0
+    min_t, max_t = _used_time_limits(arrival, used)
     cmap = _event_display_time_colormap(max_t)
     norm = Normalize(vmin=min_t, vmax=max_t)
 
