@@ -372,33 +372,37 @@ fi
 } 2>&1 | tee "${LOG_PATH}"
 
 "${PYTHON_BIN}" scripts/summarize_metrics.py "${METRICS_PATH}" -o "${SUMMARY_DIR}/metrics_summary.csv"
-FEATURE_IMPORTANCE_DIR="${CHECKPOINT}.diagnostics/feature_importance/${FEATURE_IMPORTANCE_SPLIT}"
-FEATURE_IMPORTANCE_SUMMARY="${FEATURE_IMPORTANCE_DIR}/feature_group_importance.json"
+FEATURE_IMPORTANCE_SUMMARY=""
 if [[ "${FEATURE_IMPORTANCE}" == "1" ]]; then
-  {
-    echo "stage=start feature_importance date=$(date)"
-    feature_cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli feature-importance
-      --graphs "${GRAPH_INPUT}"
-      --checkpoint "${CHECKPOINT}"
-      -o "${FEATURE_IMPORTANCE_DIR}"
-      --split "${FEATURE_IMPORTANCE_SPLIT}"
-      --max-graphs "${FEATURE_IMPORTANCE_MAX_GRAPHS}"
-      --batch-size "${FEATURE_IMPORTANCE_BATCH_SIZE}"
-      --device "${FEATURE_IMPORTANCE_DEVICE}"
-      --seed "${SEED}")
-    printf 'command:'
-    printf ' %q' "${feature_cmd[@]}"
-    printf '\n'
-    "${feature_cmd[@]}"
-    if [[ ! -s "${FEATURE_IMPORTANCE_SUMMARY}" ]]; then
-      echo "ERROR: feature importance finished but summary was not written: ${FEATURE_IMPORTANCE_SUMMARY}" >&2
-      exit 1
-    fi
-    echo "stage=done feature_importance date=$(date)"
-    echo "feature_importance=${FEATURE_IMPORTANCE_SUMMARY}"
-  } 2>&1 | tee -a "${LOG_PATH}"
-else
-  FEATURE_IMPORTANCE_SUMMARY=""
+  feature_importance_summaries=()
+  for feature_split in ${FEATURE_IMPORTANCE_SPLIT}; do
+    FEATURE_IMPORTANCE_DIR="${CHECKPOINT}.diagnostics/feature_importance/${feature_split}"
+    feature_importance_summary="${FEATURE_IMPORTANCE_DIR}/feature_group_importance.json"
+    {
+      echo "stage=start feature_importance split=${feature_split} date=$(date)"
+      feature_cmd=("${PYTHON_BIN}" -m talesd_gnn_reconstruction.cli feature-importance
+        --graphs "${GRAPH_INPUT}"
+        --checkpoint "${CHECKPOINT}"
+        -o "${FEATURE_IMPORTANCE_DIR}"
+        --split "${feature_split}"
+        --max-graphs "${FEATURE_IMPORTANCE_MAX_GRAPHS}"
+        --batch-size "${FEATURE_IMPORTANCE_BATCH_SIZE}"
+        --device "${FEATURE_IMPORTANCE_DEVICE}"
+        --seed "${SEED}")
+      printf 'command:'
+      printf ' %q' "${feature_cmd[@]}"
+      printf '\n'
+      "${feature_cmd[@]}"
+      if [[ ! -s "${feature_importance_summary}" ]]; then
+        echo "ERROR: feature importance finished but summary was not written: ${feature_importance_summary}" >&2
+        exit 1
+      fi
+      echo "stage=done feature_importance split=${feature_split} date=$(date)"
+      echo "feature_importance_${feature_split}=${feature_importance_summary}"
+    } 2>&1 | tee -a "${LOG_PATH}"
+    feature_importance_summaries+=("${feature_importance_summary}")
+  done
+  FEATURE_IMPORTANCE_SUMMARY="$(IFS=:; echo "${feature_importance_summaries[*]}")"
 fi
 
 if [[ "${TRAINING_TASK}" == "mass" ]]; then
@@ -439,8 +443,9 @@ Important files:
   checkpoints/${CONFIG_NAME}.pt.diagnostics/prediction_cache.npz
   summaries/metrics_summary.csv
   summaries/${CONFIG_NAME}_precision_targets.txt
-  checkpoints/${CONFIG_NAME}.pt.diagnostics/feature_importance/${FEATURE_IMPORTANCE_SPLIT}/feature_group_importance.json
-  checkpoints/${CONFIG_NAME}.pt.diagnostics/feature_importance/${FEATURE_IMPORTANCE_SPLIT}/feature_group_importance.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/feature_importance/<split>/feature_group_importance.json
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/feature_importance/<split>/feature_group_importance.pdf
+  checkpoints/${CONFIG_NAME}.pt.diagnostics/feature_importance/<split>/feature_group_importance_relative.pdf
   checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_confusion_matrix.pdf
   checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_score_distribution.pdf
   checkpoints/${CONFIG_NAME}.pt.diagnostics/validation/mass_roc.pdf
