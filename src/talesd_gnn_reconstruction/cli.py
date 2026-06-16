@@ -4597,6 +4597,7 @@ def _cmd_convert_hetero_to_homogeneous(args: argparse.Namespace) -> None:
         max_events=args.max_events,
         overwrite=args.overwrite,
         progress_interval_sec=args.progress_interval_sec,
+        workers=args.workers,
     )
     print(
         "hetero_to_homogeneous "
@@ -5494,6 +5495,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     convert_hetero_homo.add_argument("--shard-size", type=int, default=100000)
     convert_hetero_homo.add_argument("--max-events", type=int, default=None)
+    convert_hetero_homo.add_argument("--workers", type=int, default=1, help="入力HDF5 shard単位のparallel conversion worker数")
     convert_hetero_homo.add_argument("--overwrite", action="store_true")
     convert_hetero_homo.add_argument("--progress-interval-sec", type=float, default=30.0)
     convert_hetero_homo.set_defaults(func=_cmd_convert_hetero_to_homogeneous)

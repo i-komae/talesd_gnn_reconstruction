@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import math
 import time
@@ -334,6 +335,134 @@ def _shard_path(output: Path, shard_index: int) -> Path:
     return output / f"graphs_{shard_index:04d}.h5"
 
 
+def _worker_shard_path(output: Path, worker_index: int, shard_index: int) -> Path:
+    return output / f"worker_{int(worker_index):04d}_{int(shard_index):04d}.h5"
+
+
+def _cleanup_output_h5_files(output: Path, *, overwrite: bool) -> None:
+    if not overwrite or output.suffix == ".h5" or not output.exists():
+        return
+    for stale in output.glob("*.h5"):
+        stale.unlink()
+
+
+def _hetero_event_count(path: Path) -> int:
+    with h5py.File(path, "r") as handle:
+        if str(handle.attrs.get("format", "")) == "talesd_gnn_hetero_graphs":
+            return int(len(handle["events"]))
+        if str(handle.attrs.get("format", "")) == "talesd_gnn_hetero_flat_cache":
+            return int(handle["target_all"].shape[0])
+    raise ValueError(f"{path} is not a supported hetero graph HDF5 file")
+
+
+def _convert_worker(payload: dict[str, Any]) -> dict[str, Any]:
+    input_paths = [Path(path).expanduser() for path in payload["input_paths"]]
+    output_path = Path(payload["output"]).expanduser()
+    worker_index = int(payload["worker_index"])
+    pulse_mask = str(payload["pulse_mask"])
+    shard_size = max(int(payload["shard_size"]), 1)
+    max_events = payload.get("max_events")
+    overwrite = bool(payload["overwrite"])
+    progress_interval_sec = float(payload["progress_interval_sec"])
+
+    dataset_cls = hetero_dataset_class_for_paths(input_paths)
+    dataset = dataset_cls(
+        input_paths,
+        require_target=True,
+        require_particle_label=True,
+        load_attrs=True,
+        core_target_mode="absolute",
+        coordinate_feature_mode="absolute_and_relative",
+    )
+    total = len(dataset) if max_events is None or int(max_events) <= 0 else min(len(dataset), int(max_events))
+    print(
+        "convert hetero to homogeneous worker: "
+        f"stage=start worker={worker_index} inputs={len(input_paths)} events={total} "
+        f"output={output_path}",
+        flush=True,
+    )
+    written = 0
+    skipped = 0
+    shard_index = 0
+    handle: h5py.File | None = None
+    last_log = time.monotonic()
+    start = last_log
+    shard_paths: list[str] = []
+
+    def open_shard(index: int) -> h5py.File:
+        if output_path.suffix == ".h5":
+            path = _shard_path(output_path, index)
+        else:
+            path = _worker_shard_path(output_path, worker_index, index)
+        if path.exists() and not overwrite:
+            raise FileExistsError(f"output already exists: {path}; pass --overwrite")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shard_paths.append(str(path))
+        return create_graph_file(
+            path,
+            config={
+                "source_format": "talesd_gnn_hetero_graphs",
+                "conversion": "hetero_to_homogeneous",
+                "pulse_mask": pulse_mask,
+                "input": [str(path) for path in input_paths],
+                "conversion_worker_index": worker_index,
+            },
+        )
+
+    try:
+        handle = open_shard(shard_index)
+        for index in range(total):
+            sample = dataset[index]
+            graph = hetero_sample_to_homogeneous_graph(
+                sample,
+                columns=dataset.columns,
+                index=index,
+                pulse_mask=pulse_mask,
+            )
+            if graph is None:
+                skipped += 1
+            else:
+                if written > 0 and written % shard_size == 0:
+                    handle.close()
+                    shard_index += 1
+                    handle = open_shard(shard_index)
+                write_graph(handle, written % shard_size, graph)
+                written += 1
+
+            now = time.monotonic()
+            if progress_interval_sec > 0 and (now - last_log) >= progress_interval_sec:
+                elapsed = max(now - start, 1.0e-9)
+                rate = (index + 1) / elapsed
+                remaining = max(total - index - 1, 0)
+                eta = remaining / rate if rate > 0.0 else float("nan")
+                print(
+                    "convert hetero to homogeneous worker: "
+                    f"worker={worker_index} processed={index + 1}/{total} "
+                    f"written={written} skipped={skipped} rate={rate:.6g}/s eta={eta:.0f}s",
+                    flush=True,
+                )
+                last_log = now
+        if handle is not None:
+            handle.close()
+            handle = None
+    finally:
+        if handle is not None:
+            handle.close()
+        close = getattr(dataset, "close", None)
+        if callable(close):
+            close()
+
+    return {
+        "worker_index": worker_index,
+        "input": [str(path) for path in input_paths],
+        "processed": int(total),
+        "written": int(written),
+        "skipped": int(skipped),
+        "shards": int(len(shard_paths)),
+        "shard_paths": shard_paths,
+    }
+
+
 def convert_hetero_to_homogeneous(
     paths: Sequence[str | Path],
     output: str | Path,
@@ -343,6 +472,7 @@ def convert_hetero_to_homogeneous(
     max_events: int | None = None,
     overwrite: bool = False,
     progress_interval_sec: float = 30.0,
+    workers: int = 1,
 ) -> dict[str, Any]:
     input_paths = [Path(path).expanduser() for path in paths]
     if not input_paths:
@@ -351,10 +481,93 @@ def convert_hetero_to_homogeneous(
     if output_path.exists() and output_path.is_file() and not overwrite:
         raise FileExistsError(f"output already exists: {output_path}; pass --overwrite")
     if output_path.suffix == ".h5":
+        if int(workers) > 1:
+            raise ValueError("parallel conversion requires a directory output, not a single .h5 file")
         output_path.parent.mkdir(parents=True, exist_ok=True)
     else:
         output_path.mkdir(parents=True, exist_ok=True)
+    _cleanup_output_h5_files(output_path, overwrite=overwrite)
 
+    workers = min(max(int(workers), 1), len(input_paths))
+    if workers > 1:
+        path_limits: list[tuple[Path, int | None]] = []
+        remaining = None if max_events is None or int(max_events) <= 0 else int(max_events)
+        for path in input_paths:
+            if remaining is None:
+                path_limits.append((path, None))
+                continue
+            if remaining <= 0:
+                break
+            count = _hetero_event_count(path)
+            take = min(count, remaining)
+            path_limits.append((path, take))
+            remaining -= take
+        payloads = [
+            {
+                "worker_index": index,
+                "input_paths": [str(path)],
+                "output": str(output_path),
+                "pulse_mask": pulse_mask,
+                "shard_size": shard_size,
+                "max_events": path_max_events,
+                "overwrite": overwrite,
+                "progress_interval_sec": progress_interval_sec,
+            }
+            for index, (path, path_max_events) in enumerate(path_limits)
+        ]
+        print(
+            "convert hetero to homogeneous: "
+            f"stage=start mode=parallel input_shards={len(payloads)} workers={workers} "
+            f"output={output_path}",
+            flush=True,
+        )
+        results: list[dict[str, Any]] = []
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_convert_worker, payload) for payload in payloads]
+            for future in as_completed(futures):
+                result = future.result()
+                results.append(result)
+                print(
+                    "convert hetero to homogeneous: "
+                    f"stage=done_worker worker={result['worker_index']} processed={result['processed']} "
+                    f"written={result['written']} skipped={result['skipped']} shards={result['shards']}",
+                    flush=True,
+                )
+        ordered = sorted(results, key=lambda item: int(item["worker_index"]))
+        summary = {
+            "format": "talesd_gnn_homogeneous_from_hetero_v1",
+            "input": [str(path) for path in input_paths],
+            "output": str(output_path),
+            "pulse_mask": pulse_mask,
+            "processed": int(sum(int(item["processed"]) for item in ordered)),
+            "written": int(sum(int(item["written"]) for item in ordered)),
+            "skipped": int(sum(int(item["skipped"]) for item in ordered)),
+            "workers": int(workers),
+            "shards": int(sum(int(item["shards"]) for item in ordered)),
+            "shard_paths": [path for item in ordered for path in item["shard_paths"]],
+            "worker_results": ordered,
+            "node_features": list(NODE_FEATURE_COLUMNS),
+            "edge_features": list(EDGE_FEATURE_COLUMNS),
+            "pulse_features": list(PULSE_FEATURE_COLUMNS),
+            "waveform_features": list(WAVEFORM_FEATURE_CHANNELS),
+        }
+        summary_dir = output_path / "summaries"
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        with (summary_dir / "hetero_to_homogeneous_summary.json").open("w", encoding="utf-8") as stream:
+            json.dump(summary, stream, indent=2, sort_keys=True)
+        print(
+            "convert hetero to homogeneous: "
+            f"stage=done mode=parallel processed={summary['processed']} written={summary['written']} "
+            f"skipped={summary['skipped']} workers={workers} shards={summary['shards']} output={output_path}",
+            flush=True,
+        )
+        return summary
+
+    print(
+        "convert hetero to homogeneous: "
+        f"stage=start mode=serial input_shards={len(input_paths)} workers=1 output={output_path}",
+        flush=True,
+    )
     dataset_cls = hetero_dataset_class_for_paths(input_paths)
     dataset = dataset_cls(
         input_paths,
@@ -446,6 +659,7 @@ def convert_hetero_to_homogeneous(
         "processed": int(total),
         "written": int(written),
         "skipped": int(skipped),
+        "workers": 1,
         "shards": int(len(shard_paths)),
         "shard_paths": shard_paths,
         "node_features": list(NODE_FEATURE_COLUMNS),

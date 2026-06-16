@@ -257,6 +257,52 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             finally:
                 dataset.close()
 
+    def test_convert_hetero_to_homogeneous_parallel_writes_worker_shards(self) -> None:
+        def convertible_graph(index: int) -> GraphEvent:
+            graph = _synthetic_graph(index)
+            graph.detector_features = np.vstack([graph.detector_features, graph.detector_features[-1:]]).astype(np.float32)
+            graph.detector_context_features = np.vstack(
+                [graph.detector_context_features, graph.detector_context_features[-1:]]
+            ).astype(np.float32)
+            graph.detector_positions_km = np.vstack(
+                [
+                    graph.detector_positions_km,
+                    graph.detector_positions_km[-1:] + np.asarray([[0.4, 0.2, 0.0]], dtype=np.float32),
+                ]
+            ).astype(np.float32)
+            graph.detector_lids = np.asarray([101, 102, 103, 104], dtype=np.int64)
+            graph.detector_waveforms = np.concatenate([graph.detector_waveforms, graph.detector_waveforms[-1:]], axis=0)
+            graph.pulse_detector_index = np.asarray([0, 1, 2, 3], dtype=np.int64)
+            graph.pulse_lids = np.asarray([101, 102, 103, 104], dtype=np.int64)
+            graph.pulse_positions_km = graph.detector_positions_km.copy()
+            keep_index = GRAPH_COLUMNS["pulse_features"].index("ising_keep")
+            graph.pulse_features[:, keep_index] = 1.0
+            graph.edge_index_by_type["detector__observes__pulse"] = np.asarray(
+                [graph.pulse_detector_index, np.arange(4, dtype=np.int64)],
+                dtype=np.int64,
+            )
+            graph.edge_index_by_type["pulse__observed_by__detector"] = np.asarray(
+                [np.arange(4, dtype=np.int64), graph.pulse_detector_index],
+                dtype=np.int64,
+            )
+            return graph
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hetero_paths = [Path(tmpdir) / f"hetero_{index}.h5" for index in range(2)]
+            for index, hetero_path in enumerate(hetero_paths):
+                with create_hetero_graph_file(hetero_path) as handle:
+                    write_hetero_graph(handle, 0, convertible_graph(index))
+            homo_dir = Path(tmpdir) / "homogeneous"
+            try:
+                summary = convert_hetero_to_homogeneous(hetero_paths, homo_dir, pulse_mask="ising_kept", workers=2)
+            except PermissionError as exc:
+                self.skipTest(f"process pool is unavailable in this sandbox: {exc}")
+            self.assertEqual(summary["workers"], 2)
+            self.assertEqual(summary["written"], 2)
+            self.assertTrue((homo_dir / "worker_0000_0000.h5").exists())
+            self.assertTrue((homo_dir / "worker_0001_0000.h5").exists())
+            self.assertFalse((homo_dir / "graphs_0000.h5").exists())
+
     def test_core_anchor_weight_column_priority(self) -> None:
         self.assertEqual(
             core_anchor_weight_column(["dx_from_reference_core_km", "log10_pulse_rho", "sqrt_pulse_rho"]),

@@ -26,7 +26,18 @@ CONVERT_RUN_DIR="${CONVERT_RUN_DIR:-${OUTPUT_ROOT}/runs/${CONVERT_RUN_NAME}}"
 HOMOGENEOUS_GRAPH_OUTPUT="${HOMOGENEOUS_GRAPH_OUTPUT:-${GRAPH_ROOT}/${CONVERT_RUN_NAME}}"
 
 CONVERT_PARTITION="${CONVERT_PARTITION:-edr1-al9_large}"
-CONVERT_CPUS_PER_TASK="${CONVERT_CPUS_PER_TASK:-8}"
+if [[ -d "${HETERO_GRAPH_INPUT}" ]]; then
+  CONVERT_INPUT_SHARDS="$(find "${HETERO_GRAPH_INPUT}" -type f \( -name '*.h5' -o -name '*.hdf5' \) | wc -l | tr -d ' ')"
+elif [[ -f "${HETERO_GRAPH_INPUT}" ]]; then
+  CONVERT_INPUT_SHARDS="1"
+else
+  CONVERT_INPUT_SHARDS="${CONVERT_INPUT_SHARDS:-1}"
+fi
+if [[ -z "${CONVERT_INPUT_SHARDS}" || "${CONVERT_INPUT_SHARDS}" == "0" ]]; then
+  CONVERT_INPUT_SHARDS="1"
+fi
+CONVERT_WORKERS="${CONVERT_WORKERS:-${CONVERT_INPUT_SHARDS}}"
+CONVERT_CPUS_PER_TASK="${CONVERT_CPUS_PER_TASK:-${CONVERT_WORKERS}}"
 CONVERT_MEM="${CONVERT_MEM:-64G}"
 CONVERT_TIME_LIMIT="${CONVERT_TIME_LIMIT:-12:00:00}"
 CONVERT_SHARD_SIZE="${CONVERT_SHARD_SIZE:-100000}"
@@ -81,6 +92,8 @@ echo "hetero_graph_input=${HETERO_GRAPH_INPUT}"
 echo "homogeneous_graph_output=${HOMOGENEOUS_GRAPH_OUTPUT}"
 echo "pulse_mask=${PULSE_MASK}"
 echo "shard_size=${CONVERT_SHARD_SIZE}"
+echo "input_shards=${CONVERT_INPUT_SHARDS}"
+echo "workers=${CONVERT_WORKERS}"
 echo "======================================================================"
 
 cd "${REPO}"
@@ -98,6 +111,7 @@ fi
   -o "${HOMOGENEOUS_GRAPH_OUTPUT}" \
   --pulse-mask "${PULSE_MASK}" \
   --shard-size "${CONVERT_SHARD_SIZE}" \
+  --workers "${CONVERT_WORKERS}" \
 ${max_events_line}  --progress-interval-sec "${CONVERT_PROGRESS_INTERVAL_SEC}" \
   --overwrite
 
@@ -113,6 +127,7 @@ convert_job_log: ${CONVERT_LOG_DIR}/${CONVERT_RUN_NAME}.job.log
 hetero_graph_input: ${HETERO_GRAPH_INPUT}
 homogeneous_graph_output: ${HOMOGENEOUS_GRAPH_OUTPUT}
 pulse_mask: ${PULSE_MASK}
+convert_workers: ${CONVERT_WORKERS}
 submit_training: ${SUBMIT_TRAINING}
 training_run_name: ${TRAIN_RUN_NAME}
 training_partition: ${PARTITION}
