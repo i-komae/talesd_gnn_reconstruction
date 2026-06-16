@@ -2438,6 +2438,7 @@ def _plan_light_hetero_source_groups(
     *,
     seed: int,
     max_source_groups_per_stratum: int | None = None,
+    source_group_selection: str = "balanced_min",
 ) -> tuple[list[LightHeteroSourceGroup], dict[str, Any]]:
     groups = _light_hetero_source_groups_from_paths(paths)
     by_stratum: dict[str, list[LightHeteroSourceGroup]] = {}
@@ -2446,12 +2447,21 @@ def _plan_light_hetero_source_groups(
     if not by_stratum:
         raise SystemExit("no source groups were found from input DST filenames")
 
+    if source_group_selection not in {"balanced_min", "all"}:
+        raise ValueError(f"unknown light source group selection mode: {source_group_selection}")
+    if source_group_selection == "all" and max_source_groups_per_stratum is not None:
+        raise ValueError("--max-source-groups-per-stratum cannot be used with --source-group-selection all")
+
     counts_by_stratum = {stratum: len(values) for stratum, values in sorted(by_stratum.items())}
-    target = min(counts_by_stratum.values())
+    min_target = min(counts_by_stratum.values())
     if max_source_groups_per_stratum is not None and int(max_source_groups_per_stratum) > 0:
-        target = min(target, int(max_source_groups_per_stratum))
-    if target <= 0:
+        min_target = min(min_target, int(max_source_groups_per_stratum))
+    if min_target <= 0:
         raise SystemExit(f"no source groups available in at least one stratum: {counts_by_stratum}")
+    if source_group_selection == "all":
+        targets_by_stratum = dict(counts_by_stratum)
+    else:
+        targets_by_stratum = {stratum: int(min_target) for stratum in counts_by_stratum}
 
     candidates: list[LightHeteroSourceGroup] = []
     selected_by_stratum: dict[str, list[str]] = {}
@@ -2461,7 +2471,7 @@ def _plan_light_hetero_source_groups(
             key=lambda group: _sample_key_from_parts(int(seed), group.source_group, "light-source-group", 0),
         )
         candidates.extend(ordered)
-        chosen = ordered[:target]
+        chosen = ordered[: targets_by_stratum[stratum]]
         selected_by_stratum[stratum] = [group.source_group for group in chosen]
 
     candidates.sort(
@@ -2470,8 +2480,10 @@ def _plan_light_hetero_source_groups(
             _sample_key_from_parts(int(seed), group.source_group, "light-output-order", 0),
         )
     )
+    unique_targets = sorted(set(targets_by_stratum.values()))
     return candidates, {
         "selection_strategy": "filename_source_group_light_v1",
+        "source_group_selection": source_group_selection,
         "source_group_unit": "DAT?????? source group",
         "stratum": "particle:DAT filename energy code",
         "seed": int(seed),
@@ -2479,8 +2491,9 @@ def _plan_light_hetero_source_groups(
         "all_source_groups": len(groups),
         "source_groups_by_stratum": counts_by_stratum,
         "candidate_source_groups": len(candidates),
-        "selected_source_groups_per_stratum": int(target),
-        "selected_source_groups": int(target) * len(counts_by_stratum),
+        "selected_source_groups_per_stratum": int(unique_targets[0]) if len(unique_targets) == 1 else None,
+        "selected_source_groups_by_stratum": targets_by_stratum,
+        "selected_source_groups": int(sum(targets_by_stratum.values())),
         "selected_by_stratum": selected_by_stratum,
         "does_not_prescan_events": True,
         "refill_from_same_stratum": True,
@@ -2492,11 +2505,13 @@ def _select_light_hetero_source_groups(
     *,
     seed: int,
     max_source_groups_per_stratum: int | None = None,
+    source_group_selection: str = "balanced_min",
 ) -> tuple[list[LightHeteroSourceGroup], dict[str, Any]]:
     candidates, summary = _plan_light_hetero_source_groups(
         paths,
         seed=seed,
         max_source_groups_per_stratum=max_source_groups_per_stratum,
+        source_group_selection=source_group_selection,
     )
     selected = {
         source_group
@@ -2895,7 +2910,7 @@ def _write_light_hetero_graph_h5(
     *,
     args: argparse.Namespace,
     config: dict[str, Any],
-    target_source_groups_per_stratum: int,
+    target_source_groups_by_stratum: dict[str, int],
 ) -> dict[str, Any]:
     output_path = Path(output).expanduser()
     output_path.mkdir(parents=True, exist_ok=True)
@@ -2908,16 +2923,16 @@ def _write_light_hetero_graph_h5(
     )
     worker_count = min(max(int(args.workers), 1), max(len(ordered_strata), 1))
     stratum_chunks = [[] for _ in range(worker_count)]
-    target_graphs_per_stratum = int(target_source_groups_per_stratum) * int(args.graphs_per_source_group)
     for index, stratum in enumerate(ordered_strata):
         groups = sorted(
             by_stratum[stratum],
             key=lambda group: _sample_key_from_parts(int(args.seed), group.source_group, "light-source-group", 0),
         )
+        target_graphs = int(target_source_groups_by_stratum[stratum]) * int(args.graphs_per_source_group)
         stratum_chunks[index % worker_count].append(
             {
                 "stratum": stratum,
-                "target_graphs": int(target_graphs_per_stratum),
+                "target_graphs": int(target_graphs),
                 "groups": [_light_group_to_dict(group) for group in groups],
             }
         )
@@ -2950,9 +2965,13 @@ def _write_light_hetero_graph_h5(
         for worker_index, strata in enumerate(stratum_chunks)
         if strata
     ]
+    target_graphs_by_stratum = {
+        stratum: int(target_source_groups_by_stratum[stratum]) * int(args.graphs_per_source_group)
+        for stratum in sorted(by_stratum)
+    }
     _progress_write(
         "hetero light export: "
-        f"candidate_source_groups={len(selected_groups)} target_graphs_per_stratum={target_graphs_per_stratum} "
+        f"candidate_source_groups={len(selected_groups)} target_graphs_by_stratum={target_graphs_by_stratum} "
         f"graphs_per_source_group={args.graphs_per_source_group} "
         f"workers={len(payloads)} output={output_path}"
     )
@@ -2983,6 +3002,7 @@ def _write_light_hetero_graph_h5(
     short_groups = [row for row in group_rows if int(row.get("graphs_written", 0)) < int(args.graphs_per_source_group)]
     timeout_groups = [row for row in group_rows if bool(row.get("timeout", False))]
     incomplete_strata = [row for row in stratum_rows if not bool(row.get("target_met", False))]
+    unique_targets = sorted(set(int(value) for value in target_source_groups_by_stratum.values()))
     return {
         "format": "talesd_gnn_hetero_light_export_v1",
         "output": str(output_path),
@@ -2993,8 +3013,9 @@ def _write_light_hetero_graph_h5(
         "graphs_per_source_group": int(args.graphs_per_source_group),
         "source_group_overdraw_factor": float(args.source_group_overdraw_factor),
         "source_group_timeout_sec": float(args.source_group_timeout_sec),
-        "target_source_groups_per_stratum": int(target_source_groups_per_stratum),
-        "target_graphs_per_stratum": int(target_graphs_per_stratum),
+        "target_source_groups_per_stratum": int(unique_targets[0]) if len(unique_targets) == 1 else None,
+        "target_source_groups_by_stratum": dict(sorted((str(key), int(value)) for key, value in target_source_groups_by_stratum.items())),
+        "target_graphs_by_stratum": target_graphs_by_stratum,
         "written_counts_by_stratum": dict(sorted(written_counts_by_stratum.items())),
         "strata": sorted(stratum_rows, key=lambda row: str(row["stratum"])),
         "incomplete_strata": sorted(incomplete_strata, key=lambda row: str(row["stratum"])),
@@ -4100,6 +4121,7 @@ def _cmd_export_hetero_light(args: argparse.Namespace) -> None:
         inputs,
         seed=int(args.seed),
         max_source_groups_per_stratum=args.max_source_groups_per_stratum,
+        source_group_selection=args.source_group_selection,
     )
     config = {
         **_paths_for_config(inputs),
@@ -4118,6 +4140,7 @@ def _cmd_export_hetero_light(args: argparse.Namespace) -> None:
         "worker_max_files": int(args.worker_max_files),
         "graphs_per_source_group": int(args.graphs_per_source_group),
         "source_group_overdraw_factor": float(args.source_group_overdraw_factor),
+        "source_group_selection": args.source_group_selection,
         "max_source_groups_per_stratum": args.max_source_groups_per_stratum,
         "allow_underfull_strata": bool(args.allow_underfull_strata),
         "selection_summary": selection_summary,
@@ -4129,7 +4152,8 @@ def _cmd_export_hetero_light(args: argparse.Namespace) -> None:
     _progress_write(
         "hetero light selection: "
         f"strata={selection_summary['source_groups_by_stratum']} "
-        f"selected_per_stratum={selection_summary['selected_source_groups_per_stratum']} "
+        f"source_group_selection={selection_summary['source_group_selection']} "
+        f"selected_by_stratum={selection_summary['selected_source_groups_by_stratum']} "
         f"candidate_source_groups={selection_summary['candidate_source_groups']} "
         f"graphs_per_source_group={args.graphs_per_source_group} "
         f"source_group_overdraw_factor={args.source_group_overdraw_factor}"
@@ -4139,7 +4163,9 @@ def _cmd_export_hetero_light(args: argparse.Namespace) -> None:
         output_path,
         args=args,
         config=config,
-        target_source_groups_per_stratum=int(selection_summary["selected_source_groups_per_stratum"]),
+        target_source_groups_by_stratum={
+            str(key): int(value) for key, value in selection_summary["selected_source_groups_by_stratum"].items()
+        },
     )
     result["selection"] = selection_summary
     result["graph_definition"] = config["graph_definition"]
@@ -4905,6 +4931,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="particle:DAT energy code stratumごとに使うsource group数の上限。未指定なら最小stratumに合わせる",
+    )
+    export_hetero_light.add_argument(
+        "--source-group-selection",
+        choices=["balanced_min", "all"],
+        default="balanced_min",
+        help="source group選択。balanced_minは最小stratumに合わせる。allは各stratumの全source groupを使う",
     )
     export_hetero_light.add_argument(
         "--allow-underfull-strata",

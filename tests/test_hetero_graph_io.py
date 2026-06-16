@@ -1434,6 +1434,38 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 ["DAT000116_gea_trg_000.dst.gz", "DAT000116_gea_trg_001.dst.gz"],
             )
 
+    def test_light_hetero_selection_all_keeps_every_source_group(self) -> None:
+        inputs = [
+            "/mc/proton/sel/DAT000116_gea_trg_000.dst.gz",
+            "/mc/proton/sel/DAT000116_gea_trg_001.dst.gz",
+            "/mc/proton/sel/DAT000216_gea_trg_000.dst.gz",
+            "/mc/proton/sel/DAT000316_gea_trg_000.dst.gz",
+            "/mc/iron/sel/DAT100116_gea_trg_000.dst.gz",
+            "/mc/iron/sel/DAT100216_gea_trg_000.dst.gz",
+            "/mc/proton/sel/DAT000117_gea_trg_000.dst.gz",
+            "/mc/iron/sel/DAT100117_gea_trg_000.dst.gz",
+            "/mc/iron/sel/DAT100217_gea_trg_000.dst.gz",
+        ]
+
+        selected, summary = _select_light_hetero_source_groups(
+            inputs,
+            seed=7,
+            source_group_selection="all",
+        )
+
+        self.assertEqual(
+            summary["source_groups_by_stratum"],
+            {"iron:16": 2, "iron:17": 2, "proton:16": 3, "proton:17": 1},
+        )
+        self.assertIsNone(summary["selected_source_groups_per_stratum"])
+        self.assertEqual(
+            summary["selected_source_groups_by_stratum"],
+            {"iron:16": 2, "iron:17": 2, "proton:16": 3, "proton:17": 1},
+        )
+        self.assertEqual(summary["selected_source_groups"], 8)
+        self.assertEqual(len(selected), 8)
+        self.assertEqual(len([group for group in selected if group.stratum == "proton:16"]), 3)
+
     def test_light_hetero_worker_refills_short_source_groups(self) -> None:
         class FakeHandle:
             def flush(self) -> None:

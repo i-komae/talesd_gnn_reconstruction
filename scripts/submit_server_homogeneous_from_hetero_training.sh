@@ -26,6 +26,11 @@ CONVERT_RUN_DIR="${CONVERT_RUN_DIR:-${OUTPUT_ROOT}/runs/${CONVERT_RUN_NAME}}"
 HOMOGENEOUS_GRAPH_OUTPUT="${HOMOGENEOUS_GRAPH_OUTPUT:-${GRAPH_ROOT}/${CONVERT_RUN_NAME}}"
 
 CONVERT_PARTITION="${CONVERT_PARTITION:-edr1-al9_large}"
+CONVERT_SBATCH_DEPENDENCY="${CONVERT_SBATCH_DEPENDENCY:-${SBATCH_DEPENDENCY:-}}"
+CONVERT_SBATCH_DEPENDENCY_LINE=""
+if [[ -n "${CONVERT_SBATCH_DEPENDENCY}" ]]; then
+  CONVERT_SBATCH_DEPENDENCY_LINE="#SBATCH --dependency=${CONVERT_SBATCH_DEPENDENCY}"
+fi
 if [[ -d "${HETERO_GRAPH_INPUT}" ]]; then
   CONVERT_INPUT_SHARDS="$(find "${HETERO_GRAPH_INPUT}" -type f \( -name '*.h5' -o -name '*.hdf5' \) | wc -l | tr -d ' ')"
 elif [[ -f "${HETERO_GRAPH_INPUT}" ]]; then
@@ -70,6 +75,7 @@ cat > "${CONVERT_SBATCH_FILE}" <<EOF
 #!/usr/bin/env bash
 #SBATCH --job-name=${CONVERT_RUN_NAME}
 #SBATCH --partition=${CONVERT_PARTITION}
+${CONVERT_SBATCH_DEPENDENCY_LINE}
 #SBATCH --cpus-per-task=${CONVERT_CPUS_PER_TASK}
 #SBATCH --mem=${CONVERT_MEM}
 #SBATCH --time=${CONVERT_TIME_LIMIT}
@@ -94,6 +100,7 @@ echo "pulse_mask=${PULSE_MASK}"
 echo "shard_size=${CONVERT_SHARD_SIZE}"
 echo "input_shards=${CONVERT_INPUT_SHARDS}"
 echo "workers=${CONVERT_WORKERS}"
+echo "sbatch_dependency=${CONVERT_SBATCH_DEPENDENCY:-none}"
 echo "======================================================================"
 
 cd "${REPO}"
@@ -128,6 +135,7 @@ hetero_graph_input: ${HETERO_GRAPH_INPUT}
 homogeneous_graph_output: ${HOMOGENEOUS_GRAPH_OUTPUT}
 pulse_mask: ${PULSE_MASK}
 convert_workers: ${CONVERT_WORKERS}
+convert_sbatch_dependency: ${CONVERT_SBATCH_DEPENDENCY:-none}
 submit_training: ${SUBMIT_TRAINING}
 training_run_name: ${TRAIN_RUN_NAME}
 training_partition: ${PARTITION}

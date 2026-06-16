@@ -46,6 +46,7 @@ MEM="${MEM:-96G}"
 TIME_LIMIT="${TIME_LIMIT:-1-00:00:00}"
 EXPORT_WORKERS="${EXPORT_WORKERS:-32}"
 MAX_SOURCE_GROUPS_PER_STRATUM="${MAX_SOURCE_GROUPS_PER_STRATUM:-}"
+SOURCE_GROUP_SELECTION="${SOURCE_GROUP_SELECTION:-balanced_min}"
 ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA:-0}"
 SHARD_SIZE="${SHARD_SIZE:-100000}"
 MIN_EVENT_DATE="${MIN_EVENT_DATE:-191002}"
@@ -159,6 +160,7 @@ echo "run_name=${RUN_NAME}"
 echo "graph_output=${GRAPH_OUTPUT}"
 echo "graphs_per_source_group=${GRAPHS_PER_SOURCE_GROUP}"
 echo "source_group_overdraw_factor=${SOURCE_GROUP_OVERDRAW_FACTOR}"
+echo "source_group_selection=${SOURCE_GROUP_SELECTION}"
 echo "max_source_groups_per_stratum=${MAX_SOURCE_GROUPS_PER_STRATUM}"
 echo "allow_underfull_strata=${ALLOW_UNDERFULL_STRATA}"
 echo "export_workers=${EXPORT_WORKERS}"
@@ -184,6 +186,7 @@ fi
   --mc-calib-dir "${MC_CALIB_DIR}" \\
   --graphs-per-source-group "${GRAPHS_PER_SOURCE_GROUP}" \\
   --source-group-overdraw-factor "${SOURCE_GROUP_OVERDRAW_FACTOR}" \\
+  --source-group-selection "${SOURCE_GROUP_SELECTION}" \\
 ${max_groups_line}\
 ${allow_underfull_line}\
   --seed "${SEED}" \\
@@ -227,6 +230,7 @@ graph_output: ${GRAPH_OUTPUT}
 selection_summary: ${SELECTION_SUMMARY}
 graphs_per_source_group: ${GRAPHS_PER_SOURCE_GROUP}
 source_group_overdraw_factor: ${SOURCE_GROUP_OVERDRAW_FACTOR}
+source_group_selection: ${SOURCE_GROUP_SELECTION}
 max_source_groups_per_stratum: ${MAX_SOURCE_GROUPS_PER_STRATUM}
 allow_underfull_strata: ${ALLOW_UNDERFULL_STRATA}
 seed: ${SEED}
