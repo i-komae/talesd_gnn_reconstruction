@@ -4585,6 +4585,30 @@ def _cmd_convert_hetero_to_flat(args: argparse.Namespace) -> None:
     )
 
 
+def _cmd_convert_hetero_to_homogeneous(args: argparse.Namespace) -> None:
+    from .hetero_to_homogeneous import convert_hetero_to_homogeneous
+
+    graphs = _resolve_graph_args(args.graphs, args.graphs_list)
+    summary = convert_hetero_to_homogeneous(
+        graphs,
+        args.output,
+        pulse_mask=args.pulse_mask,
+        shard_size=args.shard_size,
+        max_events=args.max_events,
+        overwrite=args.overwrite,
+        progress_interval_sec=args.progress_interval_sec,
+    )
+    print(
+        "hetero_to_homogeneous "
+        f"output={summary['output']} "
+        f"processed={summary['processed']} "
+        f"written={summary['written']} "
+        f"skipped={summary['skipped']} "
+        f"shards={summary['shards']} "
+        f"pulse_mask={summary['pulse_mask']}"
+    )
+
+
 def _cmd_reconstruct_dst(args: argparse.Namespace) -> None:
     from .hetero_predict import reconstruct_dst
 
@@ -5447,6 +5471,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="SPEED_BENCHMARK中でも遅いpost-hoc flat cache変換を明示的に許可する",
     )
     convert_hetero_flat.set_defaults(func=_cmd_convert_hetero_to_flat)
+
+    convert_hetero_homo = sub.add_parser(
+        "convert-hetero-to-homogeneous",
+        aliases=["convert-hetero-to-homo"],
+        help="hetero HDF5を現行homogeneous HDF5 schemaへ変換する",
+    )
+    convert_hetero_homo.add_argument(
+        "--graphs",
+        "--input",
+        nargs="*",
+        default=[],
+        help="入力hetero HDF5 graph/shard/directory",
+    )
+    convert_hetero_homo.add_argument("--graphs-list", action="append", default=[], help="入力hetero HDF5 shard path list")
+    convert_hetero_homo.add_argument("-o", "--output", required=True, help="出力homogeneous HDF5 fileまたはdirectory")
+    convert_hetero_homo.add_argument(
+        "--pulse-mask",
+        choices=["ising_kept", "valid", "all"],
+        default="ising_kept",
+        help="homogeneous nodeとして残すpulse。既定は比較runに合わせてIsing-keptのみ",
+    )
+    convert_hetero_homo.add_argument("--shard-size", type=int, default=100000)
+    convert_hetero_homo.add_argument("--max-events", type=int, default=None)
+    convert_hetero_homo.add_argument("--overwrite", action="store_true")
+    convert_hetero_homo.add_argument("--progress-interval-sec", type=float, default=30.0)
+    convert_hetero_homo.set_defaults(func=_cmd_convert_hetero_to_homogeneous)
 
     reconstruct_dst = sub.add_parser(
         "reconstruct-dst",

@@ -12,7 +12,7 @@ import numpy as np
 from .constants import EDGE_FEATURE_COLUMNS, PULSE_FEATURE_COLUMNS, TARGET_COLUMNS, WAVEFORM_FEATURE_CHANNELS
 from .dataset import H5GraphDataset, StandardScaler
 from .diagnostics import FIGSIZE_SINGLE, FIGSIZE_STACKED, LINEWIDTH_THIN, _prepare_matplotlib, _save_pdf, _style_axes
-from .metrics import binary_classification_metrics, reconstruction_metrics
+from .metrics import binary_classification_metrics, energy_particle_bias_metrics, reconstruction_metrics
 from .model import build_model_from_config
 from .progress import progress as _progress
 from .progress import write as _progress_write
@@ -426,7 +426,15 @@ def _metric_delta(baseline: dict[str, Any] | None, changed: dict[str, Any] | Non
     if baseline is None or changed is None:
         return {}
     delta = {}
+    skip_keys = {
+        "energy_particle_bias_n_events",
+        "energy_particle_bias_n_bins",
+        "energy_particle_bias_bin_width",
+        "energy_particle_bias_min_bin_count",
+    }
     for key in sorted(set(baseline) & set(changed)):
+        if key in skip_keys:
+            continue
         try:
             baseline_value = float(baseline[key])
             changed_value = float(changed[key])
@@ -437,14 +445,37 @@ def _metric_delta(baseline: dict[str, Any] | None, changed: dict[str, Any] | Non
     return delta
 
 
+def reconstruction_metrics_with_particle_bias(
+    pred: np.ndarray,
+    target: np.ndarray,
+    particle_labels: np.ndarray | None,
+    *,
+    energy_bin_width: float = 0.1,
+    min_bin_count: int = 8,
+) -> dict[str, Any]:
+    metrics: dict[str, Any] = dict(reconstruction_metrics(pred, target))
+    if particle_labels is not None:
+        metrics.update(
+            energy_particle_bias_metrics(
+                pred,
+                target,
+                particle_labels,
+                bin_width=energy_bin_width,
+                min_bin_count=min_bin_count,
+            )
+        )
+    return metrics
+
+
 def _feature_importance_plot_specs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
     reconstruction_labels = {
         "rmse_log10_energy": "energy RMSE loss",
+        "energy_particle_bias_abs_mean_log10": "p/Fe energy bias gap loss",
         "angular_68_deg": "angle 68% loss",
         "core_68_km": "core 68% loss",
     }
-    for metric in ("rmse_log10_energy", "angular_68_deg", "core_68_km"):
+    for metric in ("rmse_log10_energy", "energy_particle_bias_abs_mean_log10", "angular_68_deg", "core_68_km"):
         if any(metric in row.get("reconstruction_delta", {}) for row in rows):
             specs.append(
                 {
@@ -462,7 +493,7 @@ def _feature_importance_plot_specs(rows: list[dict[str, Any]]) -> list[dict[str,
             {
                 "section": "mass_delta",
                 "metric": "balanced_accuracy",
-                "label": "balanced accuracy loss",
+                "label": "mass accuracy loss",
                 "display_name": "balanced_accuracy_drop",
                 "display_transform": "baseline_minus_ablated",
                 "sign": -1.0,
@@ -472,14 +503,54 @@ def _feature_importance_plot_specs(rows: list[dict[str, Any]]) -> list[dict[str,
     return specs
 
 
+def _finite_positive_metric(section: Mapping[str, Any] | None, metric: str) -> float | None:
+    if section is None:
+        return None
+    try:
+        value = float(section[metric])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not np.isfinite(value) or value <= 0.0:
+        return None
+    return value
+
+
+def _relative_performance_change(
+    spec: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+    row: Mapping[str, Any],
+) -> float | None:
+    metric = str(spec["metric"])
+    section = str(spec["section"])
+    if section == "reconstruction_delta":
+        baseline_value = _finite_positive_metric(baseline.get("reconstruction"), metric)
+        ablated_value = _finite_positive_metric(row.get("reconstruction"), metric)
+        if baseline_value is None or ablated_value is None:
+            return None
+        return float(ablated_value / baseline_value - 1.0)
+    if section == "mass_delta":
+        baseline_value = _finite_positive_metric(baseline.get("mass"), metric)
+        ablated_value = _finite_positive_metric(row.get("mass"), metric)
+        if baseline_value is None or ablated_value is None:
+            return None
+        return float(baseline_value / ablated_value - 1.0)
+    return None
+
+
 def _feature_group_importance_plot_data(result: dict[str, Any]) -> dict[str, Any]:
     rows = list(result.get("groups", []))
     plot_specs = _feature_importance_plot_specs(rows)
+    baseline = result.get("baseline", {})
     return {
         "format": "feature_group_importance_plot_data_v1",
         "split": result.get("split"),
         "n_graphs": result.get("n_graphs"),
         "display_convention": "Positive values mean ablation worsens performance. Negative values mean ablation improves that metric.",
+        "relative_display_convention": (
+            "Baseline performance is 0.0. Positive values mean ablation worsens performance; "
+            "negative values mean ablation improves performance. Error metrics use ablated/baseline - 1; "
+            "mass balanced accuracy uses baseline/ablated - 1."
+        ),
         "groups": [str(row.get("group", "")) for row in rows],
         "plot_specs": [
             {
@@ -495,7 +566,22 @@ def _feature_group_importance_plot_data(result: dict[str, Any]) -> dict[str, Any
             }
             for spec in plot_specs
         ],
-        "baseline": result.get("baseline", {}),
+        "relative_plot_specs": [
+            {
+                **spec,
+                "display_name": f"relative_{spec['display_name']}",
+                "display_transform": (
+                    "ablated_over_baseline_minus_one"
+                    if spec["section"] == "reconstruction_delta"
+                    else "baseline_over_ablated_minus_one"
+                ),
+                "baseline_value": 0.0,
+                "unit": "dimensionless_fraction",
+                "values": [_relative_performance_change(spec, baseline, row) for row in rows],
+            }
+            for spec in plot_specs
+        ],
+        "baseline": baseline,
         "rows": rows,
     }
 
@@ -504,7 +590,11 @@ def _write_feature_group_importance_plot_data(result: dict[str, Any], output_dir
     data = _feature_group_importance_plot_data(result)
     path = output_dir / "feature_group_importance_plot_data.json"
     path.write_text(json.dumps(data, indent=2, sort_keys=True))
-    return {"plot_data_json": str(path)}
+    return {
+        "plot_data_json": str(path),
+        "feature_group_importance_pdf": str(output_dir / "feature_group_importance.pdf"),
+        "feature_group_importance_relative_pdf": str(output_dir / "feature_group_importance_relative.pdf"),
+    }
 
 
 def save_feature_group_importance(
@@ -580,7 +670,17 @@ def save_feature_group_importance(
             error_core_scale_km=float(runtime.get("error_core_scale_km", runtime.get("quality_core_scale_km", 0.05))),
             error_energy_scale=float(runtime.get("error_energy_scale", runtime.get("quality_energy_scale", 0.10))),
         )
-        reco = None if target_dim == 0 else reconstruction_metrics(pred, target)
+        reco = (
+            None
+            if target_dim == 0
+            else reconstruction_metrics_with_particle_bias(
+                pred,
+                target,
+                mass_label if mass_label is not None else None,
+                energy_bin_width=float(runtime.get("energy_bias_bin_width", 0.1)),
+                min_bin_count=int(runtime.get("energy_bias_min_bin_count", 8)),
+            )
+        )
         mass = (
             binary_classification_metrics(mass_logit, mass_label, threshold=0.5)
             if mass_classification and mass_logit is not None and mass_label is not None
@@ -624,6 +724,7 @@ def save_feature_group_importance(
     result["redraw_artifacts"] = _write_feature_group_importance_plot_data(result, output)
     json_path.write_text(json.dumps(result, indent=2, sort_keys=True))
     _plot_feature_group_importance(result, output / "feature_group_importance.pdf")
+    _plot_feature_group_importance_relative(result, output / "feature_group_importance_relative.pdf")
     dataset.close()
     result["summary_json"] = str(json_path)
     return result
@@ -655,6 +756,37 @@ def _plot_feature_group_importance(result: dict[str, Any], output: Path) -> None
         ax.set_ylabel(_escape_tex(str(spec["label"])))
         _style_axes(ax)
     axes[0].set_title("feature group ablation: positive means ablation worsens performance")
+    axes[-1].set_xticks(x, [_escape_tex(name) for name in names], rotation=35, ha="right")
+    fig.tight_layout()
+    _save_pdf(fig, output)
+
+
+def _plot_feature_group_importance_relative(result: dict[str, Any], output: Path) -> None:
+    _prepare_matplotlib()
+    import matplotlib.pyplot as plt
+
+    rows = result.get("groups", [])
+    if not rows:
+        return
+    names = [str(row["group"]) for row in rows]
+    data = _feature_group_importance_plot_data(result)
+    plot_specs = [spec for spec in data.get("relative_plot_specs", []) if any(value is not None for value in spec.get("values", []))]
+    if not plot_specs:
+        return
+
+    figsize = FIGSIZE_SINGLE if len(plot_specs) == 1 else FIGSIZE_STACKED
+    fig, axes = plt.subplots(len(plot_specs), 1, figsize=figsize, sharex=True)
+    axes = np.atleast_1d(axes)
+    x = np.arange(len(names))
+    colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["#1f77b4"])
+    for ax, spec in zip(axes, plot_specs, strict=True):
+        values = [np.nan if value is None else float(value) for value in spec.get("values", [])]
+        ax.bar(x, values, color=colors[1 % len(colors)], alpha=0.75)
+        ax.axhline(0.0, color="0.25", linewidth=LINEWIDTH_THIN)
+        ax.set_ylabel("relative change")
+        ax.set_title(_escape_tex(f"{spec['label']} (baseline = 0)"), fontsize=10)
+        _style_axes(ax)
+    axes[0].figure.suptitle("feature group ablation: relative performance impact")
     axes[-1].set_xticks(x, [_escape_tex(name) for name in names], rotation=35, ha="right")
     fig.tight_layout()
     _save_pdf(fig, output)

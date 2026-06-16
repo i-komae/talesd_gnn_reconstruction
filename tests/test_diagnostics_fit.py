@@ -91,10 +91,16 @@ class DiagnosticsFitTest(unittest.TestCase):
         result = {
             "split": "validation",
             "n_graphs": 10,
+            "baseline": {
+                "reconstruction": {"core_68_km": 0.24, "energy_particle_bias_abs_mean_log10": 0.04},
+                "mass": {"balanced_accuracy": 0.80},
+            },
             "groups": [
                 {
                     "group": "detector",
-                    "reconstruction_delta": {"core_68_km": 0.12},
+                    "reconstruction": {"core_68_km": 0.36, "energy_particle_bias_abs_mean_log10": 0.08},
+                    "reconstruction_delta": {"core_68_km": 0.12, "energy_particle_bias_abs_mean_log10": 0.04},
+                    "mass": {"balanced_accuracy": 0.82},
                     "mass_delta": {"accuracy": -0.03, "balanced_accuracy": 0.02},
                 }
             ],
@@ -103,10 +109,18 @@ class DiagnosticsFitTest(unittest.TestCase):
         plot_data = _feature_group_importance_plot_data(result)
 
         values_by_name = {spec["display_name"]: spec["values"][0] for spec in plot_data["plot_specs"]}
+        labels_by_name = {spec["display_name"]: spec["label"] for spec in plot_data["plot_specs"]}
+        relative_by_name = {spec["display_name"]: spec["values"][0] for spec in plot_data["relative_plot_specs"]}
         self.assertAlmostEqual(values_by_name["delta_core_68_km"], 0.12)
+        self.assertAlmostEqual(values_by_name["delta_energy_particle_bias_abs_mean_log10"], 0.04)
         self.assertAlmostEqual(values_by_name["balanced_accuracy_drop"], -0.02)
+        self.assertAlmostEqual(relative_by_name["relative_delta_core_68_km"], 0.5)
+        self.assertAlmostEqual(relative_by_name["relative_delta_energy_particle_bias_abs_mean_log10"], 1.0)
+        self.assertAlmostEqual(relative_by_name["relative_balanced_accuracy_drop"], 0.80 / 0.82 - 1.0)
+        self.assertEqual(labels_by_name["balanced_accuracy_drop"], "mass accuracy loss")
         self.assertNotIn("accuracy_drop", values_by_name)
         self.assertIn("Positive values", plot_data["display_convention"])
+        self.assertIn("Baseline performance is 0.0", plot_data["relative_display_convention"])
 
 
 if __name__ == "__main__":

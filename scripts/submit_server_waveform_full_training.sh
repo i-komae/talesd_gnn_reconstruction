@@ -421,7 +421,8 @@ if [[ ! -d "${REPO}" ]]; then
   echo "repo not found: ${REPO}" >&2
   exit 2
 fi
-if [[ ! -e "${GRAPH_INPUT}" ]]; then
+ALLOW_MISSING_GRAPH_INPUT="${ALLOW_MISSING_GRAPH_INPUT:-0}"
+if [[ ! -e "${GRAPH_INPUT}" && "${ALLOW_MISSING_GRAPH_INPUT}" != "1" ]]; then
   echo "graph input not found: ${GRAPH_INPUT}" >&2
   echo "Set GRAPH_INPUT=/path/to/graph_directory_or_h5 to override the default." >&2
   exit 2
@@ -441,12 +442,18 @@ SBATCH_NODELIST_LINE=""
 if [[ -n "${NODELIST}" ]]; then
   SBATCH_NODELIST_LINE="#SBATCH --nodelist=${NODELIST}"
 fi
+SBATCH_DEPENDENCY="${SBATCH_DEPENDENCY:-}"
+SBATCH_DEPENDENCY_LINE=""
+if [[ -n "${SBATCH_DEPENDENCY}" ]]; then
+  SBATCH_DEPENDENCY_LINE="#SBATCH --dependency=${SBATCH_DEPENDENCY}"
+fi
 
 cat > "${SBATCH_FILE}" <<EOF
 #!/usr/bin/env bash
 #SBATCH --job-name=${RUN_NAME}
 #SBATCH --partition=${PARTITION}
 ${SBATCH_NODELIST_LINE}
+${SBATCH_DEPENDENCY_LINE}
 #SBATCH --gres=gpu:${GPUS}
 #SBATCH --cpus-per-task=${CPUS_PER_TASK}
 #SBATCH --mem=${MEM}
@@ -1346,6 +1353,7 @@ job_log:
 
 graph_input_original:
   ${GRAPH_INPUT}
+allow_missing_graph_input=${ALLOW_MISSING_GRAPH_INPUT}
 
 local_runtime_cache=${LOCAL_RUNTIME_CACHE}
 local_runtime_root_requested=${LOCAL_RUNTIME_ROOT}
@@ -1368,6 +1376,7 @@ local_graph_stale_lock_sec=${LOCAL_GRAPH_STALE_LOCK_SEC}
 
 partition=${PARTITION}
 nodelist=${NODELIST:-any}
+sbatch_dependency=${SBATCH_DEPENDENCY:-none}
 time_limit=${TIME_LIMIT}
 gpus=${GPUS}
 cpus_per_task=${CPUS_PER_TASK}

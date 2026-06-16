@@ -26,7 +26,7 @@ from .hetero_data import hetero_sample_to_training_tensors
 from .hetero_graph_io import H5HeteroGraphDataset, H5PyGHeteroGraphDataset, hetero_dataset_class_for_paths
 from .hetero_model import MinimalHeteroTaleSdGNN
 from .hetero_model import NODE_TYPE_BY_RELATION
-from .metrics import angular_error_deg, binary_classification_metrics, reconstruction_metrics
+from .metrics import angular_error_deg, binary_classification_metrics, energy_particle_bias_metrics, reconstruction_metrics
 from .progress import progress as _progress
 from .train import (
     _error_prediction_loss,
@@ -1692,6 +1692,9 @@ def _milestone_metric_summary(
     mass_label: np.ndarray | None,
     quality_score: np.ndarray | None,
     error_prediction: np.ndarray | None,
+    *,
+    energy_particle_bias_bin_width: float = 0.1,
+    energy_particle_bias_min_bin_count: int = 8,
 ) -> dict[str, Any]:
     if int(pred.shape[0]) == 0 or int(target.shape[0]) == 0:
         return {"n_events": 0}
@@ -1699,6 +1702,16 @@ def _milestone_metric_summary(
     metrics["n_events"] = int(pred.shape[0])
     energy_delta = np.asarray(pred[:, 0] - target[:, 0], dtype=np.float64)
     metrics["energy_bias_log10"] = _finite_float(np.mean(energy_delta))
+    if mass_label is not None and int(np.asarray(mass_label).size) > 0:
+        metrics.update(
+            energy_particle_bias_metrics(
+                pred,
+                target,
+                mass_label,
+                bin_width=energy_particle_bias_bin_width,
+                min_bin_count=energy_particle_bias_min_bin_count,
+            )
+        )
     if "relative_energy_central68_half_width" in metrics:
         metrics["energy_resolution_fraction"] = metrics["relative_energy_central68_half_width"]
         metrics["energy_resolution_percent"] = (
@@ -2785,7 +2798,12 @@ def train_hetero_model(
             core_target_mode=core_target_mode,
         )
 
-        def _add_reconstruction_metric(split_name: str, pred: np.ndarray, target: np.ndarray) -> dict[str, Any] | None:
+        def _add_reconstruction_metric(
+            split_name: str,
+            pred: np.ndarray,
+            target: np.ndarray,
+            particle_labels: np.ndarray | None,
+        ) -> dict[str, Any] | None:
             if int(pred.shape[0]) == 0 or int(target.shape[0]) == 0:
                 print(
                     "hetero_split_warning "
@@ -2793,11 +2811,22 @@ def train_hetero_model(
                     flush=True,
                 )
                 return None
-            return reconstruction_metrics(pred, target)
+            metrics = dict(reconstruction_metrics(pred, target))
+            if particle_labels is not None and int(np.asarray(particle_labels).size) > 0:
+                metrics.update(
+                    energy_particle_bias_metrics(
+                        pred,
+                        target,
+                        particle_labels,
+                        bin_width=energy_bias_bin_width,
+                        min_bin_count=energy_bias_min_bin_count,
+                    )
+                )
+            return metrics
 
         metrics: dict[str, Any] = {}
-        val_metrics = _add_reconstruction_metric("validation", pred_val, target_val)
-        test_metrics = _add_reconstruction_metric("test", pred_test, target_test)
+        val_metrics = _add_reconstruction_metric("validation", pred_val, target_val, mass_label_val)
+        test_metrics = _add_reconstruction_metric("test", pred_test, target_test, mass_label_test)
         if val_metrics is not None:
             metrics["validation"] = val_metrics
         if test_metrics is not None:
@@ -2843,6 +2872,7 @@ def train_hetero_model(
         keys = [
             "rmse_log10_energy",
             "energy_bias_log10",
+            "energy_particle_bias_abs_mean_log10",
             "angular_68_deg",
             "core_68_km",
             "mass_auc",
@@ -2918,7 +2948,16 @@ def train_hetero_model(
                     core_target_mode=core_target_mode,
                 )
                 elapsed = time.monotonic() - start
-                metrics_payload = _milestone_metric_summary(pred, target, mass_logit, mass_label, quality_score, error_pred)
+                metrics_payload = _milestone_metric_summary(
+                    pred,
+                    target,
+                    mass_logit,
+                    mass_label,
+                    quality_score,
+                    error_pred,
+                    energy_particle_bias_bin_width=energy_bias_bin_width,
+                    energy_particle_bias_min_bin_count=energy_bias_min_bin_count,
+                )
                 prediction_payloads[split_name] = (
                     pred,
                     target,
@@ -3714,7 +3753,16 @@ def evaluate_hetero_checkpoint(
                 core_target_mode=core_target_mode,
             )
             elapsed = time.monotonic() - start
-            metrics = _milestone_metric_summary(pred, target, mass_logit, mass_label, quality_score, error_pred)
+            metrics = _milestone_metric_summary(
+                pred,
+                target,
+                mass_logit,
+                mass_label,
+                quality_score,
+                error_pred,
+                energy_particle_bias_bin_width=float(runtime.get("energy_bias_bin_width", 0.1)),
+                energy_particle_bias_min_bin_count=int(runtime.get("energy_bias_min_bin_count", 8)),
+            )
             metrics_by_split[split_name] = {
                 "metrics": metrics,
                 "runtime": {

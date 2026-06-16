@@ -16,6 +16,7 @@ from talesd_gnn_reconstruction.diagnostics import save_training_diagnostics
 from talesd_gnn_reconstruction.metrics import (
     balanced_accuracy_threshold,
     binary_classification_metrics,
+    energy_particle_bias_metrics,
     reconstruction_metrics,
 )
 from talesd_gnn_reconstruction.model import build_model_from_config
@@ -70,10 +71,29 @@ def _is_hetero_checkpoint(ckpt: dict[str, Any]) -> bool:
     return "hetero_scalers" in ckpt or architecture in _HETERO_ARCHITECTURES
 
 
-def _reconstruction_metrics_for_task(training_task: str, pred: np.ndarray, target: np.ndarray) -> dict[str, Any] | None:
+def _reconstruction_metrics_for_task(
+    training_task: str,
+    pred: np.ndarray,
+    target: np.ndarray,
+    particle_labels: np.ndarray | None = None,
+    *,
+    energy_bin_width: float = 0.1,
+    min_bin_count: int = 8,
+) -> dict[str, Any] | None:
     if training_task == "mass":
         return None
-    return reconstruction_metrics(pred, target)
+    metrics: dict[str, Any] = dict(reconstruction_metrics(pred, target))
+    if particle_labels is not None:
+        metrics.update(
+            energy_particle_bias_metrics(
+                pred,
+                target,
+                particle_labels,
+                bin_width=energy_bin_width,
+                min_bin_count=min_bin_count,
+            )
+        )
+    return metrics
 
 
 def _print_diagnostics_paths(diagnostics: dict[str, Any]) -> None:
@@ -317,6 +337,8 @@ def _run_hetero_reprediction(
             mass_label_val,
             quality_val,
             predicted_error_val,
+            energy_particle_bias_bin_width=float(runtime.get("energy_bias_bin_width", args.diagnostic_energy_bin_width)),
+            energy_particle_bias_min_bin_count=int(runtime.get("energy_bias_min_bin_count", args.diagnostic_min_bin_count)),
         )
         test_metrics = _milestone_metric_summary(
             pred_test,
@@ -325,6 +347,8 @@ def _run_hetero_reprediction(
             mass_label_test,
             quality_test,
             predicted_error_test,
+            energy_particle_bias_bin_width=float(runtime.get("energy_bias_bin_width", args.diagnostic_energy_bin_width)),
+            energy_particle_bias_min_bin_count=int(runtime.get("energy_bias_min_bin_count", args.diagnostic_min_bin_count)),
         )
         print("validation metrics:", json.dumps(val_metrics, sort_keys=True), flush=True)
         print("test metrics:", json.dumps(test_metrics, sort_keys=True), flush=True)
@@ -442,7 +466,14 @@ def main() -> None:
             quality_test,
             predicted_error_test,
         ) = _load_prediction_cache(cache_path)
-        val_metrics = _reconstruction_metrics_for_task(training_task, pred_val, target_val)
+        val_metrics = _reconstruction_metrics_for_task(
+            training_task,
+            pred_val,
+            target_val,
+            mass_label_val,
+            energy_bin_width=float(runtime.get("energy_bias_bin_width", args.diagnostic_energy_bin_width)),
+            min_bin_count=int(runtime.get("energy_bias_min_bin_count", args.diagnostic_min_bin_count)),
+        )
         mass_threshold = 0.5
         tuned_mass_threshold = (
             balanced_accuracy_threshold(mass_logit_val, mass_label_val)
@@ -459,7 +490,14 @@ def main() -> None:
             if mass_logit_val is not None and mass_label_val is not None
             else None
         )
-        test_metrics = _reconstruction_metrics_for_task(training_task, pred_test, target_test)
+        test_metrics = _reconstruction_metrics_for_task(
+            training_task,
+            pred_test,
+            target_test,
+            mass_label_test,
+            energy_bin_width=float(runtime.get("energy_bias_bin_width", args.diagnostic_energy_bin_width)),
+            min_bin_count=int(runtime.get("energy_bias_min_bin_count", args.diagnostic_min_bin_count)),
+        )
         test_mass_metrics = (
             binary_classification_metrics(mass_logit_test, mass_label_test, threshold=mass_threshold)
             if mass_logit_test is not None and mass_label_test is not None
@@ -590,7 +628,14 @@ def main() -> None:
             error_core_scale_km=error_core_scale_km,
             error_energy_scale=error_energy_scale,
         )
-        val_metrics = _reconstruction_metrics_for_task(training_task, pred_val, target_val)
+        val_metrics = _reconstruction_metrics_for_task(
+            training_task,
+            pred_val,
+            target_val,
+            mass_label_val,
+            energy_bin_width=float(runtime.get("energy_bias_bin_width", args.diagnostic_energy_bin_width)),
+            min_bin_count=int(runtime.get("energy_bias_min_bin_count", args.diagnostic_min_bin_count)),
+        )
         mass_threshold = 0.5
         tuned_mass_threshold = (
             balanced_accuracy_threshold(mass_logit_val, mass_label_val)
@@ -646,7 +691,14 @@ def main() -> None:
             error_core_scale_km=error_core_scale_km,
             error_energy_scale=error_energy_scale,
         )
-        test_metrics = _reconstruction_metrics_for_task(training_task, pred_test, target_test)
+        test_metrics = _reconstruction_metrics_for_task(
+            training_task,
+            pred_test,
+            target_test,
+            mass_label_test,
+            energy_bin_width=float(runtime.get("energy_bias_bin_width", args.diagnostic_energy_bin_width)),
+            min_bin_count=int(runtime.get("energy_bias_min_bin_count", args.diagnostic_min_bin_count)),
+        )
         test_mass_metrics = (
             binary_classification_metrics(mass_logit_test, mass_label_test, threshold=mass_threshold)
             if mass_logit_test is not None and mass_label_test is not None

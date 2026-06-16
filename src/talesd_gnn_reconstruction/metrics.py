@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 
@@ -52,6 +54,91 @@ def reconstruction_metrics(pred: np.ndarray, target: np.ndarray) -> dict[str, fl
         "core_xy_68_km": float(np.percentile(np.linalg.norm(core_xy_delta, axis=1), 68.0)),
         "angular_median_deg": float(np.median(angular)),
         "angular_68_deg": float(np.percentile(angular, 68.0)),
+    }
+
+
+def _centered_energy_bin_edges(log10_energy: np.ndarray, bin_width: float) -> np.ndarray:
+    values = np.asarray(log10_energy, dtype=np.float64).reshape(-1)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.asarray([], dtype=np.float64)
+    width = max(float(bin_width), 1.0e-6)
+    offset = 0.5 * width
+    lo = math.floor((float(values.min()) - offset) / width) * width + offset
+    hi = math.ceil((float(values.max()) - offset) / width) * width + offset
+    if hi <= lo:
+        hi = lo + width
+    return np.arange(lo, hi + 0.5 * width, width, dtype=np.float64)
+
+
+def energy_particle_bias_metrics(
+    pred: np.ndarray,
+    target: np.ndarray,
+    particle_labels: np.ndarray,
+    *,
+    bin_width: float = 0.1,
+    min_bin_count: int = 8,
+) -> dict[str, float | int | list[dict[str, float | int]]]:
+    """Summarize proton/iron energy residual separation in true-energy bins.
+
+    The metric is diagnostic only. It is not a loss term. For each centered
+    true-logE bin, it compares mean ``pred_logE - true_logE`` for iron and
+    proton and reports the absolute separation. Smaller is better.
+    """
+
+    pred = np.asarray(pred, dtype=np.float64)
+    target = np.asarray(target, dtype=np.float64)
+    labels = np.asarray(particle_labels, dtype=np.float64).reshape(-1)
+    residual = pred[:, 0] - target[:, 0]
+    true_loge = target[:, 0]
+    finite = np.isfinite(residual) & np.isfinite(true_loge) & np.isfinite(labels)
+    residual = residual[finite]
+    true_loge = true_loge[finite]
+    labels = labels[finite]
+    min_count = max(int(min_bin_count), 1)
+    width = max(float(bin_width), 1.0e-6)
+    edges = _centered_energy_bin_edges(true_loge, width)
+    rows: list[dict[str, float | int]] = []
+    if edges.size >= 2:
+        for index, (low, high) in enumerate(zip(edges[:-1], edges[1:])):
+            if index == edges.size - 2:
+                energy_mask = (true_loge >= low) & (true_loge <= high)
+            else:
+                energy_mask = (true_loge >= low) & (true_loge < high)
+            proton_mask = energy_mask & (labels < 0.5)
+            iron_mask = energy_mask & (labels >= 0.5)
+            n_proton = int(np.count_nonzero(proton_mask))
+            n_iron = int(np.count_nonzero(iron_mask))
+            if n_proton < min_count or n_iron < min_count:
+                continue
+            proton_bias = float(np.mean(residual[proton_mask]))
+            iron_bias = float(np.mean(residual[iron_mask]))
+            iron_minus_proton = iron_bias - proton_bias
+            rows.append(
+                {
+                    "log10_energy_low": float(low),
+                    "log10_energy_high": float(high),
+                    "log10_energy_center": float(0.5 * (low + high)),
+                    "n_proton": n_proton,
+                    "n_iron": n_iron,
+                    "mean_bias_proton_log10": proton_bias,
+                    "mean_bias_iron_log10": iron_bias,
+                    "iron_minus_proton_bias_log10": float(iron_minus_proton),
+                    "abs_iron_minus_proton_bias_log10": float(abs(iron_minus_proton)),
+                }
+            )
+    deltas = np.asarray([float(row["iron_minus_proton_bias_log10"]) for row in rows], dtype=np.float64)
+    abs_deltas = np.abs(deltas)
+    return {
+        "energy_particle_bias_n_events": int(residual.size),
+        "energy_particle_bias_n_bins": int(len(rows)),
+        "energy_particle_bias_bin_width": float(width),
+        "energy_particle_bias_min_bin_count": int(min_count),
+        "energy_particle_bias_signed_mean_log10": float(np.mean(deltas)) if deltas.size else float("nan"),
+        "energy_particle_bias_abs_mean_log10": float(np.mean(abs_deltas)) if abs_deltas.size else float("nan"),
+        "energy_particle_bias_abs_max_log10": float(np.max(abs_deltas)) if abs_deltas.size else float("nan"),
+        "energy_particle_bias_rms_log10": float(np.sqrt(np.mean(deltas**2))) if deltas.size else float("nan"),
+        "energy_particle_bias_bins": rows,
     }
 
 

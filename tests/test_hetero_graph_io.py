@@ -30,6 +30,8 @@ from talesd_gnn_reconstruction.core_coordinates import (
     core_anchor_weight_column,
     inverse_transform_core_target,
 )
+from talesd_gnn_reconstruction.constants import NODE_FEATURE_COLUMNS, WAVEFORM_FEATURE_CHANNELS, WAVEFORM_TRACE_BINS
+from talesd_gnn_reconstruction.dataset import H5GraphDataset
 from talesd_gnn_reconstruction.hetero_attention_analysis import save_hetero_attention_maps
 from talesd_gnn_reconstruction.hetero_feature_analysis import (
     save_hetero_feature_group_importance,
@@ -51,6 +53,7 @@ from talesd_gnn_reconstruction.hetero_graph_io import (
     hetero_graph_count,
     write_hetero_graph,
 )
+from talesd_gnn_reconstruction.hetero_to_homogeneous import convert_hetero_to_homogeneous
 from talesd_gnn_reconstruction.hetero_model import MinimalHeteroTaleSdGNN
 from talesd_gnn_reconstruction.hetero_predict import reconstruct_dst
 from talesd_gnn_reconstruction.hetero_training import (
@@ -204,6 +207,50 @@ def _synthetic_graph(index: int) -> SimpleNamespace:
 
 
 class SyntheticHeteroGraphIoTest(unittest.TestCase):
+    def test_convert_hetero_to_homogeneous_writes_current_schema(self) -> None:
+        graph = _synthetic_graph(0)
+        graph.detector_features = np.vstack([graph.detector_features, graph.detector_features[-1:]]).astype(np.float32)
+        graph.detector_context_features = np.vstack(
+            [graph.detector_context_features, graph.detector_context_features[-1:]]
+        ).astype(np.float32)
+        graph.detector_positions_km = np.vstack(
+            [graph.detector_positions_km, graph.detector_positions_km[-1:] + np.asarray([[0.4, 0.2, 0.0]], dtype=np.float32)]
+        ).astype(np.float32)
+        graph.detector_lids = np.asarray([101, 102, 103, 104], dtype=np.int64)
+        graph.detector_waveforms = np.concatenate([graph.detector_waveforms, graph.detector_waveforms[-1:]], axis=0)
+        graph.pulse_detector_index = np.asarray([0, 1, 2, 3], dtype=np.int64)
+        graph.pulse_lids = np.asarray([101, 102, 103, 104], dtype=np.int64)
+        graph.pulse_positions_km = graph.detector_positions_km.copy()
+        keep_index = GRAPH_COLUMNS["pulse_features"].index("ising_keep")
+        graph.pulse_features[:, keep_index] = 1.0
+        graph.edge_index_by_type["detector__observes__pulse"] = np.asarray(
+            [graph.pulse_detector_index, np.arange(4, dtype=np.int64)],
+            dtype=np.int64,
+        )
+        graph.edge_index_by_type["pulse__observed_by__detector"] = np.asarray(
+            [np.arange(4, dtype=np.int64), graph.pulse_detector_index],
+            dtype=np.int64,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hetero_path = Path(tmpdir) / "hetero.h5"
+            homo_dir = Path(tmpdir) / "homogeneous"
+            with create_hetero_graph_file(hetero_path) as handle:
+                write_hetero_graph(handle, 0, graph)
+            summary = convert_hetero_to_homogeneous([hetero_path], homo_dir, pulse_mask="ising_kept")
+            self.assertEqual(summary["written"], 1)
+            dataset = H5GraphDataset(homo_dir / "graphs_0000.h5", require_target=True, require_particle_label=True)
+            try:
+                sample = dataset[0]
+                self.assertEqual(sample["node_features"].shape, (4, len(NODE_FEATURE_COLUMNS)))
+                self.assertEqual(
+                    sample["waveform_features"].shape,
+                    (4, len(WAVEFORM_FEATURE_CHANNELS), WAVEFORM_TRACE_BINS),
+                )
+                self.assertEqual(sample["pulse_features"].shape, (4, 1))
+                np.testing.assert_allclose(sample["target"], graph.target)
+            finally:
+                dataset.close()
+
     def test_core_anchor_weight_column_priority(self) -> None:
         self.assertEqual(
             core_anchor_weight_column(["dx_from_reference_core_km", "log10_pulse_rho", "sqrt_pulse_rho"]),
@@ -2415,15 +2462,19 @@ class HeteroGraphIoTest(unittest.TestCase):
             summary_path = Path(result["summary_json"])
             self.assertTrue(summary_path.exists())
             self.assertTrue((output_dir / "feature_group_importance.pdf").exists())
+            self.assertTrue((output_dir / "feature_group_importance_relative.pdf").exists())
             payload = json.loads(summary_path.read_text())
             self.assertEqual(payload["n_graphs"], 1)
             self.assertTrue(payload["groups"])
             self.assertIn("baseline", payload)
+            self.assertIn("energy_particle_bias_abs_mean_log10", payload["baseline"]["reconstruction"])
             redraw = payload["redraw_artifacts"]
             self.assertTrue(Path(redraw["plot_data_json"]).exists())
+            self.assertTrue(Path(redraw["feature_group_importance_relative_pdf"]).exists())
             plot_data = json.loads(Path(redraw["plot_data_json"]).read_text())
             self.assertIn("median_abs_relative_energy", payload["groups"][0]["reconstruction_delta"])
             self.assertIn("plot_specs", plot_data)
+            self.assertIn("relative_plot_specs", plot_data)
 
     def test_hetero_attention_maps_smoke_writes_json_and_npz(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

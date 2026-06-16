@@ -23,6 +23,7 @@ from .metrics import (
     binary_classification_metrics,
     direction_columns_for_dim,
     direction_to_angles,
+    energy_particle_bias_metrics,
     reconstruction_metrics,
 )
 from .progress import progress as _progress
@@ -900,6 +901,28 @@ def _energy_particle_bias_loss(
     if not losses:
         return residual.new_zeros(())
     return torch.stack(losses).mean()
+
+
+def _reconstruction_metrics_with_particle_bias(
+    pred: np.ndarray,
+    target: np.ndarray,
+    particle_labels: np.ndarray | None,
+    *,
+    bin_width: float,
+    min_bin_count: int,
+) -> dict[str, Any]:
+    metrics: dict[str, Any] = dict(reconstruction_metrics(pred, target))
+    if particle_labels is not None:
+        metrics.update(
+            energy_particle_bias_metrics(
+                pred,
+                target,
+                particle_labels,
+                bin_width=bin_width,
+                min_bin_count=min_bin_count,
+            )
+        )
+    return metrics
 
 
 def _reconstruction_loss_with_components(
@@ -2587,7 +2610,17 @@ def train_model(
         error_core_scale_km=error_core_scale_km,
         error_energy_scale=error_energy_scale,
     )
-    val_metrics = None if training_task == "mass" else reconstruction_metrics(pred_val, target_val)
+    val_metrics = (
+        None
+        if training_task == "mass"
+        else _reconstruction_metrics_with_particle_bias(
+            pred_val,
+            target_val,
+            mass_label_val,
+            bin_width=energy_bias_bin_width,
+            min_bin_count=energy_bias_min_bin_count,
+        )
+    )
     mass_threshold = 0.5
     tuned_mass_threshold = (
         balanced_accuracy_threshold(mass_logit_val, mass_label_val)
@@ -2623,7 +2656,17 @@ def train_model(
         error_core_scale_km=error_core_scale_km,
         error_energy_scale=error_energy_scale,
     )
-    test_metrics = None if training_task == "mass" else reconstruction_metrics(pred_test, target_test)
+    test_metrics = (
+        None
+        if training_task == "mass"
+        else _reconstruction_metrics_with_particle_bias(
+            pred_test,
+            target_test,
+            mass_label_test,
+            bin_width=energy_bias_bin_width,
+            min_bin_count=energy_bias_min_bin_count,
+        )
+    )
     test_mass_metrics = (
         binary_classification_metrics(mass_logit_test, mass_label_test, threshold=mass_threshold)
         if mass_classification and mass_logit_test is not None and mass_label_test is not None

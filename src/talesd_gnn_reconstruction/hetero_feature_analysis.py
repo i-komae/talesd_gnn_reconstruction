@@ -14,7 +14,9 @@ from .feature_analysis import (
     _metric_delta,
     _plot_feature_group,
     _plot_feature_group_importance,
+    _plot_feature_group_importance_relative,
     _reservoir_merge,
+    reconstruction_metrics_with_particle_bias,
     _sample_indices,
     _summarize_values,
     _write_feature_group_importance_plot_data,
@@ -24,7 +26,7 @@ from .hetero_data import sample_to_hetero_data
 from .hetero_graph_io import EDGE_RELATIONS, H5HeteroGraphDataset, H5PyGHeteroGraphDataset, hetero_dataset_class_for_paths
 from .hetero_model import MinimalHeteroTaleSdGNN
 from .hetero_training import _predict_hetero_numpy
-from .metrics import binary_classification_metrics, reconstruction_metrics
+from .metrics import binary_classification_metrics
 from .progress import progress as _progress
 from .progress import write as _progress_write
 from .train import resolve_device
@@ -517,7 +519,17 @@ def save_hetero_feature_group_importance(
             desc=desc,
             show_progress=show_progress,
         )
-        reco = None if target_dim == 0 else reconstruction_metrics(pred, target)
+        reco = (
+            None
+            if target_dim == 0
+            else reconstruction_metrics_with_particle_bias(
+                pred,
+                target,
+                mass_label if mass_label is not None else None,
+                energy_bin_width=float(runtime.get("energy_bias_bin_width", 0.1)),
+                min_bin_count=int(runtime.get("energy_bias_min_bin_count", 8)),
+            )
+        )
         mass = (
             binary_classification_metrics(mass_logit, mass_label, threshold=0.5)
             if mass_classification and mass_logit is not None and mass_label is not None
@@ -575,6 +587,7 @@ def save_hetero_feature_group_importance(
     result["redraw_artifacts"] = _write_feature_group_importance_plot_data(result, output)
     json_path.write_text(json.dumps(result, indent=2, sort_keys=True))
     _plot_feature_group_importance(result, output / "feature_group_importance.pdf")
+    _plot_feature_group_importance_relative(result, output / "feature_group_importance_relative.pdf")
     dataset.close()
     base_dataset.close()
     result["summary_json"] = str(json_path)
