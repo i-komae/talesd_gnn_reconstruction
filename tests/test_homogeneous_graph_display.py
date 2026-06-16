@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from scripts.make_homogeneous_graph_event_display import _used_time_limits
+from scripts.make_homogeneous_graph_event_display import _displayed_pulse_mask, _used_time_limits
 
 
 class HomogeneousGraphDisplayTests(unittest.TestCase):
@@ -23,6 +23,18 @@ class HomogeneousGraphDisplayTests(unittest.TestCase):
         used = np.asarray([False, False])
 
         self.assertEqual(_used_time_limits(arrival, used), (0.0, 1.0))
+
+    def test_kept_only_display_mask_drops_rejected_pulses(self) -> None:
+        used = np.asarray([True, False, True, False])
+
+        np.testing.assert_array_equal(
+            _displayed_pulse_mask(used, drop_rejected_pulses=True),
+            np.asarray([True, False, True, False]),
+        )
+        np.testing.assert_array_equal(
+            _displayed_pulse_mask(used, drop_rejected_pulses=False),
+            np.asarray([True, True, True, True]),
+        )
 
 
 if __name__ == "__main__":

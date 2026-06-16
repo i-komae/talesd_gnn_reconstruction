@@ -165,6 +165,22 @@ relation は pulse--pulse、detector--detector、detector--pulse の 3 系統で
   \label{fig:hetero-graph-event-display}
 \end{figure}
 
+比較のため、同じ event から detector node と rejected pulse を表示から除いた
+homogeneous pulse graph を図\ref{fig:homogeneous-graph-event-display-kept-only}に示す。
+この表示は、heterogeneous HDF5 から homogeneous 比較用 graph を作る時に
+\code{PULSE\_MASK=ising\_kept} とした場合の pulse node と pulse--pulse edge に対応する。
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig/homogeneous_graph_event_display_ising_kept_only.png}
+  \caption{
+    Ising-kept pulse だけを描いた homogeneous pulse graph 表示。
+    detector node、detector edge、Ising-rejected pulse node は描かない。
+    色は使用する pulse node の時刻で付け、edge は使用 pulse 同士の relation だけを示す。
+  }
+  \label{fig:homogeneous-graph-event-display-kept-only}
+\end{figure}
+
 図\ref{fig:hetero-graph-event-display}のように、実際の入力 graph では detector node と pulse node が同じ平面上に押し込まれているわけではない。
 detector node は検出器位置を持ち、pulse node はその detector に属する時間方向の候補として扱う。
 そのため、model 側では detector feature、detector waveform、pulse feature、typed edge relation を別々に encoder へ渡す。

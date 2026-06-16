@@ -135,6 +135,24 @@ The graph relations are pulse--pulse, detector--detector, and detector--pulse re
   \label{fig:hetero-graph-event-display}
 \end{figure}
 
+For comparison, Figure~\ref{fig:homogeneous-graph-event-display-kept-only}
+shows the same event after removing detector nodes and rejected pulses from the
+display.  This view matches the pulse nodes and pulse--pulse edges used when a
+homogeneous comparison graph is made from the heterogeneous HDF5 with
+\code{PULSE\_MASK=ising\_kept}.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig/homogeneous_graph_event_display_ising_kept_only.png}
+  \caption{
+    Homogeneous pulse graph display with only Ising-kept pulses drawn.
+    Detector nodes, detector edges, and Ising-rejected pulse nodes are not
+    drawn.  Color encodes the time of the used pulse nodes, and edges are shown
+    only between used pulses.
+  }
+  \label{fig:homogeneous-graph-event-display-kept-only}
+\end{figure}
+
 Figure~\ref{fig:hetero-graph-event-display} shows why the model input is not a single homogeneous node table.
 Detector nodes carry detector-level features and detector waveforms, while pulse nodes carry pulse-candidate features and Ising annotations.
 The model therefore encodes detector features, detector waveforms, pulse features, and typed edge relations as separate inputs before message passing.

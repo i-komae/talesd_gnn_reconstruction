@@ -3,8 +3,10 @@
 This script intentionally follows dstio's ``plot_hetero_graph_3d`` drawing
 style.  The homogeneous view keeps pulse nodes and pulse-pulse relations only:
 detector nodes, detector-detector edges, and detector-pulse edges are omitted.
-Ising-rejected pulse candidates are shown as unused nodes with white fill and
-black outline, and they are excluded from the time colorbar normalization.
+By default, Ising-rejected pulse candidates are shown as unused nodes with white
+fill and black outline, and they are excluded from the time colorbar
+normalization.  The script also writes a kept-only view where rejected pulse
+candidates are not drawn at all.
 """
 
 from __future__ import annotations
@@ -32,6 +34,9 @@ DSTIO_ROOT = Path(dstio.__file__).resolve().parents[2]
 DEFAULT_DATA_DST = DSTIO_ROOT / "test" / "data" / "tale_data_talesdcalibev_single_event.dst"
 DEFAULT_CONST_DST = Path("/Users/ikomae/TALE/TASoft/development/data/SD/talesdconst_pass2.dst")
 DEFAULT_OUTPUT = REPO_ROOT / "docs" / "api" / "fig" / "homogeneous_graph_event_display.png"
+DEFAULT_KEPT_ONLY_OUTPUT = (
+    REPO_ROOT / "docs" / "api" / "fig" / "homogeneous_graph_event_display_ising_kept_only.png"
+)
 
 
 def _pulse_column(graph: GraphEvent, name: str) -> np.ndarray:
@@ -53,6 +58,13 @@ def _used_time_limits(arrival: np.ndarray, used: np.ndarray) -> tuple[float, flo
         min_t = 0.0
         max_t = 1.0
     return min_t, max_t
+
+
+def _displayed_pulse_mask(used: np.ndarray, *, drop_rejected_pulses: bool) -> np.ndarray:
+    used = np.asarray(used, dtype=bool)
+    if drop_rejected_pulses:
+        return used.copy()
+    return np.ones(used.shape, dtype=bool)
 
 
 def _load_data_graph(dst_path: Path, const_dst: Path, *, event_index: int = 0) -> GraphEvent:
@@ -85,6 +97,7 @@ def plot_homogeneous_graph_from_hetero(
     ),
     max_edges_per_relation: int | None = 160,
     pulse_time_scale: float = 0.60,
+    drop_rejected_pulses: bool = False,
 ):
     try:
         import matplotlib.pyplot as plt
@@ -108,6 +121,7 @@ def plot_homogeneous_graph_from_hetero(
     keep = _pulse_column(graph, "ising_keep").astype(np.float64, copy=False) > 0.5
     used = keep & np.isfinite(arrival)
     unused = ~used
+    displayed = _displayed_pulse_mask(used, drop_rejected_pulses=drop_rejected_pulses)
 
     min_t, max_t = _used_time_limits(arrival, used)
     cmap = _event_display_time_colormap(max_t)
@@ -180,7 +194,7 @@ def plot_homogeneous_graph_from_hetero(
             alpha=0.98,
             zorder=7,
         )
-    if np.any(unused):
+    if np.any(unused) and not drop_rejected_pulses:
         ax.scatter(
             pulse_xyz[unused, 0],
             pulse_xyz[unused, 1],
@@ -194,7 +208,7 @@ def plot_homogeneous_graph_from_hetero(
             zorder=6,
         )
 
-    axis_xyz = pulse_xyz
+    axis_xyz = pulse_xyz[displayed] if np.any(displayed) else pulse_xyz
     if graph.detector_positions_km.shape[0] > 0:
         detector_xy = graph.detector_positions_km[:, :2].astype(np.float64, copy=False)
         detector_xyz = np.column_stack([detector_xy, np.zeros(detector_xy.shape[0], dtype=np.float64)])
@@ -217,20 +231,24 @@ def plot_homogeneous_graph_from_hetero(
             linewidth=0,
             label="used homogeneous node",
         ),
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color="black",
-            markerfacecolor="white",
-            markersize=6,
-            linewidth=0,
-            label="unused Ising-rejected pulse",
-        ),
         Line2D([0], [0], color="#009E73", linewidth=1.2, label="same detector next/prev"),
         Line2D([0], [0], color="#7A7A7A", linewidth=1.2, label="near space"),
         Line2D([0], [0], color="#D55E00", linewidth=1.2, label="time causal"),
     ]
+    if not drop_rejected_pulses:
+        handles.insert(
+            1,
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="black",
+                markerfacecolor="white",
+                markersize=6,
+                linewidth=0,
+                label="unused Ising-rejected pulse",
+            ),
+        )
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.02, 0.98), frameon=True, fontsize=8)
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
@@ -246,6 +264,12 @@ def main() -> None:
     parser.add_argument("--const-dst", type=Path, default=DEFAULT_CONST_DST)
     parser.add_argument("--event-index", type=int, default=0)
     parser.add_argument("-o", "--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--kept-only-output", type=Path, default=DEFAULT_KEPT_ONLY_OUTPUT)
+    parser.add_argument(
+        "--skip-kept-only-output",
+        action="store_true",
+        help="Do not write the additional view with Ising-rejected pulses removed.",
+    )
     parser.add_argument("--max-edges-per-relation", type=int, default=160)
     args = parser.parse_args()
 
@@ -259,6 +283,17 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.output, facecolor="white")
     print(f"wrote {args.output}")
+    if not args.skip_kept_only_output:
+        kept_title = f"event {args.event_index}: {graph.event_id} homogeneous graph, Ising-kept pulses only"
+        kept_fig = plot_homogeneous_graph_from_hetero(
+            graph,
+            title=kept_title,
+            max_edges_per_relation=args.max_edges_per_relation,
+            drop_rejected_pulses=True,
+        )
+        args.kept_only_output.parent.mkdir(parents=True, exist_ok=True)
+        kept_fig.savefig(args.kept_only_output, facecolor="white")
+        print(f"wrote {args.kept_only_output}")
 
 
 if __name__ == "__main__":

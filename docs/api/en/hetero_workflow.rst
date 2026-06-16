@@ -53,6 +53,18 @@ outlines, so they do not affect the time colorbar.
    is normalized only by the used pulse nodes. Unused rejected pulse candidates
    remain visible as white circles with black outlines.
 
+The next view removes Ising-rejected pulse candidates from the display
+entirely.  For the homogeneous-from-hetero comparison run using
+``PULSE_MASK=ising_kept``, this is the view that matches the pulse nodes and
+pulse--pulse edges used by training.
+
+.. figure:: ../fig/homogeneous_graph_event_display_ising_kept_only.png
+   :alt: Three-dimensional homogeneous TALE-SD pulse graph event display with Ising-rejected pulses removed.
+   :width: 100%
+
+   Homogeneous pulse graph with only Ising-kept pulse nodes drawn. Rejected
+   pulse nodes and edges attached to them are not shown.
+
 The schema diagram below shows the same information in a simplified graph form.
 It shows the actual node and edge types used inside one ``GraphEvent``.
 Detector nodes and pulse nodes are different node types.

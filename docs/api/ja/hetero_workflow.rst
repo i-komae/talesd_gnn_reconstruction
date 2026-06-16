@@ -48,6 +48,16 @@ time colorbar の正規化には入れません。
    同じ DATA event の homogeneous pulse graph 比較図です。colorbar は使用する pulse node の時刻だけで正規化します。
    使用しない rejected pulse candidate は白塗り黒枠で残し、色は付けません。
 
+次の図は同じ event から Ising-rejected pulse candidate を完全に描かない表示です。
+homogeneous-from-hetero 比較 run で ``PULSE_MASK=ising_kept`` を使う場合、
+学習に入る pulse node と pulse--pulse edge の見え方はこちらに対応します。
+
+.. figure:: ../fig/homogeneous_graph_event_display_ising_kept_only.png
+   :alt: Ising-rejected pulse を描かない TALE-SD homogeneous pulse graph の3D event display。
+   :width: 100%
+
+   Ising-kept pulse node だけを描いた homogeneous pulse graph です。rejected pulse node と、それに接続する edge は表示しません。
+
 下の schema 図は、同じ情報を単純化した graph として示します。
 1つの ``GraphEvent`` の中で使う node type と edge type を graph として示します。
 detector node と pulse node は別の node type です。
