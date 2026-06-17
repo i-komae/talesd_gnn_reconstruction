@@ -48,6 +48,8 @@ EXPORT_WORKERS="${EXPORT_WORKERS:-32}"
 MAX_SOURCE_GROUPS_PER_STRATUM="${MAX_SOURCE_GROUPS_PER_STRATUM:-}"
 SOURCE_GROUP_SELECTION="${SOURCE_GROUP_SELECTION:-balanced_min}"
 ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA:-0}"
+REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP:-1}"
+MAX_REFILL_SOURCE_GROUPS_PER_STRATUM="${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM:-0}"
 SHARD_SIZE="${SHARD_SIZE:-100000}"
 MIN_EVENT_DATE="${MIN_EVENT_DATE:-191002}"
 OPEN_RETRIES="${OPEN_RETRIES:-3}"
@@ -163,6 +165,8 @@ echo "source_group_overdraw_factor=${SOURCE_GROUP_OVERDRAW_FACTOR}"
 echo "source_group_selection=${SOURCE_GROUP_SELECTION}"
 echo "max_source_groups_per_stratum=${MAX_SOURCE_GROUPS_PER_STRATUM}"
 echo "allow_underfull_strata=${ALLOW_UNDERFULL_STRATA}"
+echo "refill_min_graphs_per_source_group=${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}"
+echo "max_refill_source_groups_per_stratum=${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}"
 echo "export_workers=${EXPORT_WORKERS}"
 echo "source_group_timeout_sec=${SOURCE_GROUP_TIMEOUT_SEC}"
 echo "run_uv_sync=${RUN_UV_SYNC}"
@@ -187,6 +191,8 @@ fi
   --graphs-per-source-group "${GRAPHS_PER_SOURCE_GROUP}" \\
   --source-group-overdraw-factor "${SOURCE_GROUP_OVERDRAW_FACTOR}" \\
   --source-group-selection "${SOURCE_GROUP_SELECTION}" \\
+  --refill-min-graphs-per-source-group "${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}" \\
+  --max-refill-source-groups-per-stratum "${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}" \\
 ${max_groups_line}\
 ${allow_underfull_line}\
   --seed "${SEED}" \\
@@ -233,6 +239,8 @@ source_group_overdraw_factor: ${SOURCE_GROUP_OVERDRAW_FACTOR}
 source_group_selection: ${SOURCE_GROUP_SELECTION}
 max_source_groups_per_stratum: ${MAX_SOURCE_GROUPS_PER_STRATUM}
 allow_underfull_strata: ${ALLOW_UNDERFULL_STRATA}
+refill_min_graphs_per_source_group: ${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}
+max_refill_source_groups_per_stratum: ${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}
 seed: ${SEED}
 export_workers: ${EXPORT_WORKERS}
 source_group_timeout_sec: ${SOURCE_GROUP_TIMEOUT_SEC}

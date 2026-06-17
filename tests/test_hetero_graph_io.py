@@ -1636,6 +1636,96 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
         self.assertLessEqual(written_by_path["full_b.dst.gz"], 13)
         self.assertEqual(result["strata"][0]["target_met"], True)
 
+    def test_light_hetero_worker_limits_refill_tail(self) -> None:
+        class FakeHandle:
+            def flush(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        path_counts = {
+            "short.dst.gz": 5,
+            "full_a.dst.gz": 30,
+            "full_b.dst.gz": 30,
+        }
+        written: list[tuple[int, str]] = []
+
+        def fake_iter_graphs(paths: list[str], **_: object) -> list[str]:
+            path = Path(paths[0]).name
+            return [path] * path_counts[path]
+
+        def fake_write(_handle: FakeHandle, index: int, graph: str) -> None:
+            written.append((index, graph))
+
+        payload = {
+            "worker_index": 0,
+            "strata": [
+                {
+                    "stratum": "proton:16",
+                    "target_graphs": 50,
+                    "groups": [
+                        {
+                            "source_group": "/mc/proton/DAT000116",
+                            "dat_tag": "DAT000116",
+                            "energy_bin_code": "16",
+                            "particle": "proton",
+                            "stratum": "proton:16",
+                            "paths": ["/mc/proton/short.dst.gz"],
+                        },
+                        {
+                            "source_group": "/mc/proton/DAT000216",
+                            "dat_tag": "DAT000216",
+                            "energy_bin_code": "16",
+                            "particle": "proton",
+                            "stratum": "proton:16",
+                            "paths": ["/mc/proton/full_a.dst.gz"],
+                        },
+                        {
+                            "source_group": "/mc/proton/DAT000316",
+                            "dat_tag": "DAT000316",
+                            "energy_bin_code": "16",
+                            "particle": "proton",
+                            "stratum": "proton:16",
+                            "paths": ["/mc/proton/full_b.dst.gz"],
+                        },
+                    ],
+                }
+            ],
+            "output_base": tempfile.mkdtemp(),
+            "graphs_per_source_group": 10,
+            "source_group_overdraw_factor": 10.0,
+            "refill_min_graphs_per_source_group": 15,
+            "max_refill_source_groups_per_stratum": 1,
+            "seed": 12345,
+            "cleaning": "ising",
+            "node_policy": "all_candidates_with_ising",
+            "const_dst": None,
+            "mc_calib_dir": None,
+            "require_trigger_mode0": True,
+            "require_reference_core": True,
+            "skip_errors": True,
+            "skip_missing_mc_calibration": True,
+            "min_event_date": None,
+            "open_retries": 0,
+            "open_retry_delay": 0.0,
+            "shard_size": 1000,
+            "progress_interval_sec": 0.0,
+            "config": {},
+        }
+        with mock.patch.object(tale_graph, "create_graph_h5_file", return_value=FakeHandle()):
+            with mock.patch.object(tale_graph, "iter_graphs", side_effect=fake_iter_graphs):
+                with mock.patch.object(tale_graph, "write_graph_h5_event", side_effect=fake_write):
+                    result = _export_light_hetero_worker(payload)
+
+        self.assertEqual(result["graphs_written"], 45)
+        self.assertEqual(result["strata"][0]["refill_candidate_source_groups"], 2)
+        self.assertEqual(result["strata"][0]["refill_attempted_source_groups"], 1)
+        self.assertEqual(result["strata"][0]["refill_source_group_limit"], 1)
+        self.assertEqual(result["strata"][0]["refill_limit_applied"], True)
+        self.assertEqual(result["strata"][0]["refill_min_graphs_per_source_group"], 15)
+        self.assertEqual(result["strata"][0]["target_met"], False)
+
     def test_light_hetero_worker_records_underfull_stratum(self) -> None:
         class FakeHandle:
             def flush(self) -> None:

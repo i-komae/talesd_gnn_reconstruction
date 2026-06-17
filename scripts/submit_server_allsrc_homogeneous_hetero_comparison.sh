@@ -29,9 +29,13 @@ H5_RUN_NAME="${H5_RUN_NAME:-hetero_light_allsrc_target${LIGHT_TARGET}_${RUN_ID}}
 GRAPH_INPUT="${GRAPH_INPUT:-${GRAPH_ROOT}/${H5_RUN_NAME}}"
 GRAPHS_PER_SOURCE_GROUP="${GRAPHS_PER_SOURCE_GROUP:-$(( (LIGHT_TARGET + SOURCE_GROUPS_PER_STRATUM - 1) / SOURCE_GROUPS_PER_STRATUM ))}"
 ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA:-1}"
+REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP:-${GRAPHS_PER_SOURCE_GROUP}}"
+MAX_REFILL_SOURCE_GROUPS_PER_STRATUM="${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM:-64}"
 MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS:-0}"
 SOURCE_GROUP_SELECTION="all"
 PULSE_MASK="${PULSE_MASK:-ising_kept}"
+HETERO_MODEL_ARCHITECTURE="${HETERO_MODEL_ARCHITECTURE:-hetero_attention}"
+HETERO_RELATION_PRESET="${HETERO_RELATION_PRESET:-minimal}"
 DRY_RUN="${DRY_RUN:-0}"
 
 status "ALL-SOURCE HOMOGENEOUS/HETEROGENEOUS COMPARISON"
@@ -39,19 +43,23 @@ status "run_id: ${RUN_ID}"
 status "light_target: ${LIGHT_TARGET}"
 status "graphs_per_source_group: ${GRAPHS_PER_SOURCE_GROUP}"
 status "source_group_selection: ${SOURCE_GROUP_SELECTION}"
+status "refill_min_graphs_per_source_group: ${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}"
+status "max_refill_source_groups_per_stratum: ${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}"
 status "graph_input_after_export: ${GRAPH_INPUT}"
 status "partition: ${PARTITION}"
 status "run_uv_sync: ${RUN_UV_SYNC}"
 status "local_runtime_cache: ${LOCAL_RUNTIME_CACHE}"
 status "heterogeneous_selection_basis: provisional next setting from synced validation loss/milestones and failure modes"
 status "heterogeneous_note: final model choice requires validation/test on the new all-source H5; light562 is smoke only"
-status "heterogeneous_default: minimal_hetero cnn-gru crop_cnn ising_kept minimal-relations"
+status "heterogeneous_default: ${HETERO_MODEL_ARCHITECTURE} cnn-gru crop_cnn ising_kept ${HETERO_RELATION_PRESET}-relations"
 
 if [[ "${DRY_RUN}" == "1" ]]; then
   RUN_NAME="${H5_RUN_NAME}" \
   GRAPHS_PER_SOURCE_GROUP="${GRAPHS_PER_SOURCE_GROUP}" \
   SOURCE_GROUP_SELECTION="${SOURCE_GROUP_SELECTION}" \
   ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA}" \
+  REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}" \
+  MAX_REFILL_SOURCE_GROUPS_PER_STRATUM="${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}" \
   RUN_UV_SYNC="${RUN_UV_SYNC}" \
   MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS}" \
   DRY_RUN=1 \
@@ -69,8 +77,8 @@ HETERO_GRAPH_INPUT="${GRAPH_INPUT}" \
   "${SCRIPT_DIR}/submit_server_homogeneous_from_hetero_training.sh"
 
   GRAPH_INPUT="${GRAPH_INPUT}" \
-  RUN_ID="hetero_minimal_allsrc_${RUN_ID}" \
-  MODEL_ARCHITECTURE="${HETERO_MODEL_ARCHITECTURE:-minimal_hetero}" \
+  RUN_ID="hetero_${HETERO_MODEL_ARCHITECTURE}_allsrc_${RUN_ID}" \
+  MODEL_ARCHITECTURE="${HETERO_MODEL_ARCHITECTURE}" \
   WAVEFORM_ENCODER=cnn-gru \
   PULSE_WAVEFORM_ENCODER=crop_cnn \
   USE_PULSE_PARENT_WAVEFORM=1 \
@@ -78,7 +86,7 @@ HETERO_GRAPH_INPUT="${GRAPH_INPUT}" \
   USE_RELATIVE_POSITIONS=1 \
   DETECTOR_READOUT_MASK=ising_kept \
   PULSE_READOUT_MASK=ising_kept \
-  HETERO_RELATION_PRESET="${HETERO_RELATION_PRESET:-minimal}" \
+  HETERO_RELATION_PRESET="${HETERO_RELATION_PRESET}" \
   BATCH_SIZE="${HETERO_BATCH_SIZE:-64}" \
   GRADIENT_ACCUMULATION_STEPS="${HETERO_GRADIENT_ACCUMULATION_STEPS:-2}" \
   AMP=fp16 \
@@ -106,6 +114,8 @@ h5_submit_output="$(
   GRAPHS_PER_SOURCE_GROUP="${GRAPHS_PER_SOURCE_GROUP}" \
   SOURCE_GROUP_SELECTION="${SOURCE_GROUP_SELECTION}" \
   ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA}" \
+  REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}" \
+  MAX_REFILL_SOURCE_GROUPS_PER_STRATUM="${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}" \
   RUN_UV_SYNC="${RUN_UV_SYNC}" \
   MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS}" \
   SBATCH_PARSABLE=1 \
@@ -146,11 +156,11 @@ DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT:-100}" \
 "${SCRIPT_DIR}/submit_server_homogeneous_from_hetero_training.sh"
 
 GRAPH_INPUT="${GRAPH_INPUT}" \
-RUN_ID="hetero_minimal_allsrc_${RUN_ID}" \
+RUN_ID="hetero_${HETERO_MODEL_ARCHITECTURE}_allsrc_${RUN_ID}" \
 SBATCH_DEPENDENCY="${h5_dependency}" \
 PARTITION="${PARTITION}" \
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}" \
-MODEL_ARCHITECTURE="${HETERO_MODEL_ARCHITECTURE:-minimal_hetero}" \
+MODEL_ARCHITECTURE="${HETERO_MODEL_ARCHITECTURE}" \
 WAVEFORM_ENCODER=cnn-gru \
 PULSE_WAVEFORM_ENCODER=crop_cnn \
 USE_PULSE_PARENT_WAVEFORM=1 \
@@ -158,7 +168,7 @@ USE_PULSE_BOUNDS=1 \
 USE_RELATIVE_POSITIONS=1 \
 DETECTOR_READOUT_MASK=ising_kept \
 PULSE_READOUT_MASK=ising_kept \
-HETERO_RELATION_PRESET="${HETERO_RELATION_PRESET:-minimal}" \
+HETERO_RELATION_PRESET="${HETERO_RELATION_PRESET}" \
 CORE_TARGET_MODE=signal_bary_relative \
 COORDINATE_FEATURE_MODE=relative_only \
 HETERO_TRAINING_DATA_FORMAT=fast_tensor \
@@ -190,7 +200,7 @@ h5_graph_input: ${GRAPH_INPUT}
 homogeneous_dependency: ${h5_dependency}
 heterogeneous_dependency: ${h5_dependency}
 heterogeneous_selection_basis: provisional next setting from synced validation loss/milestones and failure modes; final choice requires validation/test on this new all-source H5
-heterogeneous_model: ${HETERO_MODEL_ARCHITECTURE:-minimal_hetero} + cnn-gru + crop_cnn + ising-kept masks + ${HETERO_RELATION_PRESET:-minimal} relations
+heterogeneous_model: ${HETERO_MODEL_ARCHITECTURE} + cnn-gru + crop_cnn + ising-kept masks + ${HETERO_RELATION_PRESET} relations
 homogeneous_model: physics + cnn-gru from ising-kept homogeneous conversion
 ======================================================================
 EOF
