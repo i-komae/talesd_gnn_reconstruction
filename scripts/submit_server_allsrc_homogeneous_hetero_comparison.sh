@@ -130,74 +130,87 @@ fi
 h5_dependency="afterok:${h5_job_id}"
 status "h5_export_job_id=${h5_job_id}"
 
-HETERO_GRAPH_INPUT="${GRAPH_INPUT}" \
-RUN_ID="homogeneous_from_allsrc_${RUN_ID}" \
-PULSE_MASK="${PULSE_MASK}" \
-CONVERT_WORKERS="${CONVERT_WORKERS:-32}" \
-CONVERT_CPUS_PER_TASK="${CONVERT_CPUS_PER_TASK:-${CONVERT_WORKERS:-32}}" \
-SBATCH_DEPENDENCY="${h5_dependency}" \
-RUN_UV_SYNC="${RUN_UV_SYNC}" \
-LOCAL_RUNTIME_CACHE="${LOCAL_RUNTIME_CACHE}" \
-PARTITION="${PARTITION}" \
-TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}" \
-MODEL_ARCHITECTURE=physics \
-WAVEFORM_ENCODER=cnn-gru \
-BATCH_SIZE="${HOMOGENEOUS_BATCH_SIZE:-128}" \
-LOSS_MODE=physics \
-MASS_CLASSIFICATION=1 \
-QUALITY_PREDICTION=1 \
-ERROR_PREDICTION=0 \
-ENERGY_BIAS_WEIGHT=1.0 \
-ENERGY_PARTICLE_BIAS_WEIGHT=0.0 \
-FEATURE_IMPORTANCE=1 \
-FEATURE_IMPORTANCE_SPLIT="${FEATURE_IMPORTANCE_SPLIT:-validation test}" \
-BEST_DIAGNOSTICS=1 \
-DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT:-100}" \
-"${SCRIPT_DIR}/submit_server_homogeneous_from_hetero_training.sh"
+homogeneous_submit_output="$(
+  HETERO_GRAPH_INPUT="${GRAPH_INPUT}" \
+  RUN_ID="homogeneous_from_allsrc_${RUN_ID}" \
+  PULSE_MASK="${PULSE_MASK}" \
+  CONVERT_WORKERS="${CONVERT_WORKERS:-32}" \
+  CONVERT_CPUS_PER_TASK="${CONVERT_CPUS_PER_TASK:-${CONVERT_WORKERS:-32}}" \
+  SBATCH_DEPENDENCY="${h5_dependency}" \
+  RUN_UV_SYNC="${RUN_UV_SYNC}" \
+  LOCAL_RUNTIME_CACHE="${LOCAL_RUNTIME_CACHE}" \
+  PARTITION="${PARTITION}" \
+  TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}" \
+  MODEL_ARCHITECTURE=physics \
+  WAVEFORM_ENCODER=cnn-gru \
+  BATCH_SIZE="${HOMOGENEOUS_BATCH_SIZE:-128}" \
+  LOSS_MODE=physics \
+  MASS_CLASSIFICATION=1 \
+  QUALITY_PREDICTION=1 \
+  ERROR_PREDICTION=0 \
+  ENERGY_BIAS_WEIGHT=1.0 \
+  ENERGY_PARTICLE_BIAS_WEIGHT=0.0 \
+  FEATURE_IMPORTANCE=1 \
+  FEATURE_IMPORTANCE_SPLIT="${FEATURE_IMPORTANCE_SPLIT:-validation test}" \
+  BEST_DIAGNOSTICS=1 \
+  DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT:-100}" \
+  "${SCRIPT_DIR}/submit_server_homogeneous_from_hetero_training.sh"
+)"
+printf "%s\n" "${homogeneous_submit_output}"
+homogeneous_conversion_job_id="$(printf "%s\n" "${homogeneous_submit_output}" | awk -F= '/^conversion_job_id=/ {value=$2} END {print value}')"
+homogeneous_training_job_id="$(printf "%s\n" "${homogeneous_submit_output}" | awk '/^Submitted batch job / {ids[++n]=$4} END {print ids[2]}')"
 
-GRAPH_INPUT="${GRAPH_INPUT}" \
-RUN_ID="hetero_${HETERO_MODEL_ARCHITECTURE}_allsrc_${RUN_ID}" \
-SBATCH_DEPENDENCY="${h5_dependency}" \
-PARTITION="${PARTITION}" \
-TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}" \
-MODEL_ARCHITECTURE="${HETERO_MODEL_ARCHITECTURE}" \
-WAVEFORM_ENCODER=cnn-gru \
-PULSE_WAVEFORM_ENCODER=crop_cnn \
-USE_PULSE_PARENT_WAVEFORM=1 \
-USE_PULSE_BOUNDS=1 \
-USE_RELATIVE_POSITIONS=1 \
-DETECTOR_READOUT_MASK=ising_kept \
-PULSE_READOUT_MASK=ising_kept \
-HETERO_RELATION_PRESET="${HETERO_RELATION_PRESET}" \
-CORE_TARGET_MODE=signal_bary_relative \
-COORDINATE_FEATURE_MODE=relative_only \
-HETERO_TRAINING_DATA_FORMAT=fast_tensor \
-FINAL_EVAL_DATA_FORMAT=fast_tensor \
-BATCH_SIZE="${HETERO_BATCH_SIZE:-64}" \
-GRADIENT_ACCUMULATION_STEPS="${HETERO_GRADIENT_ACCUMULATION_STEPS:-2}" \
-AMP=fp16 \
-TRAIN_WORKERS="${HETERO_TRAIN_WORKERS:-4}" \
-PERSISTENT_WORKERS=1 \
-PREFETCH_FACTOR=1 \
-PIN_MEMORY=0 \
-PREPARE_FAST_CACHE=0 \
-FEATURE_IMPORTANCE=1 \
-FEATURE_IMPORTANCE_SPLIT="${FEATURE_IMPORTANCE_SPLIT:-validation test}" \
-ATTENTION_MAPS="${ATTENTION_MAPS:-0}" \
-ATTENTION_MAPS_SPLIT="${ATTENTION_MAPS_SPLIT:-validation test}" \
-DIAGNOSTICS=1 \
-DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT:-100}" \
-PROFILE=1 \
-RUN_UV_SYNC="${RUN_UV_SYNC}" \
-LOCAL_RUNTIME_CACHE="${LOCAL_RUNTIME_CACHE}" \
-"${SCRIPT_DIR}/submit_server_hetero_reco_mass_quality_training.sh"
+heterogeneous_submit_output="$(
+  GRAPH_INPUT="${GRAPH_INPUT}" \
+  RUN_ID="hetero_${HETERO_MODEL_ARCHITECTURE}_allsrc_${RUN_ID}" \
+  SBATCH_DEPENDENCY="${h5_dependency}" \
+  PARTITION="${PARTITION}" \
+  TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}" \
+  MODEL_ARCHITECTURE="${HETERO_MODEL_ARCHITECTURE}" \
+  WAVEFORM_ENCODER=cnn-gru \
+  PULSE_WAVEFORM_ENCODER=crop_cnn \
+  USE_PULSE_PARENT_WAVEFORM=1 \
+  USE_PULSE_BOUNDS=1 \
+  USE_RELATIVE_POSITIONS=1 \
+  DETECTOR_READOUT_MASK=ising_kept \
+  PULSE_READOUT_MASK=ising_kept \
+  HETERO_RELATION_PRESET="${HETERO_RELATION_PRESET}" \
+  CORE_TARGET_MODE=signal_bary_relative \
+  COORDINATE_FEATURE_MODE=relative_only \
+  HETERO_TRAINING_DATA_FORMAT=fast_tensor \
+  FINAL_EVAL_DATA_FORMAT=fast_tensor \
+  BATCH_SIZE="${HETERO_BATCH_SIZE:-64}" \
+  GRADIENT_ACCUMULATION_STEPS="${HETERO_GRADIENT_ACCUMULATION_STEPS:-2}" \
+  AMP=fp16 \
+  TRAIN_WORKERS="${HETERO_TRAIN_WORKERS:-4}" \
+  PERSISTENT_WORKERS=1 \
+  PREFETCH_FACTOR=1 \
+  PIN_MEMORY=0 \
+  PREPARE_FAST_CACHE=0 \
+  FEATURE_IMPORTANCE=1 \
+  FEATURE_IMPORTANCE_SPLIT="${FEATURE_IMPORTANCE_SPLIT:-validation test}" \
+  ATTENTION_MAPS="${ATTENTION_MAPS:-0}" \
+  ATTENTION_MAPS_SPLIT="${ATTENTION_MAPS_SPLIT:-validation test}" \
+  DIAGNOSTICS=1 \
+  DIAGNOSTIC_MIN_BIN_COUNT="${DIAGNOSTIC_MIN_BIN_COUNT:-100}" \
+  PROFILE=1 \
+  RUN_UV_SYNC="${RUN_UV_SYNC}" \
+  LOCAL_RUNTIME_CACHE="${LOCAL_RUNTIME_CACHE}" \
+  "${SCRIPT_DIR}/submit_server_hetero_reco_mass_quality_training.sh"
+)"
+printf "%s\n" "${heterogeneous_submit_output}"
+heterogeneous_training_job_id="$(printf "%s\n" "${heterogeneous_submit_output}" | awk '/^Submitted batch job / {value=$4} END {print value}')"
 
 cat <<EOF
 ======================================================================
 ALL-SOURCE COMPARISON SUBMITTED
 h5_export_job_id: ${h5_job_id}
 h5_graph_input: ${GRAPH_INPUT}
-homogeneous_dependency: ${h5_dependency}
+homogeneous_conversion_job_id: ${homogeneous_conversion_job_id:-unknown}
+homogeneous_training_job_id: ${homogeneous_training_job_id:-unknown}
+homogeneous_conversion_dependency: ${h5_dependency}
+homogeneous_training_dependency: afterok:${homogeneous_conversion_job_id:-unknown}
+heterogeneous_training_job_id: ${heterogeneous_training_job_id:-unknown}
 heterogeneous_dependency: ${h5_dependency}
 heterogeneous_selection_basis: provisional next setting from synced validation loss/milestones and failure modes; final choice requires validation/test on this new all-source H5
 heterogeneous_model: ${HETERO_MODEL_ARCHITECTURE} + cnn-gru + crop_cnn + ising-kept masks + ${HETERO_RELATION_PRESET} relations
