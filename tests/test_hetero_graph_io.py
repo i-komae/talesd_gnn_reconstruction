@@ -833,14 +833,31 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                 self.assertIn("pulse_positions_km", training_sample)
                 self.assertIn("pulse_detector_index", training_sample)
                 self.assertIn("pulse_bounds", training_sample)
+                subset_sample = flat.training_sample(
+                    0,
+                    edge_relations=("detector__observes__pulse", "pulse__observed_by__detector"),
+                )
+                self.assertEqual(
+                    set(subset_sample["edge_index_by_type"]),
+                    {"detector__observes__pulse", "pulse__observed_by__detector"},
+                )
                 with self.assertRaisesRegex(ValueError, "cache_mode=training"):
                     _ = flat[0]
-                tensor_dataset = H5TensorHeteroGraphDataset(flat_path, require_target=True, require_particle_label=True)
+                tensor_dataset = H5TensorHeteroGraphDataset(
+                    flat_path,
+                    require_target=True,
+                    require_particle_label=True,
+                    edge_relations=("detector__observes__pulse", "pulse__observed_by__detector"),
+                )
                 try:
                     tensor_sample = tensor_dataset[0]
                     self.assertIn("detector", tensor_sample)
                     self.assertIn("pulse", tensor_sample)
                     self.assertNotIn("metadata", tensor_sample)
+                    self.assertEqual(
+                        set(tensor_sample["edge_index_by_type"]),
+                        {"detector__observes__pulse", "pulse__observed_by__detector"},
+                    )
                 finally:
                     tensor_dataset.close()
             finally:
@@ -1127,9 +1144,43 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
                     mock.patch.object(H5HeteroGraphDataset, "__getitem__", side_effect=AssertionError),
                 ):
                     sample = dataset[0]
-                training_sample.assert_called_once_with(0)
+                training_sample.assert_called_once_with(0, edge_relations=None)
                 self.assertIn("detector", sample)
                 self.assertIn("pulse", sample)
+            finally:
+                dataset.close()
+
+    def test_fast_tensor_dataset_reads_only_enabled_relations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = Path(tmpdir) / "synthetic_hetero.h5"
+            enabled = ("detector__observes__pulse", "pulse__observed_by__detector")
+            with create_hetero_graph_file(graph_path) as handle:
+                for index in range(2):
+                    write_hetero_graph(handle, index, _synthetic_graph(index))
+
+            base = H5HeteroGraphDataset(graph_path, require_target=True, require_particle_label=True)
+            try:
+                scaler_sample = base.scaler_sample(0, edge_relations=enabled)
+                self.assertEqual(set(scaler_sample["edge_features_by_type"]), set(enabled))
+                self.assertLess(
+                    base.graph_training_nbytes(0, edge_relations=enabled),
+                    base.graph_training_nbytes(0),
+                )
+            finally:
+                base.close()
+
+            dataset = H5TensorHeteroGraphDataset(
+                graph_path,
+                require_target=True,
+                require_particle_label=True,
+                edge_relations=enabled,
+            )
+            try:
+                sample = dataset[0]
+                self.assertEqual(set(sample["edge_index_by_type"]), set(enabled))
+                batch = _collate_tensor_hetero_graphs([sample, dataset[1]])
+                self.assertGreater(batch["edge_index_by_type"]["detector__observes__pulse"].shape[1], 0)
+                self.assertEqual(batch["edge_index_by_type"]["pulse__near_space__pulse"].shape, (2, 0))
             finally:
                 dataset.close()
 

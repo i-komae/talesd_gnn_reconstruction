@@ -70,6 +70,7 @@ def fit_hetero_scalers(
     dataset: H5HeteroGraphDataset,
     indices: Sequence[int],
     *,
+    edge_relations: Sequence[str] | None = None,
     show_progress: bool = True,
     progress_interval_sec: float | None = None,
 ) -> dict[str, StandardScaler]:
@@ -84,10 +85,11 @@ def fit_hetero_scalers(
     print(
         "hetero_scaler_start "
         f"train_graphs={total} "
+        f"edge_relations={','.join(edge_relations or EDGE_TYPE_BY_RELATION)} "
         f"progress_interval_sec={progress_interval_sec:.6g}",
         flush=True,
     )
-    first = dataset.scaler_sample(int(indices[0]))
+    first = dataset.scaler_sample(int(indices[0]), edge_relations=edge_relations)
     detector_stats = RunningFeatureStats(int(first["detector_features"].shape[1]))
     detector_context_stats = RunningFeatureStats(int(first["detector_context_features"].shape[1]))
     pulse_stats = RunningFeatureStats(int(first["pulse_features"].shape[1]))
@@ -98,10 +100,10 @@ def fit_hetero_scalers(
             if first["edge_features_by_type"][relation].ndim == 2
             else 0
         )
-        for relation in EDGE_TYPE_BY_RELATION
+        for relation in (edge_relations or EDGE_TYPE_BY_RELATION)
     }
     for ordinal, index in enumerate(indices, start=1):
-        sample = dataset.scaler_sample(int(index))
+        sample = dataset.scaler_sample(int(index), edge_relations=edge_relations)
         detector_stats.update(_finite_rows(sample["detector_features"]))
         detector_context_stats.update(_finite_rows(sample["detector_context_features"]))
         pulse_stats.update(_finite_rows(sample["pulse_features"]))
@@ -441,13 +443,16 @@ def _estimate_graph_bytes(
     *,
     max_samples: int,
     mode: str = "full",
+    edge_relations: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     sampled = _sample_indices(indices, max_samples=max_samples)
     mode = str(mode)
     if mode == "training":
         values = np.asarray(
             [
-                dataset.graph_training_nbytes(index) if hasattr(dataset, "graph_training_nbytes") else dataset.graph_nbytes(index)
+                dataset.graph_training_nbytes(index, edge_relations=edge_relations)
+                if hasattr(dataset, "graph_training_nbytes")
+                else dataset.graph_nbytes(index)
                 for index in sampled
             ],
             dtype=np.float64,
@@ -525,12 +530,14 @@ class H5TensorHeteroGraphDataset:
         *args: Any,
         scalers: dict[str, Any] | None = None,
         waveform_length: int | None = None,
+        edge_relations: Sequence[str] | None = None,
         **kwargs: Any,
     ):
         dataset_class = hetero_dataset_class_for_paths(args[0])
         self.base = dataset_class(*args, load_attrs=False, **kwargs)
         self.scalers = scalers
         self.waveform_length = None if waveform_length is None else int(waveform_length)
+        self.edge_relations = None if edge_relations is None else tuple(str(relation) for relation in edge_relations)
 
     def __len__(self) -> int:
         return len(self.base)
@@ -541,6 +548,7 @@ class H5TensorHeteroGraphDataset:
             "base_class": self.base.__class__.__name__,
             "scalers": self.scalers,
             "waveform_length": self.waveform_length,
+            "edge_relations": self.edge_relations,
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -551,13 +559,14 @@ class H5TensorHeteroGraphDataset:
         self.base.__dict__.update(state["base"])
         self.scalers = state.get("scalers")
         self.waveform_length = state.get("waveform_length")
+        self.edge_relations = state.get("edge_relations")
 
     def close(self) -> None:
         self.base.close()
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         return hetero_sample_to_training_tensors(
-            self.base.training_sample(int(index)),
+            self.base.training_sample(int(index), edge_relations=self.edge_relations),
             scalers=self.scalers,
             waveform_length=self.waveform_length,
         )
@@ -850,13 +859,19 @@ def _filter_batch_relations(
     return batch
 
 
-def _log_relation_stats(dataset: H5HeteroGraphDataset, indices: Sequence[int], *, max_samples: int = 512) -> None:
+def _log_relation_stats(
+    dataset: H5HeteroGraphDataset,
+    indices: Sequence[int],
+    *,
+    edge_relations: Sequence[str] | None = None,
+    max_samples: int = 512,
+) -> None:
     sampled = _sample_indices(indices, max_samples=max_samples)
     if not sampled:
         return
     counts = {relation: [] for relation in EDGE_TYPE_BY_RELATION}
     for index in sampled:
-        sample = dataset.scaler_sample(int(index))
+        sample = dataset.scaler_sample(int(index), edge_relations=edge_relations)
         for relation, features in sample["edge_features_by_type"].items():
             if relation in counts:
                 counts[relation].append(int(features.shape[0]))
@@ -1959,6 +1974,7 @@ def train_hetero_model(
         reuse_scaler_cache = _env_flag("REUSE_SCALER_CACHE", True)
     reuse_scaler_cache = bool(reuse_scaler_cache)
     enabled_relations = _parse_relation_filter(hetero_relations, preset=hetero_relation_preset)
+    enabled_relation_tuple = tuple(relation for relation in EDGE_TYPE_BY_RELATION if relation in enabled_relations)
     max_neighbors = _max_neighbors_by_relation()
     if dataloader_timeout_sec is None:
         dataloader_timeout_sec = float(os.environ.get("TALESD_GNN_DATALOADER_TIMEOUT_SEC", "120"))
@@ -2126,7 +2142,12 @@ def train_hetero_model(
         f"stage=relation_stats_start samples={max(int(loader_memory_estimate_samples), 1)}",
         flush=True,
     )
-    _log_relation_stats(base_dataset, train_indices, max_samples=max(int(loader_memory_estimate_samples), 1))
+    _log_relation_stats(
+        base_dataset,
+        train_indices,
+        edge_relations=enabled_relation_tuple,
+        max_samples=max(int(loader_memory_estimate_samples), 1),
+    )
     print(
         "hetero_train_setup "
         f"stage=relation_stats_done elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
@@ -2144,6 +2165,7 @@ def train_hetero_model(
         train_indices,
         max_samples=max(int(loader_memory_estimate_samples), 1),
         mode=graph_bytes_mode,
+        edge_relations=enabled_relation_tuple if graph_bytes_mode == "training" else None,
     )
     print(
         "hetero_train_setup "
@@ -2190,6 +2212,7 @@ def train_hetero_model(
     print(
         "hetero_training_data_config "
         f"data_format={training_data_format} "
+        f"edge_relation_io={'enabled_only' if training_data_format == 'fast_tensor' else 'full_pyg'} "
         f"relation_preset={str(hetero_relation_preset or os.environ.get('HETERO_RELATION_PRESET', '') or 'custom')} "
         f"enabled_relations={','.join(relation for relation in EDGE_TYPE_BY_RELATION if relation in enabled_relations)} "
         f"disabled_relations={','.join(relation for relation in EDGE_TYPE_BY_RELATION if relation not in enabled_relations)} "
@@ -2293,7 +2316,7 @@ def train_hetero_model(
         f"elapsed={_format_duration(time.perf_counter() - setup_step_start)}",
         flush=True,
     )
-    first = base_dataset.training_sample(train_indices[0])
+    first = base_dataset.training_sample(train_indices[0], edge_relations=enabled_relation_tuple)
     _log_feature_schema(base_columns, first)
     scaler_metadata = _scaler_cache_metadata(
         base_dataset,
@@ -2328,6 +2351,7 @@ def train_hetero_model(
         scalers = fit_hetero_scalers(
             base_dataset,
             train_indices,
+            edge_relations=enabled_relation_tuple,
             show_progress=show_progress,
             progress_interval_sec=scaler_progress_interval_sec,
         )
@@ -2437,6 +2461,7 @@ def train_hetero_model(
         coordinate_feature_mode=coordinate_feature_mode,
         scalers=scalers,
         waveform_length=resolved_waveform_length,
+        edge_relations=enabled_relation_tuple if training_data_format == "fast_tensor" else None,
     )
     train_loader = _make_hetero_loader(
         train_dataset,
@@ -2474,6 +2499,7 @@ def train_hetero_model(
         coordinate_feature_mode=coordinate_feature_mode,
         scalers=scalers,
         waveform_length=resolved_waveform_length,
+        edge_relations=enabled_relation_tuple if final_eval_data_format == "fast_tensor" else None,
     )
     final_val_loader = _make_hetero_loader(
         eval_dataset,
@@ -3693,6 +3719,8 @@ def evaluate_hetero_checkpoint(
     data_format = str(data_format or "fast_tensor").strip()
     if data_format not in {"fast_tensor", "pyg"}:
         raise ValueError("data_format must be fast_tensor or pyg")
+    runtime_enabled_relations = set(runtime.get("enabled_relations") or EDGE_TYPE_BY_RELATION)
+    edge_relation_subset = tuple(relation for relation in EDGE_TYPE_BY_RELATION if relation in runtime_enabled_relations)
     dataset_class: Any = H5TensorHeteroGraphDataset if data_format == "fast_tensor" else H5PyGHeteroGraphDataset
     dataset = dataset_class(
         graphs_path,
@@ -3702,6 +3730,7 @@ def evaluate_hetero_checkpoint(
         coordinate_feature_mode=coordinate_feature_mode,
         scalers=scalers,
         waveform_length=waveform_length,
+        edge_relations=edge_relation_subset if data_format == "fast_tensor" else None,
     )
     try:
         split_info = dict(checkpoint.get("split", {}))
@@ -3745,7 +3774,7 @@ def evaluate_hetero_checkpoint(
                 error_energy_scale=float(runtime.get("error_energy_scale", runtime.get("quality_energy_scale", 0.10))),
                 desc=f"hetero checkpoint eval {split_name}",
                 show_progress=show_progress,
-                enabled_relations=set(runtime.get("enabled_relations") or EDGE_TYPE_BY_RELATION),
+                enabled_relations=runtime_enabled_relations,
                 max_neighbors={},
                 non_blocking=False,
                 progress_interval_sec=float(os.environ.get("TALESD_GNN_PREDICT_PROGRESS_INTERVAL_SEC", "60")),

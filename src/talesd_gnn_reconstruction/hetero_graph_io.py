@@ -38,6 +38,16 @@ EDGE_RELATIONS = (
 )
 
 
+def _selected_edge_relations(edge_relations: Sequence[str] | None = None) -> tuple[str, ...]:
+    if edge_relations is None:
+        return EDGE_RELATIONS
+    requested = {str(relation) for relation in edge_relations}
+    unknown = sorted(requested.difference(EDGE_RELATIONS))
+    if unknown:
+        raise ValueError(f"unknown hetero edge relation(s): {unknown}")
+    return tuple(relation for relation in EDGE_RELATIONS if relation in requested)
+
+
 def _graph_columns() -> dict[str, Any]:
     import dstio.tale.graph as tale_graph
 
@@ -1025,8 +1035,11 @@ class H5HeteroGraphDataset:
         return path_index, local_index, f"{local_index:08d}"
 
     @staticmethod
-    def _read_edge_group(group: h5py.Group) -> dict[str, np.ndarray]:
-        return {relation: group[relation][()] for relation in group.keys()}
+    def _read_edge_group(
+        group: h5py.Group,
+        edge_relations: Sequence[str] | None = None,
+    ) -> dict[str, np.ndarray]:
+        return {relation: group[relation][()] for relation in _selected_edge_relations(edge_relations)}
 
     @staticmethod
     def _dataset_nbytes(dataset: h5py.Dataset) -> int:
@@ -1125,7 +1138,11 @@ class H5HeteroGraphDataset:
         path_index, _local_index, key = self._locate(index)
         return self._group_nbytes(self._handle(path_index)["events"][key])
 
-    def graph_training_nbytes(self, index: int) -> int:
+    def graph_training_nbytes(
+        self,
+        index: int,
+        edge_relations: Sequence[str] | None = None,
+    ) -> int:
         path_index, _local_index, key = self._locate(index)
         group = self._handle(path_index)["events"][key]
         total = 0
@@ -1142,12 +1159,16 @@ class H5HeteroGraphDataset:
             total += self._dataset_nbytes(group["target"])
         if "particle_label" in group:
             total += self._dataset_nbytes(group["particle_label"])
-        for relation in EDGE_RELATIONS:
+        for relation in _selected_edge_relations(edge_relations):
             total += self._dataset_nbytes(group["edge_index_by_type"][relation])
             total += self._dataset_nbytes(group["edge_features_by_type"][relation])
         return int(total)
 
-    def scaler_sample(self, index: int) -> dict[str, Any]:
+    def scaler_sample(
+        self,
+        index: int,
+        edge_relations: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
         path_index, _local_index, key = self._locate(index)
         group = self._handle(path_index)["events"][key]
         target = group["target"][()].astype(np.float32) if "target" in group else None
@@ -1168,7 +1189,10 @@ class H5HeteroGraphDataset:
             "detector_features": self._filter_detector_features(group["detector_features"][()].astype(np.float32)),
             "detector_context_features": group["detector_context_features"][()].astype(np.float32),
             "pulse_features": self._filter_pulse_features(raw_pulse_features),
-            "edge_features_by_type": self._read_edge_group(group["edge_features_by_type"]),
+            "edge_features_by_type": self._read_edge_group(
+                group["edge_features_by_type"],
+                edge_relations=edge_relations,
+            ),
             "target": self._prepare_target(target, core_anchor),
             "core_anchor": core_anchor,
             "particle_label": particle_label,
@@ -1176,7 +1200,11 @@ class H5HeteroGraphDataset:
             "pulse_feature_columns": self._effective_pulse_columns(),
         }
 
-    def training_sample(self, index: int) -> dict[str, Any]:
+    def training_sample(
+        self,
+        index: int,
+        edge_relations: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
         path_index, _local_index, key = self._locate(index)
         group = self._handle(path_index)["events"][key]
         target = group["target"][()].astype(np.float32) if "target" in group else None
@@ -1203,8 +1231,14 @@ class H5HeteroGraphDataset:
             "pulse_positions_km": pulse_positions,
             "pulse_detector_index": group["pulse_detector_index"][()].astype(np.int64),
             "pulse_bounds": group["pulse_bounds"][()].astype(np.float32),
-            "edge_index_by_type": self._read_edge_group(group["edge_index_by_type"]),
-            "edge_features_by_type": self._read_edge_group(group["edge_features_by_type"]),
+            "edge_index_by_type": self._read_edge_group(
+                group["edge_index_by_type"],
+                edge_relations=edge_relations,
+            ),
+            "edge_features_by_type": self._read_edge_group(
+                group["edge_features_by_type"],
+                edge_relations=edge_relations,
+            ),
             "target": self._prepare_target(target, core_anchor),
             "core_anchor": core_anchor,
             "position_anchor": position_anchor,
@@ -1522,7 +1556,11 @@ class H5FlatHeteroGraphDataset:
             total += _dataset_rows_nbytes(self._edge_feature_dataset(handle, relation), n_edges)
         return int(total)
 
-    def graph_training_nbytes(self, index: int) -> int:
+    def graph_training_nbytes(
+        self,
+        index: int,
+        edge_relations: Sequence[str] | None = None,
+    ) -> int:
         path_index, local_index = self._locate(index)
         handle = self._handle(path_index)
         detector_slice = self._slice_offsets(handle, "detector", local_index)
@@ -1551,20 +1589,24 @@ class H5FlatHeteroGraphDataset:
             total += _dataset_rows_nbytes(self._array_dataset(handle, "core_anchor"), 1)
         if "particle_label_all" in handle or (arrays is not None and "particle_label" in arrays):
             total += _dataset_rows_nbytes(self._array_dataset(handle, "particle_label"), 1)
-        for relation in EDGE_RELATIONS:
+        for relation in _selected_edge_relations(edge_relations):
             offsets = self._edge_offset_dataset(handle, relation)
             n_edges = int(offsets[local_index + 1] - offsets[local_index])
             total += _dataset_axis_nbytes(self._edge_index_dataset(handle, relation), axis=1, count=n_edges)
             total += _dataset_rows_nbytes(self._edge_feature_dataset(handle, relation), n_edges)
         return int(total)
 
-    def scaler_sample(self, index: int) -> dict[str, Any]:
+    def scaler_sample(
+        self,
+        index: int,
+        edge_relations: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
         path_index, local_index = self._locate(index)
         handle = self._handle(path_index)
         detector_slice = self._slice_offsets(handle, "detector", local_index)
         pulse_slice = self._slice_offsets(handle, "pulse", local_index)
         edge_features_by_type = {}
-        for relation in EDGE_RELATIONS:
+        for relation in _selected_edge_relations(edge_relations):
             offsets = self._edge_offset_dataset(handle, relation)
             edge_slice = slice(int(offsets[local_index]), int(offsets[local_index + 1]))
             edge_features_by_type[relation] = self._edge_feature_dataset(handle, relation)[edge_slice].astype(np.float32)
@@ -1596,14 +1638,18 @@ class H5FlatHeteroGraphDataset:
             "pulse_feature_columns": self._effective_pulse_columns(),
         }
 
-    def training_sample(self, index: int) -> dict[str, Any]:
+    def training_sample(
+        self,
+        index: int,
+        edge_relations: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
         path_index, local_index = self._locate(index)
         handle = self._handle(path_index)
         detector_slice = self._slice_offsets(handle, "detector", local_index)
         pulse_slice = self._slice_offsets(handle, "pulse", local_index)
         edge_index_by_type = {}
         edge_features_by_type = {}
-        for relation in EDGE_RELATIONS:
+        for relation in _selected_edge_relations(edge_relations):
             offsets = self._edge_offset_dataset(handle, relation)
             edge_slice = slice(int(offsets[local_index]), int(offsets[local_index + 1]))
             edge_index_by_type[relation] = self._edge_index_dataset(handle, relation)[:, edge_slice].astype(np.int64)
@@ -1737,8 +1783,10 @@ class H5PyGHeteroGraphDataset:
         *args: Any,
         scalers: dict[str, Any] | None = None,
         waveform_length: int | None = None,
+        edge_relations: Sequence[str] | None = None,
         **kwargs: Any,
     ):
+        _ = edge_relations
         dataset_class = hetero_dataset_class_for_paths(args[0])
         self.base = dataset_class(*args, **kwargs)
         self.scalers = scalers
