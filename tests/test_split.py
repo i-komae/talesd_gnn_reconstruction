@@ -106,6 +106,24 @@ class SourceSplitTest(unittest.TestCase):
         self.assertEqual(len(split_sources["val"]), 10)
         self.assertEqual(len(split_sources["test"]), 20)
 
+    def test_assign_source_group_can_use_event_fractions_for_source_fractions(self) -> None:
+        counts = {f"source_{index}": 10 for index in range(100)}
+        split_sources = {"train": [], "val": [], "test": []}
+
+        _assign_source_group(
+            split_sources,
+            list(counts),
+            val_fraction=0.05,
+            test_fraction=0.10,
+            rng=random.Random(7),
+            source_val_fraction=None,
+            source_test_fraction=None,
+        )
+
+        self.assertEqual(len(split_sources["train"]), 85)
+        self.assertEqual(len(split_sources["val"]), 5)
+        self.assertEqual(len(split_sources["test"]), 10)
+
     def test_stratified_source_split_keeps_source_paths_disjoint(self) -> None:
         source_counts = {
             **{f"/mc/proton/bin_16/source_{index}_16.dst.gz": 12 for index in range(12)},

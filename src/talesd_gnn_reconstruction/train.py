@@ -626,15 +626,19 @@ def split_indices_by_stratified_source_path(
     show_progress: bool = True,
     min_group_sources: int = 10,
     workers: int = 0,
-    source_val_fraction: float = 0.10,
-    source_test_fraction: float = 0.20,
+    source_val_fraction: float | None = 0.10,
+    source_test_fraction: float | None = 0.20,
 ) -> dict[str, list[int]]:
     if val_fraction < 0.0 or test_fraction < 0.0 or val_fraction + test_fraction >= 1.0:
         raise ValueError("val_fraction and test_fraction must be non-negative and sum to less than 1")
     if (
-        source_val_fraction < 0.0
-        or source_test_fraction < 0.0
-        or source_val_fraction + source_test_fraction >= 1.0
+        source_val_fraction is not None
+        and source_test_fraction is not None
+        and (
+            source_val_fraction < 0.0
+            or source_test_fraction < 0.0
+            or source_val_fraction + source_test_fraction >= 1.0
+        )
     ):
         raise ValueError(
             "source_val_fraction and source_test_fraction must be non-negative and sum to less than 1"
@@ -722,6 +726,9 @@ def split_indices_by_stratified_source_path(
     )
     if overlap:
         raise ValueError(f"source-stratified split leaked source groups across splits: {sorted(overlap)[:5]}")
+    logged_source_val_fraction = val_fraction if source_val_fraction is None else source_val_fraction
+    logged_source_test_fraction = test_fraction if source_test_fraction is None else source_test_fraction
+    source_fraction_mode = "event" if source_val_fraction is None and source_test_fraction is None else "explicit"
     _progress_write(
         "source-stratified split summary "
         f"train_graphs={len(split['train'])} ({len(split['train']) / total_graphs:.3f}) "
@@ -731,8 +738,9 @@ def split_indices_by_stratified_source_path(
         f"val_sources={len(split_sources['val'])} ({len(split_sources['val']) / total_sources:.3f}) "
         f"test_sources={len(split_sources['test'])} ({len(split_sources['test']) / total_sources:.3f}) "
         f"target_graph_fractions=train:{1.0 - val_fraction - test_fraction:.3f},val:{val_fraction:.3f},test:{test_fraction:.3f} "
-        f"target_source_fractions=train:{1.0 - source_val_fraction - source_test_fraction:.3f},"
-        f"val:{source_val_fraction:.3f},test:{source_test_fraction:.3f}"
+        f"target_source_fractions=train:{1.0 - logged_source_val_fraction - logged_source_test_fraction:.3f},"
+        f"val:{logged_source_val_fraction:.3f},test:{logged_source_test_fraction:.3f} "
+        f"source_fraction_mode={source_fraction_mode}"
     )
     return split
 
@@ -1537,8 +1545,8 @@ def train_model(
     energy_bias_min_bin_count: int = 8,
     val_fraction: float = 0.05,
     test_fraction: float = 0.10,
-    source_val_fraction: float = 0.10,
-    source_test_fraction: float = 0.20,
+    source_val_fraction: float | None = 0.10,
+    source_test_fraction: float | None = 0.20,
     split_mode: str = "event",
     seed: int = 12345,
     device: str = "auto",

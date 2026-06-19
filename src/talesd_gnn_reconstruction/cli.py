@@ -4354,6 +4354,11 @@ def _cmd_train(args: argparse.Namespace) -> None:
     from .train import train_model
 
     graphs = _resolve_graph_args(args.graphs)
+    source_val_fraction = args.source_val_fraction
+    source_test_fraction = args.source_test_fraction
+    if args.source_fraction_mode == "event":
+        source_val_fraction = None
+        source_test_fraction = None
     result = train_model(
         graphs_path=graphs,
         output_path=args.output,
@@ -4391,8 +4396,8 @@ def _cmd_train(args: argparse.Namespace) -> None:
         energy_bias_min_bin_count=args.energy_bias_min_bin_count,
         val_fraction=args.val_fraction,
         test_fraction=args.test_fraction,
-        source_val_fraction=args.source_val_fraction,
-        source_test_fraction=args.source_test_fraction,
+        source_val_fraction=source_val_fraction,
+        source_test_fraction=source_test_fraction,
         split_mode=args.split_mode,
         seed=args.seed,
         device=args.device,
@@ -5112,6 +5117,12 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--energy-bias-min-bin-count", type=int, default=8, help="energy bias lossで1 bin/classに必要な最小event数")
     train.add_argument("--val-fraction", type=float, default=0.05, help="validation event fraction")
     train.add_argument("--test-fraction", type=float, default=0.10, help="test event fraction")
+    train.add_argument(
+        "--source-fraction-mode",
+        choices=["explicit", "event"],
+        default="explicit",
+        help="source-stratified split の source 割当比。explicit は source-val/test-fraction、event は val/test-fraction を使う",
+    )
     train.add_argument("--source-val-fraction", type=float, default=0.10, help="source-stratified splitでvalidationに割り当てるsource fraction")
     train.add_argument("--source-test-fraction", type=float, default=0.20, help="source-stratified splitでtestに割り当てるsource fraction")
     train.add_argument(
