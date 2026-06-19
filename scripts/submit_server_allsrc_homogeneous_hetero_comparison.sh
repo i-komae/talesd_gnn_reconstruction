@@ -25,6 +25,7 @@ GRAPH_ROOT="${GRAPH_ROOT:-/dicos_ui_home/ikomae/work/gnn/graphs}"
 RUN_UV_SYNC="${RUN_UV_SYNC:-0}"
 LOCAL_RUNTIME_CACHE="${LOCAL_RUNTIME_CACHE:-0}"
 PARTITION="${PARTITION:-v100-al9_long}"
+H5_PARTITION="${H5_PARTITION:-edr1-al9_large}"
 H5_RUN_NAME="${H5_RUN_NAME:-hetero_light_allsrc_target${LIGHT_TARGET}_${RUN_ID}}"
 GRAPH_INPUT="${GRAPH_INPUT:-${GRAPH_ROOT}/${H5_RUN_NAME}}"
 GRAPHS_PER_SOURCE_GROUP="${GRAPHS_PER_SOURCE_GROUP:-$(( (LIGHT_TARGET + SOURCE_GROUPS_PER_STRATUM - 1) / SOURCE_GROUPS_PER_STRATUM ))}"
@@ -46,7 +47,8 @@ status "source_group_selection: ${SOURCE_GROUP_SELECTION}"
 status "refill_min_graphs_per_source_group: ${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}"
 status "max_refill_source_groups_per_stratum: ${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}"
 status "graph_input_after_export: ${GRAPH_INPUT}"
-status "partition: ${PARTITION}"
+status "h5_partition: ${H5_PARTITION}"
+status "training_partition: ${PARTITION}"
 status "run_uv_sync: ${RUN_UV_SYNC}"
 status "local_runtime_cache: ${LOCAL_RUNTIME_CACHE}"
 status "heterogeneous_selection_basis: provisional next setting from synced validation loss/milestones and failure modes"
@@ -60,6 +62,7 @@ if [[ "${DRY_RUN}" == "1" ]]; then
   ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA}" \
   REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}" \
   MAX_REFILL_SOURCE_GROUPS_PER_STRATUM="${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}" \
+  PARTITION="${H5_PARTITION}" \
   RUN_UV_SYNC="${RUN_UV_SYNC}" \
   MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS}" \
   DRY_RUN=1 \
@@ -116,6 +119,7 @@ h5_submit_output="$(
   ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA}" \
   REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}" \
   MAX_REFILL_SOURCE_GROUPS_PER_STRATUM="${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}" \
+  PARTITION="${H5_PARTITION}" \
   RUN_UV_SYNC="${RUN_UV_SYNC}" \
   MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS}" \
   SBATCH_PARSABLE=1 \
@@ -206,6 +210,8 @@ cat <<EOF
 ALL-SOURCE COMPARISON SUBMITTED
 h5_export_job_id: ${h5_job_id}
 h5_graph_input: ${GRAPH_INPUT}
+h5_partition: ${H5_PARTITION}
+training_partition: ${PARTITION}
 homogeneous_conversion_job_id: ${homogeneous_conversion_job_id:-unknown}
 homogeneous_training_job_id: ${homogeneous_training_job_id:-unknown}
 homogeneous_conversion_dependency: ${h5_dependency}
