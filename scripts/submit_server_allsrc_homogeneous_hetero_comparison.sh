@@ -37,6 +37,9 @@ SOURCE_GROUP_SELECTION="all"
 PULSE_MASK="${PULSE_MASK:-ising_kept}"
 HETERO_MODEL_ARCHITECTURE="${HETERO_MODEL_ARCHITECTURE:-hetero_attention}"
 HETERO_RELATION_PRESET="${HETERO_RELATION_PRESET:-minimal}"
+SOURCE_FRACTION_MODE="${SOURCE_FRACTION_MODE:-event}"
+SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION:-0.10}"
+SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION:-0.20}"
 DRY_RUN="${DRY_RUN:-0}"
 
 status "ALL-SOURCE HOMOGENEOUS/HETEROGENEOUS COMPARISON"
@@ -51,6 +54,9 @@ status "h5_partition: ${H5_PARTITION}"
 status "training_partition: ${PARTITION}"
 status "run_uv_sync: ${RUN_UV_SYNC}"
 status "local_runtime_cache: ${LOCAL_RUNTIME_CACHE}"
+status "source_fraction_mode: ${SOURCE_FRACTION_MODE}"
+status "source_val_fraction: ${SOURCE_VAL_FRACTION}"
+status "source_test_fraction: ${SOURCE_TEST_FRACTION}"
 status "heterogeneous_selection_basis: provisional next setting from synced validation loss/milestones and failure modes"
 status "heterogeneous_note: final model choice requires validation/test on the new all-source H5; light562 is smoke only"
 status "heterogeneous_default: ${HETERO_MODEL_ARCHITECTURE} cnn-gru crop_cnn ising_kept ${HETERO_RELATION_PRESET}-relations"
@@ -77,6 +83,9 @@ HETERO_GRAPH_INPUT="${GRAPH_INPUT}" \
   RUN_UV_SYNC="${RUN_UV_SYNC}" \
   LOCAL_RUNTIME_CACHE="${LOCAL_RUNTIME_CACHE}" \
   PARTITION="${PARTITION}" \
+  SOURCE_FRACTION_MODE="${SOURCE_FRACTION_MODE}" \
+  SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION}" \
+  SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION}" \
   "${SCRIPT_DIR}/submit_server_homogeneous_from_hetero_training.sh"
 
   GRAPH_INPUT="${GRAPH_INPUT}" \
@@ -90,6 +99,9 @@ HETERO_GRAPH_INPUT="${GRAPH_INPUT}" \
   DETECTOR_READOUT_MASK=ising_kept \
   PULSE_READOUT_MASK=ising_kept \
   HETERO_RELATION_PRESET="${HETERO_RELATION_PRESET}" \
+  SOURCE_FRACTION_MODE="${SOURCE_FRACTION_MODE}" \
+  SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION}" \
+  SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION}" \
   BATCH_SIZE="${HETERO_BATCH_SIZE:-64}" \
   GRADIENT_ACCUMULATION_STEPS="${HETERO_GRADIENT_ACCUMULATION_STEPS:-2}" \
   AMP=fp16 \
@@ -144,6 +156,9 @@ homogeneous_submit_output="$(
   RUN_UV_SYNC="${RUN_UV_SYNC}" \
   LOCAL_RUNTIME_CACHE="${LOCAL_RUNTIME_CACHE}" \
   PARTITION="${PARTITION}" \
+  SOURCE_FRACTION_MODE="${SOURCE_FRACTION_MODE}" \
+  SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION}" \
+  SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION}" \
   TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}" \
   MODEL_ARCHITECTURE=physics \
   WAVEFORM_ENCODER=cnn-gru \
@@ -179,6 +194,9 @@ heterogeneous_submit_output="$(
   DETECTOR_READOUT_MASK=ising_kept \
   PULSE_READOUT_MASK=ising_kept \
   HETERO_RELATION_PRESET="${HETERO_RELATION_PRESET}" \
+  SOURCE_FRACTION_MODE="${SOURCE_FRACTION_MODE}" \
+  SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION}" \
+  SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION}" \
   CORE_TARGET_MODE=signal_bary_relative \
   COORDINATE_FEATURE_MODE=relative_only \
   HETERO_TRAINING_DATA_FORMAT=fast_tensor \
@@ -212,6 +230,9 @@ h5_export_job_id: ${h5_job_id}
 h5_graph_input: ${GRAPH_INPUT}
 h5_partition: ${H5_PARTITION}
 training_partition: ${PARTITION}
+source_fraction_mode: ${SOURCE_FRACTION_MODE}
+source_val_fraction: ${SOURCE_VAL_FRACTION}
+source_test_fraction: ${SOURCE_TEST_FRACTION}
 homogeneous_conversion_job_id: ${homogeneous_conversion_job_id:-unknown}
 homogeneous_training_job_id: ${homogeneous_training_job_id:-unknown}
 homogeneous_conversion_dependency: ${h5_dependency}

@@ -139,6 +139,9 @@ convert_sbatch_dependency: ${CONVERT_SBATCH_DEPENDENCY:-none}
 submit_training: ${SUBMIT_TRAINING}
 training_run_name: ${TRAIN_RUN_NAME}
 training_partition: ${PARTITION}
+source_fraction_mode: ${SOURCE_FRACTION_MODE:-explicit}
+source_val_fraction: ${SOURCE_VAL_FRACTION:-0.10}
+source_test_fraction: ${SOURCE_TEST_FRACTION:-0.20}
 ======================================================================
 EOF
 
@@ -187,6 +190,9 @@ BEST_DIAGNOSTICS="${BEST_DIAGNOSTICS:-1}" \
 FEATURE_IMPORTANCE="${FEATURE_IMPORTANCE:-1}" \
 FEATURE_IMPORTANCE_SPLIT="${FEATURE_IMPORTANCE_SPLIT:-validation test}" \
 DEVICE="${DEVICE:-cuda}" \
+SOURCE_FRACTION_MODE="${SOURCE_FRACTION_MODE:-explicit}" \
+SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION:-0.10}" \
+SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION:-0.20}" \
 RUN_UV_SYNC="${RUN_UV_SYNC}" \
 "${SCRIPT_DIR}/submit_server_reco_mass_training.sh"
 

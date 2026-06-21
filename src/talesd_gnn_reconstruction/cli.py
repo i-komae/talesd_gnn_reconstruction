@@ -4474,6 +4474,11 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
     from .hetero_training import train_hetero_model
 
     graphs = _resolve_graph_args(args.graphs, args.graphs_list)
+    source_val_fraction = args.source_val_fraction
+    source_test_fraction = args.source_test_fraction
+    if args.source_fraction_mode == "event":
+        source_val_fraction = None
+        source_test_fraction = None
     result = train_hetero_model(
         graphs_path=graphs,
         output_path=args.output,
@@ -4533,8 +4538,8 @@ def _cmd_train_hetero(args: argparse.Namespace) -> None:
         nll_sigma_core_floor_km=args.nll_sigma_core_floor_km,
         val_fraction=args.val_fraction,
         test_fraction=args.test_fraction,
-        source_val_fraction=args.source_val_fraction,
-        source_test_fraction=args.source_test_fraction,
+        source_val_fraction=source_val_fraction,
+        source_test_fraction=source_test_fraction,
         split_mode=args.split_mode,
         seed=args.seed,
         device=args.device,
@@ -5319,6 +5324,12 @@ def build_parser() -> argparse.ArgumentParser:
     train_hetero.add_argument("--nll-sigma-core-floor-km", type=float, default=0.005)
     train_hetero.add_argument("--val-fraction", type=float, default=0.1)
     train_hetero.add_argument("--test-fraction", type=float, default=0.1)
+    train_hetero.add_argument(
+        "--source-fraction-mode",
+        choices=["explicit", "event"],
+        default="explicit",
+        help="source-stratified split の source 割当比。explicit は source-val/test-fraction、event は val/test-fraction を使う",
+    )
     train_hetero.add_argument("--source-val-fraction", type=float, default=0.10)
     train_hetero.add_argument("--source-test-fraction", type=float, default=0.20)
     train_hetero.add_argument(
