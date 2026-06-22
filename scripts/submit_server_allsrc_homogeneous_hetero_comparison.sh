@@ -10,7 +10,7 @@ status() {
 status "submit_server_allsrc_homogeneous_hetero_comparison.sh: starting"
 
 RUN_ID="${RUN_ID:-allsrc_compare_$(date +%Y%m%d_%H%M%S)}"
-LIGHT_TARGET="${LIGHT_TARGET:-10000}"
+LIGHT_TARGET="${LIGHT_TARGET:-50000}"
 SOURCE_GROUPS_PER_STRATUM="${SOURCE_GROUPS_PER_STRATUM:-298}"
 if ! [[ "${LIGHT_TARGET}" =~ ^[1-9][0-9]*$ ]]; then
   echo "LIGHT_TARGET must be a positive integer: ${LIGHT_TARGET}" >&2
