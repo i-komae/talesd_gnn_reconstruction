@@ -48,6 +48,8 @@ HOMOGENEOUS_PERSISTENT_WORKERS="${HOMOGENEOUS_PERSISTENT_WORKERS:-0}"
 HOMOGENEOUS_PIN_MEMORY="${HOMOGENEOUS_PIN_MEMORY:-1}"
 HOMOGENEOUS_ENERGY_BIAS_WEIGHT="${HOMOGENEOUS_ENERGY_BIAS_WEIGHT:-0.0}"
 HOMOGENEOUS_ENERGY_PARTICLE_BIAS_WEIGHT="${HOMOGENEOUS_ENERGY_PARTICLE_BIAS_WEIGHT:-0.0}"
+HETERO_ENERGY_BIAS_WEIGHT="${HETERO_ENERGY_BIAS_WEIGHT:-${HOMOGENEOUS_ENERGY_BIAS_WEIGHT}}"
+HETERO_ENERGY_PARTICLE_BIAS_WEIGHT="${HETERO_ENERGY_PARTICLE_BIAS_WEIGHT:-${HOMOGENEOUS_ENERGY_PARTICLE_BIAS_WEIGHT}}"
 DRY_RUN="${DRY_RUN:-0}"
 
 status "ALL-SOURCE HOMOGENEOUS/HETEROGENEOUS COMPARISON"
@@ -66,6 +68,7 @@ status "source_fraction_mode: ${SOURCE_FRACTION_MODE}"
 status "source_val_fraction: ${SOURCE_VAL_FRACTION}"
 status "source_test_fraction: ${SOURCE_TEST_FRACTION}"
 status "homogeneous_defaults: batch=${HOMOGENEOUS_BATCH_SIZE} workers=${HOMOGENEOUS_TRAIN_WORKERS}/${HOMOGENEOUS_PREPROCESS_WORKERS} prefetch=${HOMOGENEOUS_PREFETCH_FACTOR} persistent=${HOMOGENEOUS_PERSISTENT_WORKERS} pin_memory=${HOMOGENEOUS_PIN_MEMORY} energy_bias=${HOMOGENEOUS_ENERGY_BIAS_WEIGHT} particle_bias=${HOMOGENEOUS_ENERGY_PARTICLE_BIAS_WEIGHT}"
+status "heterogeneous_loss_defaults: energy_bias=${HETERO_ENERGY_BIAS_WEIGHT} particle_bias=${HETERO_ENERGY_PARTICLE_BIAS_WEIGHT}"
 status "heterogeneous_selection_basis: provisional next setting from synced validation loss/milestones and failure modes"
 status "heterogeneous_note: final model choice requires validation/test on the new all-source H5; light562 is smoke only"
 status "heterogeneous_default: ${HETERO_MODEL_ARCHITECTURE} cnn-gru crop_cnn ising_kept ${HETERO_RELATION_PRESET}-relations"
@@ -126,6 +129,8 @@ HETERO_GRAPH_INPUT="${GRAPH_INPUT}" \
   PERSISTENT_WORKERS=1 \
   PREFETCH_FACTOR=1 \
   PIN_MEMORY=0 \
+  ENERGY_BIAS_WEIGHT="${HETERO_ENERGY_BIAS_WEIGHT}" \
+  ENERGY_PARTICLE_BIAS_WEIGHT="${HETERO_ENERGY_PARTICLE_BIAS_WEIGHT}" \
   PREPARE_FAST_CACHE=0 \
   FEATURE_IMPORTANCE=1 \
   FEATURE_IMPORTANCE_SPLIT="${FEATURE_IMPORTANCE_SPLIT:-validation test}" \
@@ -230,6 +235,8 @@ heterogeneous_submit_output="$(
   PERSISTENT_WORKERS=1 \
   PREFETCH_FACTOR=1 \
   PIN_MEMORY=0 \
+  ENERGY_BIAS_WEIGHT="${HETERO_ENERGY_BIAS_WEIGHT}" \
+  ENERGY_PARTICLE_BIAS_WEIGHT="${HETERO_ENERGY_PARTICLE_BIAS_WEIGHT}" \
   PREPARE_FAST_CACHE=0 \
   FEATURE_IMPORTANCE=1 \
   FEATURE_IMPORTANCE_SPLIT="${FEATURE_IMPORTANCE_SPLIT:-validation test}" \
@@ -255,6 +262,8 @@ training_partition: ${PARTITION}
 source_fraction_mode: ${SOURCE_FRACTION_MODE}
 source_val_fraction: ${SOURCE_VAL_FRACTION}
 source_test_fraction: ${SOURCE_TEST_FRACTION}
+heterogeneous_energy_bias_weight: ${HETERO_ENERGY_BIAS_WEIGHT}
+heterogeneous_energy_particle_bias_weight: ${HETERO_ENERGY_PARTICLE_BIAS_WEIGHT}
 homogeneous_conversion_job_id: ${homogeneous_conversion_job_id:-unknown}
 homogeneous_training_job_id: ${homogeneous_training_job_id:-unknown}
 homogeneous_conversion_dependency: ${h5_dependency}
