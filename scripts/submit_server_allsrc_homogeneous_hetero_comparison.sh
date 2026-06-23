@@ -51,6 +51,44 @@ HOMOGENEOUS_ENERGY_PARTICLE_BIAS_WEIGHT="${HOMOGENEOUS_ENERGY_PARTICLE_BIAS_WEIG
 HETERO_ENERGY_BIAS_WEIGHT="${HETERO_ENERGY_BIAS_WEIGHT:-${HOMOGENEOUS_ENERGY_BIAS_WEIGHT}}"
 HETERO_ENERGY_PARTICLE_BIAS_WEIGHT="${HETERO_ENERGY_PARTICLE_BIAS_WEIGHT:-${HOMOGENEOUS_ENERGY_PARTICLE_BIAS_WEIGHT}}"
 DRY_RUN="${DRY_RUN:-0}"
+H5_EXPORT_WORKERS="${H5_EXPORT_WORKERS:-96}"
+H5_CPUS_PER_TASK="${H5_CPUS_PER_TASK:-${H5_EXPORT_WORKERS}}"
+H5_MEM="${H5_MEM:-384G}"
+H5_TIME_LIMIT="${H5_TIME_LIMIT:-1-00:00:00}"
+MAX_SINGLE_JOB_LIGHT_TARGET="${MAX_SINGLE_JOB_LIGHT_TARGET:-100000}"
+ALLOW_LONG_SINGLE_H5_EXPORT="${ALLOW_LONG_SINGLE_H5_EXPORT:-0}"
+
+for pair in \
+  "H5_EXPORT_WORKERS:${H5_EXPORT_WORKERS}" \
+  "H5_CPUS_PER_TASK:${H5_CPUS_PER_TASK}"
+do
+  key="${pair%%:*}"
+  value="${pair#*:}"
+  if ! [[ "${value}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "${key} must be a positive integer: ${value}" >&2
+    exit 2
+  fi
+done
+if ! [[ "${MAX_SINGLE_JOB_LIGHT_TARGET}" =~ ^[0-9]+$ ]]; then
+  echo "MAX_SINGLE_JOB_LIGHT_TARGET must be a non-negative integer: ${MAX_SINGLE_JOB_LIGHT_TARGET}" >&2
+  exit 2
+fi
+if [[ "${SOURCE_GROUP_SELECTION}" == "all" && "${LIGHT_TARGET}" -gt "${MAX_SINGLE_JOB_LIGHT_TARGET}" && "${ALLOW_LONG_SINGLE_H5_EXPORT}" != "1" ]]; then
+  cat >&2 <<EOF
+Refusing unsafe single-job all-source H5 export.
+
+LIGHT_TARGET=${LIGHT_TARGET}
+SOURCE_GROUP_SELECTION=${SOURCE_GROUP_SELECTION}
+GRAPHS_PER_SOURCE_GROUP=${GRAPHS_PER_SOURCE_GROUP}
+MAX_SINGLE_JOB_LIGHT_TARGET=${MAX_SINGLE_JOB_LIGHT_TARGET}
+
+This configuration is above the current single-job safety limit. Increase
+MAX_SINGLE_JOB_LIGHT_TARGET only after checking the H5 export worker count,
+runtime limit, and previous log rate, or set ALLOW_LONG_SINGLE_H5_EXPORT=1 for
+an explicitly accepted manual override.
+EOF
+  exit 2
+fi
 
 status "ALL-SOURCE HOMOGENEOUS/HETEROGENEOUS COMPARISON"
 status "run_id: ${RUN_ID}"
@@ -61,6 +99,12 @@ status "refill_min_graphs_per_source_group: ${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP
 status "max_refill_source_groups_per_stratum: ${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}"
 status "graph_input_after_export: ${GRAPH_INPUT}"
 status "h5_partition: ${H5_PARTITION}"
+status "h5_export_workers: ${H5_EXPORT_WORKERS}"
+status "h5_cpus_per_task: ${H5_CPUS_PER_TASK}"
+status "h5_mem: ${H5_MEM}"
+status "h5_time_limit: ${H5_TIME_LIMIT}"
+status "max_single_job_light_target: ${MAX_SINGLE_JOB_LIGHT_TARGET}"
+status "allow_long_single_h5_export: ${ALLOW_LONG_SINGLE_H5_EXPORT}"
 status "training_partition: ${PARTITION}"
 status "run_uv_sync: ${RUN_UV_SYNC}"
 status "local_runtime_cache: ${LOCAL_RUNTIME_CACHE}"
@@ -80,6 +124,10 @@ if [[ "${DRY_RUN}" == "1" ]]; then
   ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA}" \
   REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}" \
   MAX_REFILL_SOURCE_GROUPS_PER_STRATUM="${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}" \
+  EXPORT_WORKERS="${H5_EXPORT_WORKERS}" \
+  CPUS_PER_TASK="${H5_CPUS_PER_TASK}" \
+  MEM="${H5_MEM}" \
+  TIME_LIMIT="${H5_TIME_LIMIT}" \
   PARTITION="${H5_PARTITION}" \
   RUN_UV_SYNC="${RUN_UV_SYNC}" \
   MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS}" \
@@ -153,6 +201,10 @@ h5_submit_output="$(
   ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA}" \
   REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}" \
   MAX_REFILL_SOURCE_GROUPS_PER_STRATUM="${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}" \
+  EXPORT_WORKERS="${H5_EXPORT_WORKERS}" \
+  CPUS_PER_TASK="${H5_CPUS_PER_TASK}" \
+  MEM="${H5_MEM}" \
+  TIME_LIMIT="${H5_TIME_LIMIT}" \
   PARTITION="${H5_PARTITION}" \
   RUN_UV_SYNC="${RUN_UV_SYNC}" \
   MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS}" \

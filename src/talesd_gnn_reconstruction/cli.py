@@ -2626,8 +2626,17 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
     def log(message: str) -> None:
         print(f"hetero light export: worker={worker_index} {message}", flush=True)
 
-    def collect_group_graphs(group: LightHeteroSourceGroup) -> list[tuple[float, int, str, Any]]:
-        group_graphs: list[tuple[float, int, str, Any]] = []
+    def collect_group_graphs(
+        group: LightHeteroSourceGroup,
+        *,
+        retain_limit: int,
+        excluded_keys: set[str] | None = None,
+    ) -> tuple[int, list[tuple[float, int, str, Any]]]:
+        graphable_count = 0
+        retain_limit = max(int(retain_limit), 0)
+        excluded = excluded_keys or set()
+        retained: list[tuple[float, int, int, tuple[float, int, str, Any]]] = []
+        retained_counter = 0
         iterator = None
         timer_enabled = source_group_timeout_sec > 0.0 and hasattr(signal, "setitimer")
         old_handler: Any = None
@@ -2659,8 +2668,20 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
             )
             for graphable_index, graph in enumerate(iterator):
                 score = _light_graph_sample_key(seed, group, graph, graphable_index)
-                group_graphs.append((score, graphable_index, _light_graph_identity(graph, graphable_index), graph))
-                if len(group_graphs) >= source_group_graph_cap:
+                graph_key = _light_graph_identity(graph, graphable_index)
+                graphable_count += 1
+                if retain_limit > 0 and graph_key not in excluded:
+                    item = (score, graphable_index, graph_key, graph)
+                    heap_entry = (-float(score), -int(graphable_index), retained_counter, item)
+                    retained_counter += 1
+                    if len(retained) < retain_limit:
+                        heapq.heappush(retained, heap_entry)
+                    else:
+                        worst_score = -float(retained[0][0])
+                        worst_index = -int(retained[0][1])
+                        if (float(score), int(graphable_index)) < (worst_score, worst_index):
+                            heapq.heapreplace(retained, heap_entry)
+                if graphable_count >= source_group_graph_cap:
                     break
         finally:
             if timer_enabled:
@@ -2670,8 +2691,9 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                 close = getattr(iterator, "close", None)
                 if callable(close):
                     close()
+        group_graphs = [entry[3] for entry in retained]
         group_graphs.sort(key=lambda item: (item[0], item[1]))
-        return group_graphs
+        return graphable_count, group_graphs
 
     def rotate_shard() -> None:
         nonlocal shard_index, shard_path, handle, written_in_shard
@@ -2724,6 +2746,8 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         for stratum_index, stratum_item in enumerate(strata, start=1):
             stratum = str(stratum_item["stratum"])
+            chunk_index = int(stratum_item.get("chunk_index", 1))
+            chunk_count = int(stratum_item.get("chunk_count", 1))
             groups = list(stratum_item["groups"])
             target_graphs = int(stratum_item["target_graphs"])
             stratum_written = 0
@@ -2734,6 +2758,7 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
             attempted_group_order: list[LightHeteroSourceGroup] = []
             log(
                 f"start_stratum index={stratum_index}/{len(strata)} stratum={stratum} "
+                f"chunk={chunk_index}/{chunk_count} "
                 f"target_graphs={target_graphs} candidate_source_groups={len(groups)}"
             )
             for group_index, group in enumerate(groups, start=1):
@@ -2747,8 +2772,10 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                     f"source_group={group.source_group} files={len(group.paths)}"
                 )
                 attempted_group_order.append(group)
+                remaining_target = max(target_graphs - stratum_written, 0)
+                primary_quota = min(graphs_per_source_group, remaining_target)
                 try:
-                    group_graphs = collect_group_graphs(group)
+                    graphable, group_graphs = collect_group_graphs(group, retain_limit=primary_quota)
                 except _LightSourceGroupTimeout as exc:
                     row = {
                         **_light_group_to_dict(group),
@@ -2774,9 +2801,6 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                         f"reason={exc}"
                     )
                     continue
-                graphable = len(group_graphs)
-                remaining_target = max(target_graphs - stratum_written, 0)
-                primary_quota = min(graphs_per_source_group, remaining_target)
                 selected_graphs = group_graphs[: min(graphable, primary_quota)]
                 group_written = write_selected_graphs(
                     group,
@@ -2856,8 +2880,13 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                         refill_needed,
                         max(int(math.ceil(refill_needed / remaining_groups)), refill_min_graphs_per_source_group),
                     )
+                    already_selected = selected_keys_by_group.setdefault(group.source_group, set())
                     try:
-                        group_graphs = collect_group_graphs(group)
+                        _graphable, group_graphs = collect_group_graphs(
+                            group,
+                            retain_limit=refill_quota,
+                            excluded_keys=already_selected,
+                        )
                     except _LightSourceGroupTimeout as exc:
                         row["timeout"] = True
                         row["refill_skipped_reason"] = "source_group_timeout"
@@ -2870,12 +2899,7 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                             f"reason={exc}"
                         )
                         continue
-                    already_selected = selected_keys_by_group.setdefault(group.source_group, set())
-                    refill_candidates = [
-                        item
-                        for item in group_graphs
-                        if item[2] not in already_selected
-                    ][:refill_quota]
+                    refill_candidates = group_graphs[:refill_quota]
                     refill_written = write_selected_graphs(
                         group,
                         refill_candidates,
@@ -2902,6 +2926,8 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
             stratum_rows.append(
                 {
                     "stratum": stratum,
+                    "chunk_index": int(chunk_index),
+                    "chunk_count": int(chunk_count),
                     "target_graphs": int(target_graphs),
                     "graphs_written": int(stratum_written),
                     "candidate_source_groups": int(len(groups)),
@@ -2921,6 +2947,7 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
             )
             log(
                 f"done_stratum index={stratum_index}/{len(strata)} stratum={stratum} "
+                f"chunk={chunk_index}/{chunk_count} "
                 f"graphs={stratum_written}/{target_graphs} complete_source_groups={complete_groups} "
                 f"attempted_source_groups={attempted_groups}"
             )
@@ -2959,19 +2986,61 @@ def _write_light_hetero_graph_h5(
         by_stratum,
         key=lambda stratum: _sample_key_from_parts(int(args.seed), stratum, "light-worker-stratum", 0),
     )
-    worker_count = min(max(int(args.workers), 1), max(len(ordered_strata), 1))
-    stratum_chunks = [[] for _ in range(worker_count)]
-    for index, stratum in enumerate(ordered_strata):
+    requested_workers = max(int(args.workers), 1)
+    work_units: list[dict[str, Any]] = []
+    for stratum in ordered_strata:
         groups = sorted(
             by_stratum[stratum],
             key=lambda group: _sample_key_from_parts(int(args.seed), group.source_group, "light-source-group", 0),
         )
-        target_graphs = int(target_source_groups_by_stratum[stratum]) * int(args.graphs_per_source_group)
-        stratum_chunks[index % worker_count].append(
+        work_units.append({"stratum": stratum, "groups": groups})
+
+    # Large all-source exports can have fewer strata than useful CPU workers.
+    # Split large strata by source-group chunks so increasing --workers really
+    # increases parallelism instead of leaving one long serial tail per stratum.
+    while len(work_units) < requested_workers:
+        split_index = max(range(len(work_units)), key=lambda index: len(work_units[index]["groups"]))
+        groups = list(work_units[split_index]["groups"])
+        if len(groups) <= 1:
+            break
+        midpoint = len(groups) // 2
+        left = {"stratum": work_units[split_index]["stratum"], "groups": groups[:midpoint]}
+        right = {"stratum": work_units[split_index]["stratum"], "groups": groups[midpoint:]}
+        work_units[split_index : split_index + 1] = [left, right]
+
+    chunk_counts_by_stratum: dict[str, int] = {}
+    for unit in work_units:
+        chunk_counts_by_stratum[str(unit["stratum"])] = chunk_counts_by_stratum.get(str(unit["stratum"]), 0) + 1
+    chunk_index_by_stratum: dict[str, int] = {}
+    for unit in sorted(
+        work_units,
+        key=lambda item: (
+            str(item["stratum"]),
+            _sample_key_from_parts(int(args.seed), str(item["stratum"]), len(item["groups"]), "light-work-unit"),
+        ),
+    ):
+        stratum = str(unit["stratum"])
+        chunk_index_by_stratum[stratum] = chunk_index_by_stratum.get(stratum, 0) + 1
+        unit["chunk_index"] = chunk_index_by_stratum[stratum]
+        unit["chunk_count"] = chunk_counts_by_stratum[stratum]
+        unit["target_graphs"] = int(len(unit["groups"])) * int(args.graphs_per_source_group)
+
+    worker_count = min(requested_workers, max(len(work_units), 1))
+    stratum_chunks: list[list[dict[str, Any]]] = [[] for _ in range(worker_count)]
+    worker_loads = [0 for _ in range(worker_count)]
+    for unit in sorted(
+        work_units,
+        key=lambda item: (-int(item["target_graphs"]), str(item["stratum"]), int(item["chunk_index"])),
+    ):
+        worker_index = min(range(worker_count), key=lambda index: (worker_loads[index], index))
+        worker_loads[worker_index] += int(unit["target_graphs"])
+        stratum_chunks[worker_index].append(
             {
-                "stratum": stratum,
-                "target_graphs": int(target_graphs),
-                "groups": [_light_group_to_dict(group) for group in groups],
+                "stratum": str(unit["stratum"]),
+                "chunk_index": int(unit["chunk_index"]),
+                "chunk_count": int(unit["chunk_count"]),
+                "target_graphs": int(unit["target_graphs"]),
+                "groups": [_light_group_to_dict(group) for group in unit["groups"]],
             }
         )
 
@@ -3013,7 +3082,8 @@ def _write_light_hetero_graph_h5(
         "hetero light export: "
         f"candidate_source_groups={len(selected_groups)} target_graphs_by_stratum={target_graphs_by_stratum} "
         f"graphs_per_source_group={args.graphs_per_source_group} "
-        f"workers={len(payloads)} output={output_path}"
+        f"requested_workers={requested_workers} workers={len(payloads)} work_items={len(work_units)} "
+        f"output={output_path}"
     )
     if len(payloads) <= 1:
         results = [_export_light_hetero_worker(payloads[0])] if payloads else []
@@ -3039,9 +3109,65 @@ def _write_light_hetero_graph_h5(
         for key, value in result.get("written_counts_by_stratum", {}).items():
             written_counts_by_stratum[str(key)] = written_counts_by_stratum.get(str(key), 0) + int(value)
 
+    aggregated_strata: dict[str, dict[str, Any]] = {}
+    for row in stratum_rows:
+        stratum = str(row["stratum"])
+        aggregate = aggregated_strata.setdefault(
+            stratum,
+            {
+                "stratum": stratum,
+                "target_graphs": 0,
+                "graphs_written": 0,
+                "candidate_source_groups": 0,
+                "attempted_source_groups": 0,
+                "complete_source_groups": 0,
+                "short_source_groups": 0,
+                "timeout_source_groups": 0,
+                "refill_candidate_source_groups": 0,
+                "refill_attempted_source_groups": 0,
+                "refill_source_group_limit": 0,
+                "refill_limit_applied": False,
+                "refill_min_graphs_per_source_group": int(args.refill_min_graphs_per_source_group),
+                "work_items": 0,
+                "target_met": False,
+            },
+        )
+        aggregate["target_graphs"] = int(aggregate["target_graphs"]) + int(row.get("target_graphs", 0))
+        aggregate["graphs_written"] = int(aggregate["graphs_written"]) + int(row.get("graphs_written", 0))
+        aggregate["candidate_source_groups"] = int(aggregate["candidate_source_groups"]) + int(
+            row.get("candidate_source_groups", 0)
+        )
+        aggregate["attempted_source_groups"] = int(aggregate["attempted_source_groups"]) + int(
+            row.get("attempted_source_groups", 0)
+        )
+        aggregate["complete_source_groups"] = int(aggregate["complete_source_groups"]) + int(
+            row.get("complete_source_groups", 0)
+        )
+        aggregate["short_source_groups"] = int(aggregate["short_source_groups"]) + int(row.get("short_source_groups", 0))
+        aggregate["timeout_source_groups"] = int(aggregate["timeout_source_groups"]) + int(
+            row.get("timeout_source_groups", 0)
+        )
+        aggregate["refill_candidate_source_groups"] = int(aggregate["refill_candidate_source_groups"]) + int(
+            row.get("refill_candidate_source_groups", 0)
+        )
+        aggregate["refill_attempted_source_groups"] = int(aggregate["refill_attempted_source_groups"]) + int(
+            row.get("refill_attempted_source_groups", 0)
+        )
+        aggregate["refill_source_group_limit"] = max(
+            int(aggregate["refill_source_group_limit"]),
+            int(row.get("refill_source_group_limit", 0)),
+        )
+        aggregate["refill_limit_applied"] = bool(aggregate["refill_limit_applied"]) or bool(
+            row.get("refill_limit_applied", False)
+        )
+        aggregate["work_items"] = int(aggregate["work_items"]) + 1
+    for aggregate in aggregated_strata.values():
+        aggregate["target_met"] = int(aggregate["graphs_written"]) >= int(aggregate["target_graphs"])
+    aggregated_stratum_rows = sorted(aggregated_strata.values(), key=lambda row: str(row["stratum"]))
+
     short_groups = [row for row in group_rows if int(row.get("graphs_written", 0)) < int(args.graphs_per_source_group)]
     timeout_groups = [row for row in group_rows if bool(row.get("timeout", False))]
-    incomplete_strata = [row for row in stratum_rows if not bool(row.get("target_met", False))]
+    incomplete_strata = [row for row in aggregated_stratum_rows if not bool(row.get("target_met", False))]
     unique_targets = sorted(set(int(value) for value in target_source_groups_by_stratum.values()))
     return {
         "format": "talesd_gnn_hetero_light_export_v1",
@@ -3055,11 +3181,16 @@ def _write_light_hetero_graph_h5(
         "source_group_timeout_sec": float(args.source_group_timeout_sec),
         "refill_min_graphs_per_source_group": int(args.refill_min_graphs_per_source_group),
         "max_refill_source_groups_per_stratum": int(args.max_refill_source_groups_per_stratum),
+        "requested_workers": int(requested_workers),
         "target_source_groups_per_stratum": int(unique_targets[0]) if len(unique_targets) == 1 else None,
         "target_source_groups_by_stratum": dict(sorted((str(key), int(value)) for key, value in target_source_groups_by_stratum.items())),
         "target_graphs_by_stratum": target_graphs_by_stratum,
         "written_counts_by_stratum": dict(sorted(written_counts_by_stratum.items())),
-        "strata": sorted(stratum_rows, key=lambda row: str(row["stratum"])),
+        "strata": aggregated_stratum_rows,
+        "stratum_work_items": sorted(
+            stratum_rows,
+            key=lambda row: (str(row["stratum"]), int(row.get("chunk_index", 1))),
+        ),
         "incomplete_strata": sorted(incomplete_strata, key=lambda row: str(row["stratum"])),
         "source_groups": sorted(group_rows, key=lambda row: (str(row["stratum"]), str(row["source_group"]))),
         "short_source_groups": short_groups,
