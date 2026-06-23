@@ -9,7 +9,7 @@ status() {
 
 status "submit_server_allsrc_homogeneous_hetero_comparison.sh: starting"
 
-RUN_ID="${RUN_ID:-allsrc_compare_$(date +%Y%m%d_%H%M%S)}"
+RUN_ID="${RUN_ID:-balanced_compare_$(date +%Y%m%d_%H%M%S)}"
 LIGHT_TARGET="${LIGHT_TARGET:-50000}"
 SOURCE_GROUPS_PER_STRATUM="${SOURCE_GROUPS_PER_STRATUM:-298}"
 if ! [[ "${LIGHT_TARGET}" =~ ^[1-9][0-9]*$ ]]; then
@@ -26,14 +26,36 @@ RUN_UV_SYNC="${RUN_UV_SYNC:-0}"
 LOCAL_RUNTIME_CACHE="${LOCAL_RUNTIME_CACHE:-0}"
 PARTITION="${PARTITION:-v100-al9_long}"
 H5_PARTITION="${H5_PARTITION:-edr1-al9_large}"
-H5_RUN_NAME="${H5_RUN_NAME:-hetero_light_allsrc_target${LIGHT_TARGET}_${RUN_ID}}"
-GRAPH_INPUT="${GRAPH_INPUT:-${GRAPH_ROOT}/${H5_RUN_NAME}}"
 GRAPHS_PER_SOURCE_GROUP="${GRAPHS_PER_SOURCE_GROUP:-$(( (LIGHT_TARGET + SOURCE_GROUPS_PER_STRATUM - 1) / SOURCE_GROUPS_PER_STRATUM ))}"
 ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA:-1}"
 REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP:-${GRAPHS_PER_SOURCE_GROUP}}"
+SOURCE_GROUP_SELECTION="${SOURCE_GROUP_SELECTION:-balanced_min}"
+if [[ "${SOURCE_GROUP_SELECTION}" != "balanced_min" && "${SOURCE_GROUP_SELECTION}" != "all" ]]; then
+  echo "SOURCE_GROUP_SELECTION must be balanced_min or all: ${SOURCE_GROUP_SELECTION}" >&2
+  exit 2
+fi
+if [[ "${SOURCE_GROUP_SELECTION}" == "all" ]]; then
+  SOURCE_SELECTION_TAG="allsrc"
+  COMPARISON_LABEL="ALL-SOURCE"
+  H5_RUN_NAME="${H5_RUN_NAME:-hetero_light_allsrc_target${LIGHT_TARGET}_${RUN_ID}}"
+  MAX_SOURCE_GROUPS_PER_STRATUM="${MAX_SOURCE_GROUPS_PER_STRATUM:-}"
+else
+  SOURCE_SELECTION_TAG="balanced"
+  COMPARISON_LABEL="BALANCED-SOURCE"
+  H5_RUN_NAME="${H5_RUN_NAME:-hetero_light_balanced_target${LIGHT_TARGET}_${RUN_ID}}"
+  MAX_SOURCE_GROUPS_PER_STRATUM="${MAX_SOURCE_GROUPS_PER_STRATUM:-${SOURCE_GROUPS_PER_STRATUM}}"
+fi
+if [[ -n "${MAX_SOURCE_GROUPS_PER_STRATUM}" ]] && ! [[ "${MAX_SOURCE_GROUPS_PER_STRATUM}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "MAX_SOURCE_GROUPS_PER_STRATUM must be empty or a positive integer: ${MAX_SOURCE_GROUPS_PER_STRATUM}" >&2
+  exit 2
+fi
+if [[ "${SOURCE_GROUP_SELECTION}" == "all" && -n "${MAX_SOURCE_GROUPS_PER_STRATUM}" ]]; then
+  echo "MAX_SOURCE_GROUPS_PER_STRATUM cannot be used with SOURCE_GROUP_SELECTION=all" >&2
+  exit 2
+fi
+GRAPH_INPUT="${GRAPH_INPUT:-${GRAPH_ROOT}/${H5_RUN_NAME}}"
 MAX_REFILL_SOURCE_GROUPS_PER_STRATUM="${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM:-64}"
 MAKE_INPUT_DISTRIBUTIONS="${MAKE_INPUT_DISTRIBUTIONS:-0}"
-SOURCE_GROUP_SELECTION="all"
 PULSE_MASK="${PULSE_MASK:-ising_kept}"
 HETERO_MODEL_ARCHITECTURE="${HETERO_MODEL_ARCHITECTURE:-hetero_attention}"
 HETERO_RELATION_PRESET="${HETERO_RELATION_PRESET:-minimal}"
@@ -90,11 +112,12 @@ EOF
   exit 2
 fi
 
-status "ALL-SOURCE HOMOGENEOUS/HETEROGENEOUS COMPARISON"
+status "${COMPARISON_LABEL} HOMOGENEOUS/HETEROGENEOUS COMPARISON"
 status "run_id: ${RUN_ID}"
 status "light_target: ${LIGHT_TARGET}"
 status "graphs_per_source_group: ${GRAPHS_PER_SOURCE_GROUP}"
 status "source_group_selection: ${SOURCE_GROUP_SELECTION}"
+status "max_source_groups_per_stratum: ${MAX_SOURCE_GROUPS_PER_STRATUM}"
 status "refill_min_graphs_per_source_group: ${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}"
 status "max_refill_source_groups_per_stratum: ${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}"
 status "graph_input_after_export: ${GRAPH_INPUT}"
@@ -114,13 +137,14 @@ status "source_test_fraction: ${SOURCE_TEST_FRACTION}"
 status "homogeneous_defaults: batch=${HOMOGENEOUS_BATCH_SIZE} workers=${HOMOGENEOUS_TRAIN_WORKERS}/${HOMOGENEOUS_PREPROCESS_WORKERS} prefetch=${HOMOGENEOUS_PREFETCH_FACTOR} persistent=${HOMOGENEOUS_PERSISTENT_WORKERS} pin_memory=${HOMOGENEOUS_PIN_MEMORY} energy_bias=${HOMOGENEOUS_ENERGY_BIAS_WEIGHT} particle_bias=${HOMOGENEOUS_ENERGY_PARTICLE_BIAS_WEIGHT}"
 status "heterogeneous_loss_defaults: energy_bias=${HETERO_ENERGY_BIAS_WEIGHT} particle_bias=${HETERO_ENERGY_PARTICLE_BIAS_WEIGHT}"
 status "heterogeneous_selection_basis: provisional next setting from synced validation loss/milestones and failure modes"
-status "heterogeneous_note: final model choice requires validation/test on the new all-source H5; light562 is smoke only"
+status "heterogeneous_note: final model choice requires validation/test on the new ${SOURCE_GROUP_SELECTION} H5; light562 is smoke only"
 status "heterogeneous_default: ${HETERO_MODEL_ARCHITECTURE} cnn-gru crop_cnn ising_kept ${HETERO_RELATION_PRESET}-relations"
 
 if [[ "${DRY_RUN}" == "1" ]]; then
   RUN_NAME="${H5_RUN_NAME}" \
   GRAPHS_PER_SOURCE_GROUP="${GRAPHS_PER_SOURCE_GROUP}" \
   SOURCE_GROUP_SELECTION="${SOURCE_GROUP_SELECTION}" \
+  MAX_SOURCE_GROUPS_PER_STRATUM="${MAX_SOURCE_GROUPS_PER_STRATUM}" \
   ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA}" \
   REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}" \
   MAX_REFILL_SOURCE_GROUPS_PER_STRATUM="${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}" \
@@ -135,7 +159,7 @@ if [[ "${DRY_RUN}" == "1" ]]; then
   "${SCRIPT_DIR}/submit_server_hetero_light_graph_export.sh"
 
 HETERO_GRAPH_INPUT="${GRAPH_INPUT}" \
-  RUN_ID="homogeneous_from_allsrc_${RUN_ID}" \
+  RUN_ID="homogeneous_from_${SOURCE_SELECTION_TAG}_${RUN_ID}" \
   PULSE_MASK="${PULSE_MASK}" \
   CONVERT_WORKERS="${CONVERT_WORKERS:-32}" \
   CONVERT_CPUS_PER_TASK="${CONVERT_CPUS_PER_TASK:-${CONVERT_WORKERS:-32}}" \
@@ -157,7 +181,7 @@ HETERO_GRAPH_INPUT="${GRAPH_INPUT}" \
   "${SCRIPT_DIR}/submit_server_homogeneous_from_hetero_training.sh"
 
   GRAPH_INPUT="${GRAPH_INPUT}" \
-  RUN_ID="hetero_${HETERO_MODEL_ARCHITECTURE}_allsrc_${RUN_ID}" \
+  RUN_ID="hetero_${HETERO_MODEL_ARCHITECTURE}_${SOURCE_SELECTION_TAG}_${RUN_ID}" \
   MODEL_ARCHITECTURE="${HETERO_MODEL_ARCHITECTURE}" \
   WAVEFORM_ENCODER=cnn-gru \
   PULSE_WAVEFORM_ENCODER=crop_cnn \
@@ -198,6 +222,7 @@ h5_submit_output="$(
   RUN_NAME="${H5_RUN_NAME}" \
   GRAPHS_PER_SOURCE_GROUP="${GRAPHS_PER_SOURCE_GROUP}" \
   SOURCE_GROUP_SELECTION="${SOURCE_GROUP_SELECTION}" \
+  MAX_SOURCE_GROUPS_PER_STRATUM="${MAX_SOURCE_GROUPS_PER_STRATUM}" \
   ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA}" \
   REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}" \
   MAX_REFILL_SOURCE_GROUPS_PER_STRATUM="${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}" \
@@ -222,7 +247,7 @@ status "h5_export_job_id=${h5_job_id}"
 
 homogeneous_submit_output="$(
   HETERO_GRAPH_INPUT="${GRAPH_INPUT}" \
-  RUN_ID="homogeneous_from_allsrc_${RUN_ID}" \
+  RUN_ID="homogeneous_from_${SOURCE_SELECTION_TAG}_${RUN_ID}" \
   PULSE_MASK="${PULSE_MASK}" \
   CONVERT_WORKERS="${CONVERT_WORKERS:-32}" \
   CONVERT_CPUS_PER_TASK="${CONVERT_CPUS_PER_TASK:-${CONVERT_WORKERS:-32}}" \
@@ -260,7 +285,7 @@ homogeneous_training_job_id="$(printf "%s\n" "${homogeneous_submit_output}" | aw
 
 heterogeneous_submit_output="$(
   GRAPH_INPUT="${GRAPH_INPUT}" \
-  RUN_ID="hetero_${HETERO_MODEL_ARCHITECTURE}_allsrc_${RUN_ID}" \
+  RUN_ID="hetero_${HETERO_MODEL_ARCHITECTURE}_${SOURCE_SELECTION_TAG}_${RUN_ID}" \
   SBATCH_DEPENDENCY="${h5_dependency}" \
   PARTITION="${PARTITION}" \
   TRAIN_EPOCHS="${TRAIN_EPOCHS:-128}" \
@@ -306,7 +331,7 @@ heterogeneous_training_job_id="$(printf "%s\n" "${heterogeneous_submit_output}" 
 
 cat <<EOF
 ======================================================================
-ALL-SOURCE COMPARISON SUBMITTED
+${COMPARISON_LABEL} COMPARISON SUBMITTED
 h5_export_job_id: ${h5_job_id}
 h5_graph_input: ${GRAPH_INPUT}
 h5_partition: ${H5_PARTITION}
@@ -322,7 +347,7 @@ homogeneous_conversion_dependency: ${h5_dependency}
 homogeneous_training_dependency: afterok:${homogeneous_conversion_job_id:-unknown}
 heterogeneous_training_job_id: ${heterogeneous_training_job_id:-unknown}
 heterogeneous_dependency: ${h5_dependency}
-heterogeneous_selection_basis: provisional next setting from synced validation loss/milestones and failure modes; final choice requires validation/test on this new all-source H5
+heterogeneous_selection_basis: provisional next setting from synced validation loss/milestones and failure modes; final choice requires validation/test on this new ${SOURCE_GROUP_SELECTION} H5
 heterogeneous_model: ${HETERO_MODEL_ARCHITECTURE} + cnn-gru + crop_cnn + ising-kept masks + ${HETERO_RELATION_PRESET} relations
 homogeneous_model: physics + cnn-gru from ising-kept homogeneous conversion
 ======================================================================
