@@ -2438,7 +2438,7 @@ def _plan_light_hetero_source_groups(
     *,
     seed: int,
     max_source_groups_per_stratum: int | None = None,
-    source_group_selection: str = "balanced_min",
+    source_group_selection: str = "all",
 ) -> tuple[list[LightHeteroSourceGroup], dict[str, Any]]:
     groups = _light_hetero_source_groups_from_paths(paths)
     by_stratum: dict[str, list[LightHeteroSourceGroup]] = {}
@@ -2448,7 +2448,7 @@ def _plan_light_hetero_source_groups(
         raise SystemExit("no source groups were found from input DST filenames")
 
     if source_group_selection not in {"balanced_min", "all"}:
-        raise ValueError(f"unknown light source group selection mode: {source_group_selection}")
+        raise ValueError(f"unknown source group selection mode: {source_group_selection}")
     if source_group_selection == "all" and max_source_groups_per_stratum is not None:
         raise ValueError("--max-source-groups-per-stratum cannot be used with --source-group-selection all")
 
@@ -2482,7 +2482,7 @@ def _plan_light_hetero_source_groups(
     )
     unique_targets = sorted(set(targets_by_stratum.values()))
     return candidates, {
-        "selection_strategy": "filename_source_group_light_v1",
+        "selection_strategy": "filename_source_group_source_balanced_v1",
         "source_group_selection": source_group_selection,
         "source_group_unit": "DAT?????? source group",
         "stratum": "particle:DAT filename energy code",
@@ -2505,7 +2505,7 @@ def _select_light_hetero_source_groups(
     *,
     seed: int,
     max_source_groups_per_stratum: int | None = None,
-    source_group_selection: str = "balanced_min",
+    source_group_selection: str = "all",
 ) -> tuple[list[LightHeteroSourceGroup], dict[str, Any]]:
     candidates, summary = _plan_light_hetero_source_groups(
         paths,
@@ -2623,8 +2623,10 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
     started_at = time.monotonic()
     last_progress = started_at
 
+    log_prefix = str(payload.get("log_prefix", "hetero source-balanced export"))
+
     def log(message: str) -> None:
-        print(f"hetero light export: worker={worker_index} {message}", flush=True)
+        print(f"{log_prefix}: worker={worker_index} {message}", flush=True)
 
     def collect_group_graphs(
         group: LightHeteroSourceGroup,
@@ -3070,6 +3072,7 @@ def _write_light_hetero_graph_h5(
             "refill_min_graphs_per_source_group": int(args.refill_min_graphs_per_source_group),
             "max_refill_source_groups_per_stratum": int(args.max_refill_source_groups_per_stratum),
             "config": config,
+            "log_prefix": str(getattr(args, "export_log_prefix", "hetero source-balanced export")),
         }
         for worker_index, strata in enumerate(stratum_chunks)
         if strata
@@ -3078,8 +3081,9 @@ def _write_light_hetero_graph_h5(
         stratum: int(target_source_groups_by_stratum[stratum]) * int(args.graphs_per_source_group)
         for stratum in sorted(by_stratum)
     }
+    log_prefix = str(getattr(args, "export_log_prefix", "hetero source-balanced export"))
     _progress_write(
-        "hetero light export: "
+        f"{log_prefix}: "
         f"candidate_source_groups={len(selected_groups)} target_graphs_by_stratum={target_graphs_by_stratum} "
         f"graphs_per_source_group={args.graphs_per_source_group} "
         f"requested_workers={requested_workers} workers={len(payloads)} work_items={len(work_units)} "
@@ -3093,7 +3097,7 @@ def _write_light_hetero_graph_h5(
                 payloads,
                 _export_light_hetero_worker,
                 len(payloads),
-                "export hetero light source groups",
+                "export hetero source-balanced groups",
                 max_tasks_per_child=args.worker_max_files if int(args.worker_max_files) > 0 else None,
             )
         )
@@ -3170,7 +3174,7 @@ def _write_light_hetero_graph_h5(
     incomplete_strata = [row for row in aggregated_stratum_rows if not bool(row.get("target_met", False))]
     unique_targets = sorted(set(int(value) for value in target_source_groups_by_stratum.values()))
     return {
-        "format": "talesd_gnn_hetero_light_export_v1",
+        "format": "talesd_gnn_hetero_source_balanced_export_v1",
         "output": str(output_path),
         "output_paths": output_paths,
         "graphs_written": sum(int(result.get("graphs_written", 0)) for result in results),
@@ -4276,19 +4280,23 @@ def _cmd_export_hetero(args: argparse.Namespace) -> None:
 def _cmd_export_hetero_light(args: argparse.Namespace) -> None:
     import dstio.tale.graph as tale_graph
 
+    command_name = str(getattr(args, "export_command_name", "export-hetero-source-balanced"))
+    log_prefix = str(getattr(args, "export_log_prefix", "hetero source-balanced export"))
+    export_mode = str(getattr(args, "export_mode", "hetero-source-balanced"))
     if args.kind not in {"mc", "auto"}:
-        raise ValueError("export-hetero-light currently supports MC rusdraw/rusdmc input only")
+        raise ValueError(f"{command_name} currently supports MC rusdraw/rusdmc input only")
     inputs = _resolve_input_args(args.input, args.input_list, args.input_dir)
     const_dst = Path(args.const_dst).expanduser() if args.const_dst else None
     mc_calib_dir = Path(args.mc_calib_dir).expanduser() if args.mc_calib_dir else None
     if const_dst is None:
-        raise SystemExit("--const-dst is required for export-hetero-light")
+        raise SystemExit(f"--const-dst is required for {command_name}")
     if mc_calib_dir is None:
-        raise SystemExit("--mc-calib-dir is required for export-hetero-light")
+        raise SystemExit(f"--mc-calib-dir is required for {command_name}")
     min_event_date = None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date)
     args.const_dst = str(const_dst)
     args.mc_calib_dir = str(mc_calib_dir)
     args.min_event_date = min_event_date
+    args.export_log_prefix = log_prefix
 
     candidate_groups, selection_summary = _plan_light_hetero_source_groups(
         inputs,
@@ -4321,11 +4329,11 @@ def _cmd_export_hetero_light(args: argparse.Namespace) -> None:
         "selection_summary": selection_summary,
         "min_event_date": min_event_date,
         "skip_missing_mc_calibration": bool(args.skip_missing_mc_calibration),
-        "export_mode": "hetero-light",
+        "export_mode": export_mode,
     }
     output_path = _dstio_h5_output_path(args.output, require_directory=True, workers=max(int(args.workers), 1))
     _progress_write(
-        "hetero light selection: "
+        f"{log_prefix} selection: "
         f"strata={selection_summary['source_groups_by_stratum']} "
         f"source_group_selection={selection_summary['source_group_selection']} "
         f"selected_by_stratum={selection_summary['selected_source_groups_by_stratum']} "
@@ -4352,19 +4360,19 @@ def _cmd_export_hetero_light(args: argparse.Namespace) -> None:
         summary_path = Path(args.selection_summary).expanduser()
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-        _progress_write(f"hetero light selection summary: {summary_path}")
+        _progress_write(f"{log_prefix} selection summary: {summary_path}")
 
     if not bool(result.get("complete", False)) and not bool(args.allow_underfull_strata):
-        raise SystemExit("hetero light export is incomplete: " + json.dumps(result.get("incomplete_strata", []), sort_keys=True))
+        raise SystemExit(f"{log_prefix} is incomplete: " + json.dumps(result.get("incomplete_strata", []), sort_keys=True))
     if not bool(result.get("complete", False)):
         _progress_write(
-            "hetero light export underfull strata allowed: "
+            f"{log_prefix} underfull strata allowed: "
             + json.dumps(result.get("incomplete_strata", []), sort_keys=True)
         )
 
     print(
         "wrote "
-        f"{int(result.get('graphs_written', 0))} hetero light graphs to "
+        f"{int(result.get('graphs_written', 0))} hetero source-balanced graphs to "
         f"{', '.join(str(path) for path in result.get('output_paths', []))}"
     )
 
@@ -5095,14 +5103,15 @@ def build_parser() -> argparse.ArgumentParser:
     export_hetero.set_defaults(func=_cmd_export_hetero)
 
     export_hetero_light = sub.add_parser(
-        "export-hetero-light",
-        help="filename source group だけで高速に軽量 heterogeneous HDF5 を作成",
+        "export-hetero-source-balanced",
+        aliases=["export-hetero-light"],
+        help="filename source group 単位で source-balanced heterogeneous HDF5 を作成",
     )
     export_hetero_light.add_argument("input", nargs="*", help="入力DSTファイル。複数指定可")
     export_hetero_light.add_argument("--input-list", action="append", default=[], help="入力DSTパスを1行1ファイルで書いたリスト。複数指定可")
     export_hetero_light.add_argument("--input-dir", action="append", default=[], help="入力DSTディレクトリ。*.dst.gzを再帰的に読む。複数指定可")
     export_hetero_light.add_argument("-o", "--output", required=True, help="出力heterogeneous HDF5 graph directory")
-    export_hetero_light.add_argument("--kind", choices=["auto", "mc"], default="mc", help="入力DSTの種類。light export はMC専用")
+    export_hetero_light.add_argument("--kind", choices=["auto", "mc"], default="mc", help="入力DSTの種類。source-balanced export はMC専用")
     export_hetero_light.add_argument("--const-dst", default=None, help="TALE-SD detector geometry DST")
     export_hetero_light.add_argument("--mc-calib-dir", default=None, help="MC calibration directory")
     export_hetero_light.add_argument("--min-event-date", type=int, default=None, help="YYMMDD形式。この日付より前のeventをDST読み込み時に除外する")
@@ -5117,13 +5126,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-source-groups-per-stratum",
         type=int,
         default=None,
-        help="particle:DAT energy code stratumごとに使うsource group数の上限。未指定なら最小stratumに合わせる",
+        help="balanced_min互換モード用。particle:DAT energy code stratumごとのsource group数をさらに制限する",
     )
     export_hetero_light.add_argument(
         "--source-group-selection",
         choices=["balanced_min", "all"],
-        default="balanced_min",
-        help="source group選択。balanced_minは最小stratumに合わせる。allは各stratumの全source groupを使う",
+        default="all",
+        help="source group選択。allは各stratumの全source groupを使う。balanced_minは最小stratumに合わせる互換モード",
     )
     export_hetero_light.add_argument(
         "--allow-underfull-strata",
@@ -5145,7 +5154,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_hetero_light.add_argument("--seed", type=int, default=12345, help="source group選択のdeterministic seed")
     export_hetero_light.add_argument("--workers", type=int, default=1, help="source group単位のparallel worker数")
     export_hetero_light.add_argument("--worker-max-files", type=int, default=DEFAULT_WORKER_MAX_FILES, help="workerをNタスクごとに再起動する。0なら無効")
-    export_hetero_light.add_argument("--selection-summary", default=None, help="light selection/write summary JSONの出力先")
+    export_hetero_light.add_argument("--selection-summary", default=None, help="source-balanced selection/write summary JSONの出力先")
     export_hetero_light.add_argument("--h5-progress-interval-sec", type=float, default=30.0, help="HDF5 export progress出力間隔")
     export_hetero_light.add_argument(
         "--source-group-timeout-sec",
@@ -5167,7 +5176,12 @@ def build_parser() -> argparse.ArgumentParser:
     export_hetero_light.add_argument("--keep-non-mode0", action="store_true", help="trgMode != 0 も残す")
     export_hetero_light.add_argument("--skip-errors", action="store_true", help="読めないDSTを警告してスキップする")
     export_hetero_light.add_argument("--skip-missing-mc-calibration", action="store_true", help="MC calibration が見つからないeventをスキップする")
-    export_hetero_light.set_defaults(func=_cmd_export_hetero_light)
+    export_hetero_light.set_defaults(
+        func=_cmd_export_hetero_light,
+        export_command_name="export-hetero-source-balanced",
+        export_log_prefix="hetero source-balanced export",
+        export_mode="hetero-source-balanced",
+    )
 
     reshard_hetero = sub.add_parser("reshard-hetero", help="既存hetero HDF5をDST再読込なしで並べ替え・再shard化する")
     reshard_hetero.add_argument("--graphs", nargs="*", default=[], help="入力hetero HDF5。shard、shard base、またはHDF5ディレクトリを指定可")

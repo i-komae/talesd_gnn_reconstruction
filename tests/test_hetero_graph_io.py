@@ -1470,7 +1470,11 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             "/mc/iron/sel/DAT100217_gea_trg_000.dst.gz",
         ]
 
-        selected, summary = _select_light_hetero_source_groups(inputs, seed=7)
+        selected, summary = _select_light_hetero_source_groups(
+            inputs,
+            seed=7,
+            source_group_selection="balanced_min",
+        )
 
         self.assertEqual(
             summary["source_groups_by_stratum"],
@@ -1501,11 +1505,7 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
             "/mc/iron/sel/DAT100217_gea_trg_000.dst.gz",
         ]
 
-        selected, summary = _select_light_hetero_source_groups(
-            inputs,
-            seed=7,
-            source_group_selection="all",
-        )
+        selected, summary = _select_light_hetero_source_groups(inputs, seed=7)
 
         self.assertEqual(
             summary["source_groups_by_stratum"],
