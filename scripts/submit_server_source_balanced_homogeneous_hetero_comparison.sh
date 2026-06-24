@@ -28,7 +28,9 @@ PARTITION="${PARTITION:-v100-al9_long}"
 H5_PARTITION="${H5_PARTITION:-edr1-al9_large}"
 GRAPHS_PER_SOURCE_GROUP="${GRAPHS_PER_SOURCE_GROUP:-$(( (TARGET + TARGET_REFERENCE_SOURCE_GROUPS - 1) / TARGET_REFERENCE_SOURCE_GROUPS ))}"
 ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA:-1}"
-REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP:-${GRAPHS_PER_SOURCE_GROUP}}"
+TARGET_GRAPHS_PER_STRATUM="${TARGET_GRAPHS_PER_STRATUM:-${TARGET}}"
+SOURCE_GROUP_OVERDRAW_FACTOR="${SOURCE_GROUP_OVERDRAW_FACTOR:-2}"
+REFILL_MIN_GRAPHS_PER_SOURCE_GROUP="${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP:-1}"
 SOURCE_GROUP_SELECTION="${SOURCE_GROUP_SELECTION:-all}"
 if [[ "${SOURCE_GROUP_SELECTION}" != "balanced_min" && "${SOURCE_GROUP_SELECTION}" != "all" ]]; then
   echo "SOURCE_GROUP_SELECTION must be balanced_min or all: ${SOURCE_GROUP_SELECTION}" >&2
@@ -95,13 +97,18 @@ if ! [[ "${MAX_SINGLE_JOB_TARGET}" =~ ^[0-9]+$ ]]; then
   echo "MAX_SINGLE_JOB_TARGET must be a non-negative integer: ${MAX_SINGLE_JOB_TARGET}" >&2
   exit 2
 fi
+if ! [[ "${TARGET_GRAPHS_PER_STRATUM}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "TARGET_GRAPHS_PER_STRATUM must be a positive integer: ${TARGET_GRAPHS_PER_STRATUM}" >&2
+  exit 2
+fi
 if [[ "${SOURCE_GROUP_SELECTION}" == "all" && "${TARGET}" -gt "${MAX_SINGLE_JOB_TARGET}" && "${ALLOW_LONG_SINGLE_H5_EXPORT}" != "1" ]]; then
   cat >&2 <<EOF
 Refusing unsafe single-job source-balanced H5 export.
 
 TARGET=${TARGET}
+TARGET_GRAPHS_PER_STRATUM=${TARGET_GRAPHS_PER_STRATUM}
 SOURCE_GROUP_SELECTION=${SOURCE_GROUP_SELECTION}
-GRAPHS_PER_SOURCE_GROUP=${GRAPHS_PER_SOURCE_GROUP}
+GRAPHS_PER_SOURCE_GROUP_FALLBACK=${GRAPHS_PER_SOURCE_GROUP}
 MAX_SINGLE_JOB_TARGET=${MAX_SINGLE_JOB_TARGET}
 
 This configuration is above the current single-job safety limit. Increase
@@ -115,10 +122,12 @@ fi
 status "${COMPARISON_LABEL} HOMOGENEOUS/HETEROGENEOUS COMPARISON"
 status "run_id: ${RUN_ID}"
 status "target: ${TARGET}"
+status "target_graphs_per_stratum: ${TARGET_GRAPHS_PER_STRATUM}"
 status "target_reference_source_groups: ${TARGET_REFERENCE_SOURCE_GROUPS}"
-status "target_usage: used only to compute graphs_per_source_group; source groups are not capped unless MAX_SOURCE_GROUPS_PER_STRATUM is set"
-status "graphs_per_source_group: ${GRAPHS_PER_SOURCE_GROUP}"
+status "target_usage: target_graphs_per_stratum is the per particle:energy stratum total; all selected source groups get deterministic quota shares"
+status "graphs_per_source_group_fallback: ${GRAPHS_PER_SOURCE_GROUP}"
 status "source_group_selection: ${SOURCE_GROUP_SELECTION}"
+status "source_group_overdraw_factor: ${SOURCE_GROUP_OVERDRAW_FACTOR}"
 status "max_source_groups_per_stratum: ${MAX_SOURCE_GROUPS_PER_STRATUM}"
 status "refill_min_graphs_per_source_group: ${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}"
 status "max_refill_source_groups_per_stratum: ${MAX_REFILL_SOURCE_GROUPS_PER_STRATUM}"
@@ -145,6 +154,8 @@ status "heterogeneous_default: ${HETERO_MODEL_ARCHITECTURE} cnn-gru crop_cnn isi
 if [[ "${DRY_RUN}" == "1" ]]; then
   RUN_NAME="${H5_RUN_NAME}" \
   GRAPHS_PER_SOURCE_GROUP="${GRAPHS_PER_SOURCE_GROUP}" \
+  TARGET_GRAPHS_PER_STRATUM="${TARGET_GRAPHS_PER_STRATUM}" \
+  SOURCE_GROUP_OVERDRAW_FACTOR="${SOURCE_GROUP_OVERDRAW_FACTOR}" \
   SOURCE_GROUP_SELECTION="${SOURCE_GROUP_SELECTION}" \
   MAX_SOURCE_GROUPS_PER_STRATUM="${MAX_SOURCE_GROUPS_PER_STRATUM}" \
   ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA}" \
@@ -223,6 +234,8 @@ fi
 h5_submit_output="$(
   RUN_NAME="${H5_RUN_NAME}" \
   GRAPHS_PER_SOURCE_GROUP="${GRAPHS_PER_SOURCE_GROUP}" \
+  TARGET_GRAPHS_PER_STRATUM="${TARGET_GRAPHS_PER_STRATUM}" \
+  SOURCE_GROUP_OVERDRAW_FACTOR="${SOURCE_GROUP_OVERDRAW_FACTOR}" \
   SOURCE_GROUP_SELECTION="${SOURCE_GROUP_SELECTION}" \
   MAX_SOURCE_GROUPS_PER_STRATUM="${MAX_SOURCE_GROUPS_PER_STRATUM}" \
   ALLOW_UNDERFULL_STRATA="${ALLOW_UNDERFULL_STRATA}" \
@@ -336,6 +349,8 @@ cat <<EOF
 ${COMPARISON_LABEL} COMPARISON SUBMITTED
 h5_export_job_id: ${h5_job_id}
 h5_graph_input: ${GRAPH_INPUT}
+target_graphs_per_stratum: ${TARGET_GRAPHS_PER_STRATUM}
+source_group_overdraw_factor: ${SOURCE_GROUP_OVERDRAW_FACTOR}
 h5_partition: ${H5_PARTITION}
 training_partition: ${PARTITION}
 source_fraction_mode: ${SOURCE_FRACTION_MODE}

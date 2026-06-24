@@ -15,7 +15,7 @@ from collections.abc import Iterable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .layout import default_const_dst_path, load_tale_const_positions
 from .progress import progress as _progress
@@ -2570,6 +2570,51 @@ def _open_light_hetero_shard(
     return shard_path, handle
 
 
+def _allocate_light_source_group_targets(
+    groups: Sequence[LightHeteroSourceGroup],
+    *,
+    target_graphs_per_stratum: int | None,
+    graphs_per_source_group: int,
+    seed: int,
+) -> dict[str, int]:
+    by_stratum: dict[str, list[LightHeteroSourceGroup]] = {}
+    for group in groups:
+        by_stratum.setdefault(group.stratum, []).append(group)
+
+    targets: dict[str, int] = {}
+    fallback = max(int(graphs_per_source_group), 0)
+    for stratum, stratum_groups in by_stratum.items():
+        ordered = sorted(
+            stratum_groups,
+            key=lambda group: _sample_key_from_parts(int(seed), group.source_group, "source-group-target-order", 0),
+        )
+        if target_graphs_per_stratum is None:
+            for group in ordered:
+                targets[group.source_group] = fallback
+            continue
+
+        target = max(int(target_graphs_per_stratum), 0)
+        if not ordered:
+            continue
+        base = target // len(ordered)
+        remainder = target % len(ordered)
+        extra_groups = {
+            group.source_group
+            for group in sorted(
+                ordered,
+                key=lambda group: _sample_key_from_parts(
+                    int(seed),
+                    f"{stratum}:{group.source_group}",
+                    "target-remainder",
+                    0,
+                ),
+            )[:remainder]
+        }
+        for group in ordered:
+            targets[group.source_group] = int(base + (1 if group.source_group in extra_groups else 0))
+    return targets
+
+
 def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
     from dstio.tale import graph as tale_graph
 
@@ -2587,8 +2632,11 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
     output_base.parent.mkdir(parents=True, exist_ok=True)
     shard_size = int(payload["shard_size"])
     graphs_per_source_group = int(payload["graphs_per_source_group"])
+    source_group_target_graphs = {
+        str(key): int(value) for key, value in dict(payload.get("source_group_target_graphs", {})).items()
+    }
     source_group_overdraw_factor = max(float(payload.get("source_group_overdraw_factor", 10.0)), 1.0)
-    source_group_graph_cap = max(
+    default_source_group_graph_cap = max(
         graphs_per_source_group,
         int(math.ceil(graphs_per_source_group * source_group_overdraw_factor)),
     )
@@ -2607,7 +2655,7 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
     config["worker_index"] = worker_index
     config["worker_source_groups"] = source_group_count
     config["source_group_overdraw_factor"] = source_group_overdraw_factor
-    config["source_group_graph_cap"] = source_group_graph_cap
+    config["source_group_graph_cap"] = default_source_group_graph_cap
     config["source_group_timeout_sec"] = source_group_timeout_sec
     config["refill_min_graphs_per_source_group"] = refill_min_graphs_per_source_group
     config["max_refill_source_groups_per_stratum"] = max_refill_source_groups_per_stratum
@@ -2632,10 +2680,12 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
         group: LightHeteroSourceGroup,
         *,
         retain_limit: int,
+        graph_cap: int,
         excluded_keys: set[str] | None = None,
     ) -> tuple[int, list[tuple[float, int, str, Any]]]:
         graphable_count = 0
         retain_limit = max(int(retain_limit), 0)
+        graph_cap = max(int(graph_cap), 0)
         excluded = excluded_keys or set()
         retained: list[tuple[float, int, int, tuple[float, int, str, Any]]] = []
         retained_counter = 0
@@ -2683,7 +2733,7 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                         worst_index = -int(retained[0][1])
                         if (float(score), int(graphable_index)) < (worst_score, worst_index):
                             heapq.heapreplace(retained, heap_entry)
-                if graphable_count >= source_group_graph_cap:
+                if graph_cap > 0 and graphable_count >= graph_cap:
                     break
         finally:
             if timer_enabled:
@@ -2738,7 +2788,7 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
     log(
         f"start strata={len(strata)} source_groups={source_group_count} "
         f"graphs_per_source_group={graphs_per_source_group} "
-        f"source_group_graph_cap={source_group_graph_cap} "
+        f"default_source_group_graph_cap={default_source_group_graph_cap} "
         f"source_group_timeout_sec={source_group_timeout_sec:g} "
         f"refill_min_graphs_per_source_group={refill_min_graphs_per_source_group} "
         f"max_refill_source_groups_per_stratum={max_refill_source_groups_per_stratum} "
@@ -2766,28 +2816,59 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
             for group_index, group in enumerate(groups, start=1):
                 if stratum_written >= target_graphs:
                     break
+                group_target_graphs = max(
+                    int(source_group_target_graphs.get(group.source_group, graphs_per_source_group)),
+                    0,
+                )
+                if group_target_graphs <= 0:
+                    group_rows.append(
+                        {
+                            **_light_group_to_dict(group),
+                            "target_graphs": 0,
+                            "graphs_found": 0,
+                            "graphs_written": 0,
+                            "primary_graphs_written": 0,
+                            "refill_graphs_written": 0,
+                            "discarded_graphs": 0,
+                            "overdraw_cap_reached": False,
+                            "source_group_graph_cap": 0,
+                            "complete": True,
+                        }
+                    )
+                    complete_groups += 1
+                    continue
+                group_graph_cap = max(
+                    group_target_graphs,
+                    int(math.ceil(group_target_graphs * source_group_overdraw_factor)),
+                )
                 attempted_groups += 1
                 group_started_at = time.monotonic()
                 log(
                     f"start_group index={group_index}/{len(groups)} stratum={group.stratum} "
                     f"stratum_graphs={stratum_written}/{target_graphs} "
-                    f"source_group={group.source_group} files={len(group.paths)}"
+                    f"source_group={group.source_group} target={group_target_graphs} "
+                    f"graph_cap={group_graph_cap} files={len(group.paths)}"
                 )
                 attempted_group_order.append(group)
                 remaining_target = max(target_graphs - stratum_written, 0)
-                primary_quota = min(graphs_per_source_group, remaining_target)
+                primary_quota = min(group_target_graphs, remaining_target)
                 try:
-                    graphable, group_graphs = collect_group_graphs(group, retain_limit=primary_quota)
+                    graphable, group_graphs = collect_group_graphs(
+                        group,
+                        retain_limit=primary_quota,
+                        graph_cap=group_graph_cap,
+                    )
                 except _LightSourceGroupTimeout as exc:
                     row = {
                         **_light_group_to_dict(group),
+                        "target_graphs": int(group_target_graphs),
                         "graphs_found": 0,
                         "graphs_written": 0,
                         "primary_graphs_written": 0,
                         "refill_graphs_written": 0,
                         "discarded_graphs": 0,
                         "overdraw_cap_reached": False,
-                        "source_group_graph_cap": int(source_group_graph_cap),
+                        "source_group_graph_cap": int(group_graph_cap),
                         "complete": False,
                         "timeout": True,
                         "skipped_reason": "source_group_timeout",
@@ -2816,13 +2897,14 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                 row = {
                     **_light_group_to_dict(group),
                     "graphs_found": int(graphable),
+                    "target_graphs": int(group_target_graphs),
                     "graphs_written": int(group_written),
                     "primary_graphs_written": int(group_written),
                     "refill_graphs_written": 0,
                     "discarded_graphs": int(graphable - group_written),
-                    "overdraw_cap_reached": bool(graphable >= source_group_graph_cap),
-                    "source_group_graph_cap": int(source_group_graph_cap),
-                    "complete": int(group_written) >= graphs_per_source_group,
+                    "overdraw_cap_reached": bool(graphable >= group_graph_cap),
+                    "source_group_graph_cap": int(group_graph_cap),
+                    "complete": int(group_written) >= group_target_graphs,
                 }
                 group_rows.append(row)
                 row_by_group[group.source_group] = row
@@ -2833,8 +2915,8 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                 log(
                     f"done_group index={group_index}/{len(groups)} stratum={group.stratum} "
                     f"source_group={group.source_group} found={graphable} "
-                    f"written={group_written}/{graphs_per_source_group} "
-                    f"complete={int(group_written) >= graphs_per_source_group} "
+                    f"written={group_written}/{group_target_graphs} "
+                    f"complete={int(group_written) >= group_target_graphs} "
                     f"stratum_graphs={stratum_written}/{target_graphs} "
                     f"elapsed={group_elapsed:.1f}s total_written={written_total}"
                 )
@@ -2887,6 +2969,10 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                         _graphable, group_graphs = collect_group_graphs(
                             group,
                             retain_limit=refill_quota,
+                            graph_cap=max(
+                                int(row.get("source_group_graph_cap", graphs_per_source_group)),
+                                int(row.get("target_graphs", graphs_per_source_group)),
+                            ),
                             excluded_keys=already_selected,
                         )
                     except _LightSourceGroupTimeout as exc:
@@ -2915,7 +3001,7 @@ def _export_light_hetero_worker(payload: dict[str, Any]) -> dict[str, Any]:
                     row["refill_graphs_written"] = int(row["refill_graphs_written"]) + int(refill_written)
                     row["discarded_graphs"] = max(int(row["graphs_found"]) - int(row["graphs_written"]), 0)
                     was_complete = bool(row["complete"])
-                    row["complete"] = int(row["graphs_written"]) >= graphs_per_source_group
+                    row["complete"] = int(row["graphs_written"]) >= int(row.get("target_graphs", graphs_per_source_group))
                     if bool(row["complete"]) and not was_complete:
                         complete_groups += 1
                     handle.flush()
@@ -2984,6 +3070,19 @@ def _write_light_hetero_graph_h5(
     by_stratum: dict[str, list[LightHeteroSourceGroup]] = {}
     for group in selected_groups:
         by_stratum.setdefault(group.stratum, []).append(group)
+    requested_target_graphs_per_stratum = getattr(args, "target_graphs_per_stratum", None)
+    if requested_target_graphs_per_stratum is not None and int(requested_target_graphs_per_stratum) <= 0:
+        requested_target_graphs_per_stratum = None
+    source_group_target_graphs = _allocate_light_source_group_targets(
+        selected_groups,
+        target_graphs_per_stratum=(
+            int(requested_target_graphs_per_stratum)
+            if requested_target_graphs_per_stratum is not None
+            else None
+        ),
+        graphs_per_source_group=int(args.graphs_per_source_group),
+        seed=int(args.seed),
+    )
     ordered_strata = sorted(
         by_stratum,
         key=lambda stratum: _sample_key_from_parts(int(args.seed), stratum, "light-worker-stratum", 0),
@@ -3025,7 +3124,10 @@ def _write_light_hetero_graph_h5(
         chunk_index_by_stratum[stratum] = chunk_index_by_stratum.get(stratum, 0) + 1
         unit["chunk_index"] = chunk_index_by_stratum[stratum]
         unit["chunk_count"] = chunk_counts_by_stratum[stratum]
-        unit["target_graphs"] = int(len(unit["groups"])) * int(args.graphs_per_source_group)
+        unit["target_graphs"] = sum(
+            int(source_group_target_graphs.get(group.source_group, int(args.graphs_per_source_group)))
+            for group in unit["groups"]
+        )
 
     worker_count = min(requested_workers, max(len(work_units), 1))
     stratum_chunks: list[list[dict[str, Any]]] = [[] for _ in range(worker_count)]
@@ -3052,6 +3154,7 @@ def _write_light_hetero_graph_h5(
             "strata": strata,
             "output_base": str(output_path),
             "graphs_per_source_group": int(args.graphs_per_source_group),
+            "source_group_target_graphs": source_group_target_graphs,
             "source_group_overdraw_factor": float(args.source_group_overdraw_factor),
             "seed": int(args.seed),
             "kind": "mc",
@@ -3078,7 +3181,10 @@ def _write_light_hetero_graph_h5(
         if strata
     ]
     target_graphs_by_stratum = {
-        stratum: int(target_source_groups_by_stratum[stratum]) * int(args.graphs_per_source_group)
+        stratum: sum(
+            int(source_group_target_graphs.get(group.source_group, int(args.graphs_per_source_group)))
+            for group in by_stratum[stratum]
+        )
         for stratum in sorted(by_stratum)
     }
     log_prefix = str(getattr(args, "export_log_prefix", "hetero source-balanced export"))
@@ -3086,6 +3192,7 @@ def _write_light_hetero_graph_h5(
         f"{log_prefix}: "
         f"candidate_source_groups={len(selected_groups)} target_graphs_by_stratum={target_graphs_by_stratum} "
         f"graphs_per_source_group={args.graphs_per_source_group} "
+        f"target_graphs_per_stratum={requested_target_graphs_per_stratum} "
         f"requested_workers={requested_workers} workers={len(payloads)} work_items={len(work_units)} "
         f"output={output_path}"
     )
@@ -3169,7 +3276,11 @@ def _write_light_hetero_graph_h5(
         aggregate["target_met"] = int(aggregate["graphs_written"]) >= int(aggregate["target_graphs"])
     aggregated_stratum_rows = sorted(aggregated_strata.values(), key=lambda row: str(row["stratum"]))
 
-    short_groups = [row for row in group_rows if int(row.get("graphs_written", 0)) < int(args.graphs_per_source_group)]
+    short_groups = [
+        row
+        for row in group_rows
+        if int(row.get("graphs_written", 0)) < int(row.get("target_graphs", args.graphs_per_source_group))
+    ]
     timeout_groups = [row for row in group_rows if bool(row.get("timeout", False))]
     incomplete_strata = [row for row in aggregated_stratum_rows if not bool(row.get("target_met", False))]
     unique_targets = sorted(set(int(value) for value in target_source_groups_by_stratum.values()))
@@ -3181,6 +3292,9 @@ def _write_light_hetero_graph_h5(
         "complete": not incomplete_strata,
         "workers": len(payloads),
         "graphs_per_source_group": int(args.graphs_per_source_group),
+        "target_graphs_per_stratum_requested": (
+            int(requested_target_graphs_per_stratum) if requested_target_graphs_per_stratum is not None else None
+        ),
         "source_group_overdraw_factor": float(args.source_group_overdraw_factor),
         "source_group_timeout_sec": float(args.source_group_timeout_sec),
         "refill_min_graphs_per_source_group": int(args.refill_min_graphs_per_source_group),
@@ -3199,7 +3313,11 @@ def _write_light_hetero_graph_h5(
         "source_groups": sorted(group_rows, key=lambda row: (str(row["stratum"]), str(row["source_group"]))),
         "short_source_groups": short_groups,
         "timeout_source_groups": timeout_groups,
-        "complete_source_groups": sum(1 for row in group_rows if int(row.get("graphs_written", 0)) >= int(args.graphs_per_source_group)),
+        "complete_source_groups": sum(
+            1
+            for row in group_rows
+            if int(row.get("graphs_written", 0)) >= int(row.get("target_graphs", args.graphs_per_source_group))
+        ),
     }
 
 
@@ -4320,6 +4438,9 @@ def _cmd_export_hetero_light(args: argparse.Namespace) -> None:
         "workers": int(args.workers),
         "worker_max_files": int(args.worker_max_files),
         "graphs_per_source_group": int(args.graphs_per_source_group),
+        "target_graphs_per_stratum": (
+            int(args.target_graphs_per_stratum) if getattr(args, "target_graphs_per_stratum", None) is not None else None
+        ),
         "source_group_overdraw_factor": float(args.source_group_overdraw_factor),
         "source_group_selection": args.source_group_selection,
         "max_source_groups_per_stratum": args.max_source_groups_per_stratum,
@@ -4339,6 +4460,7 @@ def _cmd_export_hetero_light(args: argparse.Namespace) -> None:
         f"selected_by_stratum={selection_summary['selected_source_groups_by_stratum']} "
         f"candidate_source_groups={selection_summary['candidate_source_groups']} "
         f"graphs_per_source_group={args.graphs_per_source_group} "
+        f"target_graphs_per_stratum={getattr(args, 'target_graphs_per_stratum', None)} "
         f"source_group_overdraw_factor={args.source_group_overdraw_factor} "
         f"refill_min_graphs_per_source_group={args.refill_min_graphs_per_source_group} "
         f"max_refill_source_groups_per_stratum={args.max_refill_source_groups_per_stratum}"
@@ -5116,6 +5238,12 @@ def build_parser() -> argparse.ArgumentParser:
     export_hetero_light.add_argument("--mc-calib-dir", default=None, help="MC calibration directory")
     export_hetero_light.add_argument("--min-event-date", type=int, default=None, help="YYMMDD形式。この日付より前のeventをDST読み込み時に除外する")
     export_hetero_light.add_argument("--graphs-per-source-group", type=int, default=10, help="選択した独立シャワーごとに書くgraphable event数")
+    export_hetero_light.add_argument(
+        "--target-graphs-per-stratum",
+        type=int,
+        default=None,
+        help="各particle:DAT energy code stratumで書く合計graph数。指定時は全source groupへdeterministicにquotaを割り振る",
+    )
     export_hetero_light.add_argument(
         "--source-group-overdraw-factor",
         type=float,

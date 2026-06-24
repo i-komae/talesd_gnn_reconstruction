@@ -1622,6 +1622,104 @@ class SyntheticHeteroGraphIoTest(unittest.TestCase):
         self.assertEqual(result["strata"][0]["work_items"], 4)
         self.assertTrue(result["strata"][0]["target_met"])
 
+    def test_light_hetero_writer_distributes_explicit_stratum_target_across_all_sources(self) -> None:
+        groups = [
+            LightHeteroSourceGroup(
+                source_group=f"/mc/proton/DAT{i:06d}",
+                dat_tag=f"DAT{i:06d}",
+                energy_bin_code="16",
+                particle="proton",
+                stratum="proton:16",
+                paths=(f"/mc/proton/DAT{i:06d}_gea_trg_000.dst.gz",),
+            )
+            for i in range(8)
+        ]
+        args = SimpleNamespace(
+            workers=4,
+            seed=12345,
+            graphs_per_source_group=999,
+            target_graphs_per_stratum=50,
+            source_group_overdraw_factor=2.0,
+            cleaning="ising",
+            node_policy="all_candidates_with_ising",
+            const_dst=None,
+            mc_calib_dir=None,
+            keep_non_mode0=False,
+            require_reference_core=True,
+            skip_errors=True,
+            skip_missing_mc_calibration=True,
+            min_event_date=None,
+            open_retries=0,
+            open_retry_delay=0.0,
+            shard_size=1000,
+            h5_progress_interval_sec=0.0,
+            source_group_timeout_sec=0.0,
+            refill_min_graphs_per_source_group=1,
+            max_refill_source_groups_per_stratum=0,
+            worker_max_files=0,
+        )
+        seen_targets: dict[str, int] = {}
+
+        def fake_worker(payload: dict[str, object]) -> dict[str, object]:
+            source_targets = {str(key): int(value) for key, value in dict(payload["source_group_target_graphs"]).items()}
+            seen_targets.update(source_targets)
+            rows: list[dict[str, object]] = []
+            written_counts: dict[str, int] = {}
+            graphs_written = 0
+            for item in payload["strata"]:
+                stratum = str(item["stratum"])
+                target_graphs = int(item["target_graphs"])
+                group_count = len(item["groups"])
+                graphs_written += target_graphs
+                written_counts[stratum] = written_counts.get(stratum, 0) + target_graphs
+                rows.append(
+                    {
+                        "stratum": stratum,
+                        "chunk_index": int(item["chunk_index"]),
+                        "chunk_count": int(item["chunk_count"]),
+                        "target_graphs": target_graphs,
+                        "graphs_written": target_graphs,
+                        "candidate_source_groups": group_count,
+                        "attempted_source_groups": group_count,
+                        "complete_source_groups": group_count,
+                        "short_source_groups": 0,
+                        "timeout_source_groups": 0,
+                        "refill_candidate_source_groups": 0,
+                        "refill_attempted_source_groups": 0,
+                        "refill_source_group_limit": 0,
+                        "refill_limit_applied": False,
+                        "refill_min_graphs_per_source_group": 1,
+                        "target_met": True,
+                    }
+                )
+            return {
+                "worker_index": int(payload["worker_index"]),
+                "graphs_written": graphs_written,
+                "output_paths": [],
+                "written_counts_by_stratum": written_counts,
+                "source_groups": [],
+                "strata": rows,
+            }
+
+        def fake_pool(payloads: list[dict[str, object]], fn: object, *_args: object, **_kwargs: object) -> list[dict[str, object]]:
+            return [fake_worker(payload) for payload in payloads]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.object(cli_module, "_iter_process_pool", side_effect=fake_pool):
+                result = _write_light_hetero_graph_h5(
+                    groups,
+                    tmpdir,
+                    args=args,
+                    config={},
+                    target_source_groups_by_stratum={"proton:16": 8},
+                )
+
+        self.assertEqual(result["target_graphs_by_stratum"], {"proton:16": 50})
+        self.assertEqual(result["strata"][0]["target_graphs"], 50)
+        self.assertEqual(sum(seen_targets[group.source_group] for group in groups), 50)
+        self.assertEqual(sorted(set(seen_targets.values())), [6, 7])
+        self.assertEqual(result["target_graphs_per_stratum_requested"], 50)
+
     def test_light_hetero_worker_refills_short_source_groups(self) -> None:
         class FakeHandle:
             def flush(self) -> None:

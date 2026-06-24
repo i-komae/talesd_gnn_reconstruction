@@ -16,7 +16,12 @@ GRAPH_ROOT="${GRAPH_ROOT:-/dicos_ui_home/ikomae/work/gnn/graphs}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 GRAPHS_PER_SOURCE_GROUP="${GRAPHS_PER_SOURCE_GROUP:-10}"
 SOURCE_GROUP_OVERDRAW_FACTOR="${SOURCE_GROUP_OVERDRAW_FACTOR:-10}"
-RUN_NAME="${RUN_NAME:-hetero_source_balanced_${GRAPHS_PER_SOURCE_GROUP}per_source_${RUN_ID}}"
+TARGET_GRAPHS_PER_STRATUM="${TARGET_GRAPHS_PER_STRATUM:-}"
+if [[ -n "${TARGET_GRAPHS_PER_STRATUM}" ]]; then
+  RUN_NAME="${RUN_NAME:-hetero_source_balanced_target${TARGET_GRAPHS_PER_STRATUM}_${RUN_ID}}"
+else
+  RUN_NAME="${RUN_NAME:-hetero_source_balanced_${GRAPHS_PER_SOURCE_GROUP}per_source_${RUN_ID}}"
+fi
 RUN_DIR="${RUN_DIR:-${OUTPUT_ROOT}/runs/${RUN_NAME}}"
 GRAPH_RUN_DIR="${GRAPH_RUN_DIR:-${GRAPH_ROOT}/${RUN_NAME}}"
 GRAPH_OUTPUT="${GRAPH_OUTPUT:-${GRAPH_RUN_DIR}}"
@@ -82,6 +87,10 @@ if [[ -z "${MC_CALIB_DIR}" ]]; then
   echo "MC_CALIB_DIR is required for MC hetero source-balanced export." >&2
   exit 2
 fi
+if [[ -n "${TARGET_GRAPHS_PER_STRATUM}" && ! "${TARGET_GRAPHS_PER_STRATUM}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "TARGET_GRAPHS_PER_STRATUM must be empty or a positive integer: ${TARGET_GRAPHS_PER_STRATUM}" >&2
+  exit 2
+fi
 
 mkdir -p "${RUN_DIR}/slurm" "${RUN_DIR}/summaries" "${GRAPH_RUN_DIR}/summaries"
 SBATCH_FILE="${RUN_DIR}/slurm/${RUN_NAME}.sbatch"
@@ -118,6 +127,10 @@ fi
 max_groups_line=""
 if [[ -n "${MAX_SOURCE_GROUPS_PER_STRATUM}" ]]; then
   printf -v max_groups_line '  --max-source-groups-per-stratum "%s" \\\n' "${MAX_SOURCE_GROUPS_PER_STRATUM}"
+fi
+target_graphs_line=""
+if [[ -n "${TARGET_GRAPHS_PER_STRATUM}" ]]; then
+  printf -v target_graphs_line '  --target-graphs-per-stratum "%s" \\\n' "${TARGET_GRAPHS_PER_STRATUM}"
 fi
 allow_underfull_line=""
 if [[ "${ALLOW_UNDERFULL_STRATA}" == "1" ]]; then
@@ -161,6 +174,7 @@ echo "slurm_log=${SLURM_LOG_DIR}/%x_%j.log"
 echo "run_name=${RUN_NAME}"
 echo "graph_output=${GRAPH_OUTPUT}"
 echo "graphs_per_source_group=${GRAPHS_PER_SOURCE_GROUP}"
+echo "target_graphs_per_stratum=${TARGET_GRAPHS_PER_STRATUM}"
 echo "source_group_overdraw_factor=${SOURCE_GROUP_OVERDRAW_FACTOR}"
 echo "source_group_selection=${SOURCE_GROUP_SELECTION}"
 echo "max_source_groups_per_stratum=${MAX_SOURCE_GROUPS_PER_STRATUM}"
@@ -189,6 +203,7 @@ fi
   --const-dst "${CONST_DST}" \\
   --mc-calib-dir "${MC_CALIB_DIR}" \\
   --graphs-per-source-group "${GRAPHS_PER_SOURCE_GROUP}" \\
+${target_graphs_line}\
   --source-group-overdraw-factor "${SOURCE_GROUP_OVERDRAW_FACTOR}" \\
   --source-group-selection "${SOURCE_GROUP_SELECTION}" \\
   --refill-min-graphs-per-source-group "${REFILL_MIN_GRAPHS_PER_SOURCE_GROUP}" \\
@@ -235,6 +250,7 @@ run_name: ${RUN_NAME}
 graph_output: ${GRAPH_OUTPUT}
 selection_summary: ${SELECTION_SUMMARY}
 graphs_per_source_group: ${GRAPHS_PER_SOURCE_GROUP}
+target_graphs_per_stratum: ${TARGET_GRAPHS_PER_STRATUM}
 source_group_overdraw_factor: ${SOURCE_GROUP_OVERDRAW_FACTOR}
 source_group_selection: ${SOURCE_GROUP_SELECTION}
 max_source_groups_per_stratum: ${MAX_SOURCE_GROUPS_PER_STRATUM}
