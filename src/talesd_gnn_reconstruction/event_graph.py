@@ -33,6 +33,14 @@ from .constants import (
     WAVEFORM_TRACE_BINS,
 )
 from .dst_reader import BankRecord
+from .homogeneous_schema import (
+    LEGACY_FLAT50000_EDGE_FEATURE_COLUMNS,
+    LEGACY_FLAT50000_NODE_FEATURE_COLUMNS,
+    LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS,
+    LEGACY_FLAT50000_TARGET_COLUMNS,
+    LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS,
+    normalize_homogeneous_schema,
+)
 from .layout import DetectorPosition
 from .signal import find_coincident_pulses, sd_signal_search_10a
 
@@ -229,6 +237,36 @@ def _copy_accepted_pulse_mask(
     return out
 
 
+def _pulse_time_origin_bin(accepted_pulses: list[Any]) -> int:
+    return min(min(int(pulse.upper_rise_bin), int(pulse.lower_rise_bin)) for pulse in accepted_pulses)
+
+
+def _copy_accepted_gapped_pulses(
+    values: np.ndarray,
+    accepted_pulses: list[Any],
+    *,
+    channel: str,
+    length: int = WAVEFORM_TRACE_BINS,
+) -> np.ndarray:
+    out = np.zeros(length, dtype=np.float32)
+    if not accepted_pulses:
+        return out
+    origin_bin = _pulse_time_origin_bin(accepted_pulses)
+    for pulse in accepted_pulses:
+        start, end = _pulse_interval(pulse, channel)
+        start = max(start, 0)
+        end = min(end, int(values.shape[0]))
+        if end <= start:
+            continue
+        dst_start = max(start - origin_bin, 0)
+        if dst_start >= length:
+            continue
+        n_copy = min(end - start, int(length) - dst_start)
+        if n_copy > 0:
+            out[dst_start : dst_start + n_copy] = values[start : start + n_copy]
+    return out
+
+
 def _coincident_pulse_rise_anchor_bin(pulse: Any) -> int:
     return min(int(pulse.upper_rise_bin), int(pulse.lower_rise_bin))
 
@@ -268,6 +306,31 @@ def _waveform_features_for_pulse(
     ).astype(np.float32, copy=False)
 
 
+def _legacy_waveform_features_for_pulse(
+    *,
+    upper_wf: np.ndarray,
+    lower_wf: np.ndarray,
+    upper_ped: float,
+    lower_ped: float,
+    upper_mev2cnt: float,
+    lower_mev2cnt: float,
+    pulse: Any,
+    accepted_pulses: list[Any],
+) -> np.ndarray:
+    upper_vem = _calibrated_vem_trace(upper_wf, upper_ped, upper_mev2cnt)
+    lower_vem = _calibrated_vem_trace(lower_wf, lower_ped, lower_mev2cnt)
+    rise_anchor_bin = _coincident_pulse_rise_anchor_bin(pulse)
+    return np.stack(
+        [
+            _copy_rise_aligned_window(upper_vem, rise_anchor_bin),
+            _copy_rise_aligned_window(lower_vem, rise_anchor_bin),
+            _copy_accepted_gapped_pulses(upper_vem, accepted_pulses, channel="upper"),
+            _copy_accepted_gapped_pulses(lower_vem, accepted_pulses, channel="lower"),
+        ],
+        axis=0,
+    ).astype(np.float32, copy=False)
+
+
 def _local_detector_context(positions: np.ndarray, detector_ids: list[int]) -> np.ndarray:
     unique: dict[int, np.ndarray] = {}
     for lid, position in zip(detector_ids, positions):
@@ -299,6 +362,8 @@ def _extract_hit(
     bank: dict[str, Any],
     sub: dict[str, Any],
     detector_positions: dict[int, DetectorPosition] | None,
+    *,
+    legacy_flat50000: bool = False,
 ) -> dict[str, Any] | None:
     if int(sub.get("dontUse", 0)) != 0:
         return None
@@ -341,7 +406,9 @@ def _extract_hit(
                 "upper_fall_bin": int(pulse.upper_fall_bin),
                 "lower_rise_bin": int(pulse.lower_rise_bin),
                 "lower_fall_bin": int(pulse.lower_fall_bin),
-                "waveform_features": _waveform_features_for_pulse(
+                "waveform_features": (
+                    _legacy_waveform_features_for_pulse if legacy_flat50000 else _waveform_features_for_pulse
+                )(
                     upper_wf=upper_wf,
                     lower_wf=lower_wf,
                     upper_ped=upper_ped,
@@ -449,6 +516,47 @@ def _target_from_sim(sim: dict[str, Any] | None) -> np.ndarray | None:
             math.log10(energy),
             core_x_m / 1.0e3,
             core_y_m / 1.0e3,
+            direction[0],
+            direction[1],
+            direction[2],
+        ],
+        dtype=np.float32,
+    )
+    if not np.all(np.isfinite(target)):
+        return None
+    return target
+
+
+def _legacy_target_from_sim(sim: dict[str, Any] | None) -> np.ndarray | None:
+    if not sim:
+        return None
+    energy = _finite_float(sim.get("primaryEnergy"))
+    cos_zenith = _finite_float(sim.get("primaryCosZenith"))
+    azimuth_deg = _finite_float(sim.get("primaryAzimuth"))
+    core_x_m = _finite_float(sim.get("primaryCorePosX"))
+    core_y_m = _finite_float(sim.get("primaryCorePosY"))
+    core_z_m = _finite_float(sim.get("primaryCorePosZ"), 0.0)
+    values = [energy, cos_zenith, azimuth_deg, core_x_m, core_y_m, core_z_m]
+    if not all(math.isfinite(v) for v in values) or energy <= 0.0:
+        return None
+
+    cos_zenith = min(max(cos_zenith, -1.0), 1.0)
+    zenith = math.acos(cos_zenith)
+    azimuth = math.radians(azimuth_deg)
+    direction = np.array(
+        [
+            math.sin(zenith) * math.cos(azimuth),
+            math.sin(zenith) * math.sin(azimuth),
+            math.cos(zenith),
+        ],
+        dtype=np.float32,
+    )
+    target = np.array(
+        [
+            math.log10(energy),
+            core_x_m / 1.0e3,
+            core_y_m / 1.0e3,
+            core_z_m / 1.0e3,
             direction[0],
             direction[1],
             direction[2],
@@ -616,6 +724,148 @@ def _build_node_features(
     )
 
 
+def _build_legacy_node_features(
+    hits: list[dict[str, Any]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[int], list[int]]:
+    pulse_nodes: list[dict[str, Any]] = []
+    for hit in hits:
+        pulses = sorted(hit["pulses"], key=lambda pulse: float(pulse["arrival_usec"]))
+        if not pulses:
+            continue
+        first_arrival = float(pulses[0]["arrival_usec"])
+        max_rho = float(max(float(pulse["rho"]) for pulse in pulses))
+        time_span = float(float(pulses[-1]["arrival_usec"]) - first_arrival)
+        fadc_peak = float(hit["fadc_peak"])
+        for order, pulse in enumerate(pulses):
+            rho = float(pulse["rho"])
+            if rho < MIN_VALID_MIP or fadc_peak >= MAX_FADC_COUNT:
+                continue
+            pulse_nodes.append(
+                {
+                    "lid": int(hit["lid"]),
+                    "position": hit["position"],
+                    "arrival_usec": float(pulse["arrival_usec"]),
+                    "trig_usec_rel": float(hit["trig_usec_rel"]),
+                    "rho": rho,
+                    "detector_max_rho": max_rho,
+                    "detector_num_pulses": len(pulses),
+                    "detector_pulse_time_span_usec": time_span,
+                    "detector_pulse_order": order,
+                    "is_first_detector_pulse": 1.0 if order == 0 else 0.0,
+                    "fadc_peak": fadc_peak,
+                    "upper_ped": float(hit["upper_ped"]),
+                    "lower_ped": float(hit["lower_ped"]),
+                    "upper_sigma": float(hit["upper_sigma"]),
+                    "lower_sigma": float(hit["lower_sigma"]),
+                    "num_segments": int(hit["detector_wf_segments"]),
+                    "wf_length_usec": float(hit["detector_wf_length_usec"]),
+                    "waveform_features": np.asarray(
+                        pulse.get(
+                            "waveform_features",
+                            np.zeros(
+                                (len(LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS), WAVEFORM_TRACE_BINS),
+                                dtype=np.float32,
+                            ),
+                        ),
+                        dtype=np.float32,
+                    ),
+                }
+            )
+
+    if not pulse_nodes:
+        return (
+            np.zeros((0, len(LEGACY_FLAT50000_NODE_FEATURE_COLUMNS)), dtype=np.float32),
+            np.zeros((0, 3), dtype=np.float32),
+            np.zeros((0, len(LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS)), dtype=np.float32),
+            np.zeros((0, len(LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS), WAVEFORM_TRACE_BINS), dtype=np.float32),
+            [],
+            [],
+        )
+
+    positions = np.asarray([node["position"] for node in pulse_nodes], dtype=np.float32)
+    detector_ids = [int(node["lid"]) for node in pulse_nodes]
+    local_context = _local_detector_context(positions, detector_ids)
+    rho = np.asarray([node["rho"] for node in pulse_nodes], dtype=np.float32)
+    weights = np.maximum(rho, 0.0) + 1.0e-6
+    bary = np.sum(positions * weights[:, None], axis=0) / np.sum(weights)
+    delta = positions - bary[None, :]
+    radius = np.linalg.norm(delta, axis=1)
+    arrival = np.asarray([node["arrival_usec"] for node in pulse_nodes], dtype=np.float32)
+    arrival_min = float(np.min(arrival))
+    arrival_rel = arrival - arrival_min
+
+    features = []
+    pulse_features = []
+    waveform_features = []
+    lids = []
+    for i, node in enumerate(pulse_nodes):
+        rho_i = max(float(node["rho"]), 1.0e-6)
+        max_rho_i = max(float(node["detector_max_rho"]), 1.0e-6)
+        fadc_peak = max(float(node["fadc_peak"]), 1.0)
+        lid = int(node["lid"])
+        lids.append(lid)
+        features.append(
+            [
+                positions[i, 0],
+                positions[i, 1],
+                positions[i, 2],
+                local_context[i, 0],
+                local_context[i, 1],
+                local_context[i, 2],
+                local_context[i, 3],
+                delta[i, 0],
+                delta[i, 1],
+                delta[i, 2],
+                radius[i],
+                arrival_rel[i],
+                float(node["trig_usec_rel"]),
+                math.log10(rho_i),
+                math.sqrt(rho_i),
+                math.log10(max_rho_i),
+                float(node["detector_num_pulses"]),
+                float(node["detector_pulse_time_span_usec"]),
+                float(node["num_segments"]),
+                float(node["wf_length_usec"]),
+                math.log10(fadc_peak),
+                float(node["upper_ped"]),
+                float(node["lower_ped"]),
+                float(node["upper_sigma"]),
+                float(node["lower_sigma"]),
+                float(node["detector_pulse_order"]),
+                float(node["is_first_detector_pulse"]),
+            ]
+        )
+        pulse_features.append(
+            [
+                float(i),
+                float(arrival_rel[i]),
+                float(arrival_rel[i]),
+                math.log10(rho_i),
+                math.sqrt(rho_i),
+                float(node["detector_pulse_order"]),
+                float(node["is_first_detector_pulse"]),
+            ]
+        )
+        waveform = np.asarray(node["waveform_features"], dtype=np.float32)
+        expected_shape = (len(LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS), WAVEFORM_TRACE_BINS)
+        if waveform.shape != expected_shape:
+            fixed = np.zeros(expected_shape, dtype=np.float32)
+            channels = min(fixed.shape[0], waveform.shape[0] if waveform.ndim >= 1 else 0)
+            bins = min(fixed.shape[1], waveform.shape[1] if waveform.ndim >= 2 else 0)
+            if channels > 0 and bins > 0:
+                fixed[:channels, :bins] = waveform[:channels, :bins]
+            waveform = fixed
+        waveform_features.append(waveform)
+    return (
+        np.asarray(features, dtype=np.float32),
+        positions,
+        np.asarray(pulse_features, dtype=np.float32),
+        np.asarray(waveform_features, dtype=np.float32),
+        lids,
+        detector_ids,
+    )
+
+
 def _build_edges(
     positions: np.ndarray,
     arrivals_usec: np.ndarray,
@@ -697,26 +947,35 @@ def _build_edges(
 def build_graph_event(
     record: BankRecord,
     detector_positions: dict[int, DetectorPosition] | None = None,
+    homogeneous_schema: str | None = None,
 ) -> GraphEvent | None:
+    schema = normalize_homogeneous_schema(homogeneous_schema)
     bank = record.bank
     combined_subs = _combine_sub_waveforms([sub for sub in bank.get("sub", []) if isinstance(sub, dict)])
     hits = [
         hit
         for sub in combined_subs
-        for hit in [_extract_hit(bank, sub, detector_positions)]
+        for hit in [_extract_hit(bank, sub, detector_positions, legacy_flat50000=schema == "legacy_flat50000")]
         if hit is not None
     ]
     hits = _merge_hits_by_lid(hits)
 
-    node_features, positions, pulse_features, waveform_features, node_lids, detector_ids = _build_node_features(hits)
+    if schema == "legacy_flat50000":
+        node_features, positions, pulse_features, waveform_features, node_lids, detector_ids = _build_legacy_node_features(hits)
+    else:
+        node_features, positions, pulse_features, waveform_features, node_lids, detector_ids = _build_node_features(hits)
     if node_features.shape[0] < GEOM_MIN_POINTS or len(set(detector_ids)) < GEOM_MIN_POINTS:
         return None
 
-    arrival_rel = node_features[:, NODE_FEATURE_COLUMNS.index("pulse_arrival_usec_rel")]
-    log_rho = node_features[:, NODE_FEATURE_COLUMNS.index("log10_pulse_rho")]
+    if schema == "legacy_flat50000":
+        arrival_rel = node_features[:, LEGACY_FLAT50000_NODE_FEATURE_COLUMNS.index("first_arrival_usec_rel")]
+        log_rho = node_features[:, LEGACY_FLAT50000_NODE_FEATURE_COLUMNS.index("log10_first_rho")]
+    else:
+        arrival_rel = node_features[:, NODE_FEATURE_COLUMNS.index("pulse_arrival_usec_rel")]
+        log_rho = node_features[:, NODE_FEATURE_COLUMNS.index("log10_pulse_rho")]
     rho = np.power(10.0, log_rho)
     edge_index, edge_features = _build_edges(positions, arrival_rel, log_rho, rho, detector_ids)
-    target = _target_from_sim(bank.get("sim"))
+    target = _legacy_target_from_sim(bank.get("sim")) if schema == "legacy_flat50000" else _target_from_sim(bank.get("sim"))
     parttype, particle_label = _particle_label_from_sim(bank.get("sim"))
 
     date = int(bank.get("date", 0))
@@ -741,6 +1000,7 @@ def build_graph_event(
         "lids": ",".join(str(lid) for lid in node_lids),
         "unique_lids": ",".join(str(lid) for lid in sorted(set(detector_ids))),
         "graph_definition": "coincidence_analysis_ising_pulse_graph",
+        "homogeneous_schema": schema,
         "has_target": target is not None,
         "parttype": int(parttype) if parttype is not None else -1,
         "particle_label": float(particle_label) if particle_label is not None else math.nan,
@@ -761,7 +1021,16 @@ def build_graph_event(
     )
 
 
-def graph_columns() -> dict[str, list[str]]:
+def graph_columns(homogeneous_schema: str | None = None) -> dict[str, list[str]]:
+    schema = normalize_homogeneous_schema(homogeneous_schema)
+    if schema == "legacy_flat50000":
+        return {
+            "node_features": list(LEGACY_FLAT50000_NODE_FEATURE_COLUMNS),
+            "edge_features": list(LEGACY_FLAT50000_EDGE_FEATURE_COLUMNS),
+            "pulse_features": list(LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS),
+            "waveform_features": list(LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS),
+            "target": list(LEGACY_FLAT50000_TARGET_COLUMNS),
+        }
     return {
         "node_features": list(NODE_FEATURE_COLUMNS),
         "edge_features": list(EDGE_FEATURE_COLUMNS),

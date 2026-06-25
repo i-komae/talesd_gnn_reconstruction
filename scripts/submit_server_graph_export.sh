@@ -77,6 +77,7 @@ CHUNK_SIZE="${CHUNK_SIZE:-128}"
 ENERGY_SAMPLE_STRATIFY_PARTICLE="${ENERGY_SAMPLE_STRATIFY_PARTICLE:-1}"
 ENERGY_BIN_WIDTH="${ENERGY_BIN_WIDTH:-0.1}"
 ENERGY_OVERSAMPLE_FACTOR="${ENERGY_OVERSAMPLE_FACTOR:-1.0}"
+HOMOGENEOUS_SCHEMA="${HOMOGENEOUS_SCHEMA:-current}"
 SEED="${SEED:-12345}"
 KEEP_NON_MODE0="${KEEP_NON_MODE0:-0}"
 SKIP_ERRORS="${SKIP_ERRORS:-1}"
@@ -516,6 +517,7 @@ ENERGY_SAMPLE_PER_BIN=${ENERGY_SAMPLE_PER_BIN}
 ENERGY_SAMPLE_STRATIFY_PARTICLE=${ENERGY_SAMPLE_STRATIFY_PARTICLE}
 ENERGY_BIN_WIDTH=${ENERGY_BIN_WIDTH}
 ENERGY_OVERSAMPLE_FACTOR=${ENERGY_OVERSAMPLE_FACTOR}
+HOMOGENEOUS_SCHEMA=${HOMOGENEOUS_SCHEMA}
 SEED=${SEED}
 KEEP_NON_MODE0=${KEEP_NON_MODE0}
 SKIP_ERRORS=${SKIP_ERRORS}
@@ -602,6 +604,7 @@ echo "energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}"
 echo "energy_sample_stratify_particle=${ENERGY_SAMPLE_STRATIFY_PARTICLE}"
 echo "energy_bin_width=${ENERGY_BIN_WIDTH}"
 echo "energy_oversample_factor=${ENERGY_OVERSAMPLE_FACTOR}"
+echo "homogeneous_schema=${HOMOGENEOUS_SCHEMA}"
 echo "shard_size=${SHARD_SIZE}"
 echo "output_order=${OUTPUT_ORDER}"
 echo "output_locality_run_size=${OUTPUT_LOCALITY_RUN_SIZE}"
@@ -686,6 +689,7 @@ export_cmd+=(
   --open-retries "${OPEN_RETRIES}"
   --open-retry-delay "${OPEN_RETRY_DELAY}"
   --seed "${SEED}"
+  --homogeneous-schema "${HOMOGENEOUS_SCHEMA}"
 )
 if [[ -n "${MIN_EVENT_DATE}" && "${MIN_EVENT_DATE}" != "0" ]]; then
   export_cmd+=(--min-event-date "${MIN_EVENT_DATE}")
@@ -836,6 +840,7 @@ export_workers=${EXPORT_WORKERS}
 summary_workers=${SUMMARY_WORKERS}
 energy_sample_per_bin=${ENERGY_SAMPLE_PER_BIN}
 energy_sample_stratify_particle=${ENERGY_SAMPLE_STRATIFY_PARTICLE}
+homogeneous_schema=${HOMOGENEOUS_SCHEMA}
 min_event_date=${MIN_EVENT_DATE}
 output_order=${OUTPUT_ORDER}
 output_locality_run_size=${OUTPUT_LOCALITY_RUN_SIZE}

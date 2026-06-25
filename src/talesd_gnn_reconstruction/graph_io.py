@@ -9,6 +9,7 @@ import numpy as np
 
 from .constants import WAVEFORM_SCHEMA
 from .event_graph import GraphEvent, graph_columns
+from .homogeneous_schema import LEGACY_FLAT50000_WAVEFORM_SCHEMA, normalize_homogeneous_schema
 
 
 def _metadata_json_default(value: Any) -> Any:
@@ -42,15 +43,25 @@ def _hdf5_attr_value(value: Any) -> Any:
     return json.dumps(value, default=_metadata_json_default, sort_keys=True)
 
 
+def _schema_from_config(config: dict[str, Any] | None) -> str:
+    if not config:
+        return "current"
+    return normalize_homogeneous_schema(config.get("homogeneous_schema"))
+
+
 def create_graph_file(path: str | Path, config: dict[str, Any] | None = None) -> h5py.File:
     output = Path(path).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
+    homogeneous_schema = _schema_from_config(config)
     handle = h5py.File(output, "w")
     handle.attrs["format"] = "talesd_gnn_graphs"
     handle.attrs["format_version"] = "0.4"
     handle.attrs["charge_definition"] = "coincidence_onset_integral"
-    handle.attrs["waveform_schema"] = WAVEFORM_SCHEMA
-    handle.attrs["columns_json"] = json.dumps(graph_columns())
+    handle.attrs["homogeneous_schema"] = homogeneous_schema
+    handle.attrs["waveform_schema"] = (
+        LEGACY_FLAT50000_WAVEFORM_SCHEMA if homogeneous_schema == "legacy_flat50000" else WAVEFORM_SCHEMA
+    )
+    handle.attrs["columns_json"] = json.dumps(graph_columns(homogeneous_schema))
     if config:
         handle.attrs["config_json"] = json.dumps(config, sort_keys=True)
     handle.create_group("events")

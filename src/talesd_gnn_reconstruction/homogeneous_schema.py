@@ -45,6 +45,30 @@ LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS = [
     "pulse_order",
     "is_first_pulse",
 ]
+LEGACY_FLAT50000_EDGE_FEATURE_COLUMNS = [
+    "dx_km",
+    "dy_km",
+    "dz_km",
+    "distance_km",
+    "dt_usec",
+    "abs_dt_usec",
+    "dt_per_km",
+    "log10_rho_ratio",
+    "ising_weight",
+    "ising_weight_raw",
+    "ising_causal_excess_usec",
+    "ising_spatial",
+    "ising_causal",
+]
+LEGACY_FLAT50000_TARGET_COLUMNS = [
+    "log10_energy_eV",
+    "core_x_km",
+    "core_y_km",
+    "core_z_km",
+    "dir_x",
+    "dir_y",
+    "dir_z",
+]
 LEGACY_FLAT50000_WAVEFORM_SCHEMA = "rise_aligned_raw_plus_accepted_gapped_v1"
 LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS = [
     "upper_raw_window_vem",

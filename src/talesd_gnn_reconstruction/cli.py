@@ -201,14 +201,15 @@ def _chunked(iterable: Iterable[Any], chunk_size: int) -> Iterator[list[Any]]:
         yield chunk
 
 
-def _build_graph_chunk(payload: tuple[list[Any], dict[int, Any] | None]) -> list[Any]:
+def _build_graph_chunk(payload: tuple[list[Any], dict[int, Any] | None, str]) -> list[Any]:
     from .event_graph import build_graph_event
 
-    records, detector_positions = payload
+    records, detector_positions, homogeneous_schema = payload
     return [
         build_graph_event(
             record,
             detector_positions=detector_positions,
+            homogeneous_schema=homogeneous_schema,
         )
         for record in records
     ]
@@ -1161,6 +1162,7 @@ def _build_graphs_for_file(
         str | None,
         int | None,
         bool,
+        str,
     ]
 ) -> dict[str, Any]:
     from .dst_reader import iter_dst_banks
@@ -1179,6 +1181,7 @@ def _build_graphs_for_file(
         mc_calib_dir,
         min_event_date,
         skip_missing_mc_calibration,
+        homogeneous_schema,
     ) = payload
     graphs = []
     skipped = 0
@@ -1197,7 +1200,11 @@ def _build_graphs_for_file(
         skip_missing_mc_calibration=skip_missing_mc_calibration,
     ):
         records += 1
-        graph = build_graph_event(record, detector_positions=detector_positions)
+        graph = build_graph_event(
+            record,
+            detector_positions=detector_positions,
+            homogeneous_schema=homogeneous_schema,
+        )
         if graph is None:
             skipped += 1
             if max_events_per_file is not None and records >= max_events_per_file:
@@ -1324,6 +1331,7 @@ def _write_selected_graph_shard(
         dict[str, Any],
         float,
         bool,
+        str,
     ]
 ) -> dict[str, Any]:
     from .dst_reader import iter_dst_banks
@@ -1348,6 +1356,7 @@ def _write_selected_graph_shard(
         config,
         energy_bin_width,
         stratify_particle,
+        homogeneous_schema,
     ) = payload
 
     output_path = _shard_path(output, shard_index)
@@ -1390,7 +1399,11 @@ def _write_selected_graph_shard(
             ):
                 records += 1
                 file_records += 1
-                graph = build_graph_event(record, detector_positions=detector_positions)
+                graph = build_graph_event(
+                    record,
+                    detector_positions=detector_positions,
+                    homogeneous_schema=homogeneous_schema,
+                )
                 if graph is None:
                     skipped += 1
                     if max_events_per_file is not None and file_records >= max_events_per_file:
@@ -1462,6 +1475,7 @@ def _write_ordered_selected_graph_shard(
         float,
         bool,
         int,
+        str,
     ]
 ) -> dict[str, Any]:
     from .dst_reader import iter_dst_banks
@@ -1486,6 +1500,7 @@ def _write_ordered_selected_graph_shard(
         energy_bin_width,
         stratify_particle,
         write_block_size,
+        homogeneous_schema,
     ) = payload
 
     output_path = _shard_path(output, shard_index)
@@ -1529,7 +1544,11 @@ def _write_ordered_selected_graph_shard(
                 ):
                     records += 1
                     file_records += 1
-                    graph = build_graph_event(record, detector_positions=detector_positions)
+                    graph = build_graph_event(
+                        record,
+                        detector_positions=detector_positions,
+                        homogeneous_schema=homogeneous_schema,
+                    )
                     if graph is not None:
                         graph_by_key[(path, int(record.source_index))] = graph
                     if max_events_per_file is not None and file_records >= max_events_per_file:
@@ -1752,6 +1771,7 @@ def _iter_selected_shard_write_results(
             config,
             float(args.energy_bin_width),
             bool(args.energy_sample_stratify_particle),
+            str(args.homogeneous_schema),
         )
         for shard_index, paths in enumerate(chunks)
     ]
@@ -1853,6 +1873,7 @@ def _iter_ordered_selected_shard_write_results(
             float(args.energy_bin_width),
             bool(args.energy_sample_stratify_particle),
             int(args.write_block_size),
+            str(args.homogeneous_schema),
         )
         for shard_index, entries in enumerate(chunks)
     ]
@@ -1883,6 +1904,7 @@ def _iter_graphs(
             yield build_graph_event(
                 record,
                 detector_positions=detector_positions,
+                homogeneous_schema=str(args.homogeneous_schema),
             )
         return
 
@@ -1896,7 +1918,7 @@ def _iter_graphs(
                 pending.append(
                     pool.submit(
                         _build_graph_chunk,
-                        (chunk, detector_positions),
+                        (chunk, detector_positions, str(args.homogeneous_schema)),
                     )
                 )
                 while len(pending) >= max_pending:
@@ -1911,6 +1933,7 @@ def _iter_graphs(
             yield build_graph_event(
                 record,
                 detector_positions=detector_positions,
+                homogeneous_schema=str(args.homogeneous_schema),
             )
 
 
@@ -1934,6 +1957,7 @@ def _iter_file_results(
             str(Path(args.mc_calib_dir).expanduser()) if args.mc_calib_dir else None,
             None if args.min_event_date is None or int(args.min_event_date) <= 0 else int(args.min_event_date),
             bool(args.skip_errors and args.kind == "mc"),
+            str(args.homogeneous_schema),
         )
         for path in inputs
         if selected_indices_by_path is None or path in selected_indices_by_path
@@ -4047,6 +4071,7 @@ def _cmd_export(args: argparse.Namespace) -> None:
         "max_events": args.max_events,
         "max_events_per_file": args.max_events_per_file,
         "graph_definition": "coincidence_analysis_ising_pulse_graph",
+        "homogeneous_schema": str(args.homogeneous_schema),
         "energy_sample_per_bin": args.energy_sample_per_bin,
         "energy_sample_stratify_particle": bool(args.energy_sample_stratify_particle),
         "energy_bin_width": args.energy_bin_width,
@@ -5137,6 +5162,12 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--energy-sample-stratify-particle", action="store_true", help="energy-flat samplingをproton/iron別のlog10(E/eV) binで行う")
     export.add_argument("--energy-bin-width", type=float, default=0.1, help="energy-flat samplingのlog10(E/eV) bin幅")
     export.add_argument("--energy-oversample-factor", type=float, default=2.0, help="先行metadata scanで各energy binからgraph化対象として余分に残す倍率")
+    export.add_argument(
+        "--homogeneous-schema",
+        choices=["current", "legacy_flat50000"],
+        default="current",
+        help="homogeneous HDF5 schema。legacy_flat50000 は旧 best flat50000 再現用の旧 node/pulse/target/waveform 定義でDSTから直接exportする",
+    )
     export.add_argument("--seed", type=int, default=12345, help="energy-flat samplingの乱数seed")
     export.add_argument("--workers", type=int, default=1, help="DST読み込みとグラフ構築に使うファイル単位worker数。--max-events指定時だけイベントchunk単位")
     export.add_argument("--worker-max-files", type=int, default=DEFAULT_WORKER_MAX_FILES, help="ファイル単位workerをNファイル処理ごとに再起動する。0なら無効")
