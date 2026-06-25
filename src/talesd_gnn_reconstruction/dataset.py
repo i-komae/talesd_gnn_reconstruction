@@ -139,15 +139,20 @@ def _columns_from_handle(handle: h5py.File) -> dict[str, list[str]]:
     return columns
 
 
-def _node_feature_selection_from_columns(columns: dict[str, list[str]]) -> tuple[np.ndarray | None, list[str]]:
+def _node_feature_selection_from_columns(
+    columns: dict[str, list[str]],
+    *,
+    expected_columns: Sequence[str] | None = None,
+    dropped_columns: Sequence[str] | None = None,
+) -> tuple[np.ndarray | None, list[str]]:
     stored = list(columns.get("node_features") or [])
     if not stored:
         return None, []
 
-    dropped = set(DROPPED_NODE_FEATURE_COLUMNS)
+    dropped = set(DROPPED_NODE_FEATURE_COLUMNS if dropped_columns is None else dropped_columns)
     kept_indices = [index for index, name in enumerate(stored) if name not in dropped]
     effective = [stored[index] for index in kept_indices]
-    expected = list(NODE_FEATURE_COLUMNS)
+    expected = list(NODE_FEATURE_COLUMNS if expected_columns is None else expected_columns)
     if effective != expected:
         raise ValueError(
             "stored node feature columns are incompatible with this code after dropping disabled columns: "
@@ -159,15 +164,20 @@ def _node_feature_selection_from_columns(columns: dict[str, list[str]]) -> tuple
     return np.asarray(kept_indices, dtype=np.int64), effective
 
 
-def _pulse_feature_selection_from_columns(columns: dict[str, list[str]]) -> tuple[np.ndarray | None, list[str]]:
+def _pulse_feature_selection_from_columns(
+    columns: dict[str, list[str]],
+    *,
+    expected_columns: Sequence[str] | None = None,
+    dropped_columns: Sequence[str] | None = None,
+) -> tuple[np.ndarray | None, list[str]]:
     stored = list(columns.get("pulse_features") or [])
     if not stored:
         return None, []
 
-    dropped = set(DROPPED_PULSE_FEATURE_COLUMNS)
+    dropped = set(DROPPED_PULSE_FEATURE_COLUMNS if dropped_columns is None else dropped_columns)
     kept_indices = [index for index, name in enumerate(stored) if name not in dropped]
     effective = [stored[index] for index in kept_indices]
-    expected = list(PULSE_FEATURE_COLUMNS)
+    expected = list(PULSE_FEATURE_COLUMNS if expected_columns is None else expected_columns)
     if effective != expected:
         raise ValueError(
             "stored pulse feature columns are incompatible with this code after dropping disabled columns: "
@@ -179,11 +189,18 @@ def _pulse_feature_selection_from_columns(columns: dict[str, list[str]]) -> tupl
     return np.asarray(kept_indices, dtype=np.int64), effective
 
 
-def _validate_waveform_schema(path: Path, handle: h5py.File) -> None:
+def _validate_waveform_schema(
+    path: Path,
+    handle: h5py.File,
+    *,
+    allowed_schemas: Sequence[str] | None = None,
+    expected_feature_channels: Sequence[str] | None = None,
+) -> None:
     stored_schema = _text_attr(handle.attrs.get("waveform_schema"), "")
-    if stored_schema and stored_schema != WAVEFORM_SCHEMA:
+    schemas = set([WAVEFORM_SCHEMA] if allowed_schemas is None else allowed_schemas)
+    if stored_schema and stored_schema not in schemas:
         raise ValueError(
-            f"{path} uses waveform_schema={stored_schema!r}, but this code expects {WAVEFORM_SCHEMA!r}. "
+            f"{path} uses waveform_schema={stored_schema!r}, but this code expects one of {sorted(schemas)!r}. "
             "Re-export the graph HDF5 files from DST before training with this waveform definition."
         )
 
@@ -191,10 +208,11 @@ def _validate_waveform_schema(path: Path, handle: h5py.File) -> None:
     waveform_columns = columns.get("waveform_features")
     if waveform_columns is None:
         return
-    if list(waveform_columns) != list(WAVEFORM_FEATURE_CHANNELS):
+    expected = list(WAVEFORM_FEATURE_CHANNELS if expected_feature_channels is None else expected_feature_channels)
+    if list(waveform_columns) != expected:
         raise ValueError(
             f"{path} stores waveform_features={list(waveform_columns)!r}, "
-            f"but this code expects {list(WAVEFORM_FEATURE_CHANNELS)!r}. "
+            f"but this code expects {expected!r}. "
             "Re-export the graph HDF5 files from DST; old compact or accepted-gapped waveforms cannot be "
             "interpreted as raw waveform plus accepted-pulse mask channels."
         )
@@ -215,6 +233,12 @@ class H5GraphDataset:
         particle_filter: str = "all",
         show_progress: bool = False,
         max_open_files: int | None = None,
+        expected_node_feature_columns: Sequence[str] | None = None,
+        dropped_node_feature_columns: Sequence[str] | None = None,
+        expected_pulse_feature_columns: Sequence[str] | None = None,
+        dropped_pulse_feature_columns: Sequence[str] | None = None,
+        allowed_waveform_schemas: Sequence[str] | None = None,
+        expected_waveform_feature_channels: Sequence[str] | None = None,
     ):
         self.paths = _as_paths(path)
         self.require_target = require_target
@@ -243,6 +267,22 @@ class H5GraphDataset:
         self.node_feature_columns: list[str] = []
         self.pulse_feature_columns: list[str] = []
         self.columns_json = "{}"
+        self.expected_node_feature_columns = (
+            None if expected_node_feature_columns is None else list(expected_node_feature_columns)
+        )
+        self.dropped_node_feature_columns = (
+            None if dropped_node_feature_columns is None else list(dropped_node_feature_columns)
+        )
+        self.expected_pulse_feature_columns = (
+            None if expected_pulse_feature_columns is None else list(expected_pulse_feature_columns)
+        )
+        self.dropped_pulse_feature_columns = (
+            None if dropped_pulse_feature_columns is None else list(dropped_pulse_feature_columns)
+        )
+        self.allowed_waveform_schemas = None if allowed_waveform_schemas is None else list(allowed_waveform_schemas)
+        self.expected_waveform_feature_channels = (
+            None if expected_waveform_feature_channels is None else list(expected_waveform_feature_channels)
+        )
 
         remaining = self.max_graphs
         progress = _progress_bar("initialize graph shards", len(self.paths), enabled=show_progress)
@@ -252,8 +292,16 @@ class H5GraphDataset:
                     break
                 with h5py.File(graph_path, "r") as handle:
                     columns = _columns_from_handle(handle)
-                    node_feature_indices, effective_node_columns = _node_feature_selection_from_columns(columns)
-                    pulse_feature_indices, effective_pulse_columns = _pulse_feature_selection_from_columns(columns)
+                    node_feature_indices, effective_node_columns = _node_feature_selection_from_columns(
+                        columns,
+                        expected_columns=self.expected_node_feature_columns,
+                        dropped_columns=self.dropped_node_feature_columns,
+                    )
+                    pulse_feature_indices, effective_pulse_columns = _pulse_feature_selection_from_columns(
+                        columns,
+                        expected_columns=self.expected_pulse_feature_columns,
+                        dropped_columns=self.dropped_pulse_feature_columns,
+                    )
                     if path_index == 0:
                         effective_columns = dict(columns)
                         if effective_node_columns:
@@ -279,7 +327,12 @@ class H5GraphDataset:
                         )
                     self._node_feature_indices.append(node_feature_indices)
                     self._pulse_feature_indices.append(pulse_feature_indices)
-                    _validate_waveform_schema(graph_path, handle)
+                    _validate_waveform_schema(
+                        graph_path,
+                        handle,
+                        allowed_schemas=self.allowed_waveform_schemas,
+                        expected_feature_channels=self.expected_waveform_feature_channels,
+                    )
                     events = handle["events"]
                     key_list_all = sorted(events.keys())
                     n_events = len(key_list_all)
