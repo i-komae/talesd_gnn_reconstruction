@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_right
+from collections import OrderedDict
 import json
 import os
 import time
 from pathlib import Path
 from typing import Any
 
+import h5py
 import numpy as np
 
 from talesd_gnn_reconstruction.cli import _expand_h5_graph_paths
@@ -25,10 +28,85 @@ from talesd_gnn_reconstruction.train import (
     _predict_numpy,
     _resolve_collate_backend,
     resolve_device,
+    source_group_key,
 )
 
 
 _HETERO_ARCHITECTURES = {"minimal_hetero", "hetero_attention"}
+
+
+class _SourcePathLookup:
+    def __init__(self, paths: list[Path], *, max_open_files: int = 4):
+        self.paths = list(paths)
+        self.max_open_files = max(int(max_open_files), 0)
+        self._cumulative_lengths: list[int] = []
+        self._source_path_arrays: list[np.ndarray | None] = []
+        self._key_lists: list[list[str] | None] = []
+        self._handles: OrderedDict[int, h5py.File] = OrderedDict()
+        total = 0
+        for path in self.paths:
+            with h5py.File(path, "r") as handle:
+                events = handle["events"]
+                key_list_all = sorted(events.keys())
+                n_events = len(key_list_all)
+                dense_numeric_keys = n_events > 0 and all(
+                    key == f"{index:08d}" for index, key in enumerate(key_list_all)
+                )
+                key_list = None if dense_numeric_keys else key_list_all
+                metadata = handle.get("metadata")
+                source_paths = None
+                if metadata is not None and "source_path" in metadata and len(metadata["source_path"]) >= n_events:
+                    source_paths = np.asarray(metadata["source_path"][:n_events])
+                self._source_path_arrays.append(source_paths)
+                self._key_lists.append(key_list)
+                total += n_events
+                self._cumulative_lengths.append(total)
+
+    def close(self) -> None:
+        for handle in self._handles.values():
+            handle.close()
+        self._handles.clear()
+
+    def _handle(self, path_index: int) -> h5py.File:
+        if path_index in self._handles:
+            handle = self._handles.pop(path_index)
+            self._handles[path_index] = handle
+            return handle
+        handle = h5py.File(self.paths[path_index], "r")
+        self._handles[path_index] = handle
+        if self.max_open_files > 0:
+            while len(self._handles) > self.max_open_files:
+                _old_path_index, old_handle = self._handles.popitem(last=False)
+                old_handle.close()
+        return handle
+
+    def _locate(self, index: int) -> tuple[int, int, str]:
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+        path_index = bisect_right(self._cumulative_lengths, index)
+        previous = self._cumulative_lengths[path_index - 1] if path_index > 0 else 0
+        local_index = index - previous
+        key_list = self._key_lists[path_index]
+        key = f"{local_index:08d}" if key_list is None else key_list[local_index]
+        return path_index, local_index, key
+
+    def __len__(self) -> int:
+        return self._cumulative_lengths[-1] if self._cumulative_lengths else 0
+
+    def source_path(self, index: int) -> str:
+        path_index, local_index, key = self._locate(index)
+        source_paths = self._source_path_arrays[path_index]
+        if source_paths is not None:
+            value = source_paths[local_index]
+            if isinstance(value, bytes):
+                return value.decode("utf-8")
+            return str(value)
+        value = self._handle(path_index)["events"][key].attrs.get("source_path", "")
+        if isinstance(value, bytes):
+            return value.decode("utf-8")
+        return str(value)
 
 
 def _auto_workers(n_graphs: int, requested: int) -> int:
@@ -60,9 +138,211 @@ def _default_prediction_cache_path(output_path: Path) -> Path:
     return output_path.with_suffix(output_path.suffix + ".diagnostics") / "prediction_cache.npz"
 
 
+def _default_diagnostics_dir(output_path: Path) -> Path:
+    return output_path.with_suffix(output_path.suffix + ".diagnostics")
+
+
 def _checkpoint_training_task(ckpt: dict[str, Any]) -> str:
     task = str(dict(ckpt.get("runtime", {})).get("training_task", "reconstruction")).lower()
     return task if task in {"reconstruction", "mass"} else "reconstruction"
+
+
+def _index_list(values: Any, *, name: str) -> list[int]:
+    if values is None:
+        raise ValueError(f"checkpoint has no {name}")
+    return [int(value) for value in np.asarray(values).reshape(-1)]
+
+
+def _source_key_for_index(dataset: Any, index: int, *, mode: str) -> str:
+    source_path = dataset.source_path(index)
+    if not source_path:
+        return f"unknown:{index}"
+    if mode == "raw":
+        return str(source_path)
+    if mode == "dat":
+        return source_group_key(str(source_path))
+    raise ValueError("source group mode must be 'dat' or 'raw'")
+
+
+def _source_keys_for_indices(
+    dataset: Any,
+    indices: list[int],
+    *,
+    mode: str,
+    label: str,
+    progress_interval_sec: float = 30.0,
+) -> dict[int, str]:
+    started = time.monotonic()
+    last = started
+    result: dict[int, str] = {}
+    total = len(indices)
+    for offset, index in enumerate(indices, start=1):
+        result[index] = _source_key_for_index(dataset, int(index), mode=mode)
+        now = time.monotonic()
+        if now - last >= progress_interval_sec:
+            rate = offset / max(now - started, 1e-9)
+            print(
+                f"source_leakage_scan split={label} done={offset}/{total} "
+                f"elapsed={now - started:.1f}s rate={rate:.1f}/s",
+                flush=True,
+            )
+            last = now
+    return result
+
+
+def _test_seen_unseen_split(
+    dataset: Any,
+    *,
+    train_indices: list[int],
+    test_indices: list[int],
+    source_group_mode: str,
+) -> tuple[list[int], list[int], dict[str, Any]]:
+    train_key_by_index = _source_keys_for_indices(
+        dataset,
+        train_indices,
+        mode=source_group_mode,
+        label="train",
+    )
+    test_key_by_index = _source_keys_for_indices(
+        dataset,
+        test_indices,
+        mode=source_group_mode,
+        label="test",
+    )
+    train_keys = set(train_key_by_index.values())
+    test_keys = set(test_key_by_index.values())
+    seen_indices = [index for index in test_indices if test_key_by_index[index] in train_keys]
+    unseen_indices = [index for index in test_indices if test_key_by_index[index] not in train_keys]
+    seen_keys = {test_key_by_index[index] for index in seen_indices}
+    unseen_keys = {test_key_by_index[index] for index in unseen_indices}
+    leaked_source_keys = test_keys & train_keys
+    summary = {
+        "source_group_mode": source_group_mode,
+        "train_graphs": len(train_indices),
+        "test_graphs": len(test_indices),
+        "train_sources": len(train_keys),
+        "test_sources": len(test_keys),
+        "test_seen_train_source_graphs": len(seen_indices),
+        "test_unseen_train_source_graphs": len(unseen_indices),
+        "test_seen_train_source_fraction": len(seen_indices) / max(len(test_indices), 1),
+        "test_unseen_train_source_fraction": len(unseen_indices) / max(len(test_indices), 1),
+        "test_sources_seen_in_train": len(seen_keys),
+        "test_sources_unseen_in_train": len(unseen_keys),
+        "test_source_leakage_fraction": len(leaked_source_keys) / max(len(test_keys), 1),
+        "example_seen_sources": sorted(seen_keys)[:20],
+        "example_unseen_sources": sorted(unseen_keys)[:20],
+    }
+    return seen_indices, unseen_indices, summary
+
+
+def _rows_for_indices(reference_indices: list[int], subset_indices: list[int]) -> np.ndarray:
+    subset = set(int(index) for index in subset_indices)
+    return np.asarray([int(index) in subset for index in sorted(reference_indices)], dtype=bool)
+
+
+def _slice_optional(values: np.ndarray | None, mask: np.ndarray) -> np.ndarray | None:
+    if values is None:
+        return None
+    return values[mask]
+
+
+def _prediction_metric_bundle(
+    *,
+    training_task: str,
+    pred: np.ndarray,
+    target: np.ndarray,
+    mass_logit: np.ndarray | None,
+    mass_label: np.ndarray | None,
+    quality: np.ndarray | None,
+    predicted_error: np.ndarray | None,
+    mass_threshold: float,
+    tuned_mass_threshold: float,
+    energy_bin_width: float,
+    min_bin_count: int,
+) -> dict[str, Any]:
+    del quality, predicted_error
+    if pred.shape[0] == 0:
+        return {
+            "n_graphs": 0,
+            "reconstruction": None,
+            "mass": None,
+            "mass_tuned": None,
+        }
+    payload: dict[str, Any] = {
+        "n_graphs": int(pred.shape[0]),
+        "reconstruction": _reconstruction_metrics_for_task(
+            training_task,
+            pred,
+            target,
+            mass_label,
+            energy_bin_width=energy_bin_width,
+            min_bin_count=min_bin_count,
+        ),
+        "mass": None,
+        "mass_tuned": None,
+    }
+    if mass_logit is not None and mass_label is not None and len(mass_logit) > 0:
+        payload["mass"] = binary_classification_metrics(mass_logit, mass_label, threshold=mass_threshold)
+        payload["mass_tuned"] = binary_classification_metrics(
+            mass_logit,
+            mass_label,
+            threshold=tuned_mass_threshold,
+        )
+    return payload
+
+
+def _source_overlap_metrics_from_test_predictions(
+    *,
+    test_indices: list[int],
+    seen_indices: list[int],
+    unseen_indices: list[int],
+    training_task: str,
+    pred_test: np.ndarray,
+    target_test: np.ndarray,
+    mass_logit_test: np.ndarray | None,
+    mass_label_test: np.ndarray | None,
+    quality_test: np.ndarray | None,
+    predicted_error_test: np.ndarray | None,
+    mass_threshold: float,
+    tuned_mass_threshold: float,
+    energy_bin_width: float,
+    min_bin_count: int,
+) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for name, indices in [
+        ("test_seen_train_source", seen_indices),
+        ("test_unseen_train_source", unseen_indices),
+    ]:
+        mask = _rows_for_indices(test_indices, indices)
+        output[name] = _prediction_metric_bundle(
+            training_task=training_task,
+            pred=pred_test[mask],
+            target=target_test[mask],
+            mass_logit=_slice_optional(mass_logit_test, mask),
+            mass_label=_slice_optional(mass_label_test, mask),
+            quality=_slice_optional(quality_test, mask),
+            predicted_error=_slice_optional(predicted_error_test, mask),
+            mass_threshold=mass_threshold,
+            tuned_mass_threshold=tuned_mass_threshold,
+            energy_bin_width=energy_bin_width,
+            min_bin_count=min_bin_count,
+        )
+    return output
+
+
+def _write_source_overlap_outputs(
+    *,
+    diagnostics_dir: Path,
+    summary: dict[str, Any],
+    metrics: dict[str, Any],
+) -> None:
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = diagnostics_dir / "source_leakage_summary.json"
+    metrics_path = diagnostics_dir / "source_leakage_metrics.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True))
+    print(f"source leakage summary: {summary_path}", flush=True)
+    print(f"source leakage metrics: {metrics_path}", flush=True)
 
 
 def _is_hetero_checkpoint(ckpt: dict[str, Any]) -> bool:
@@ -431,6 +711,17 @@ def main() -> None:
     parser.add_argument("--collate-threads", type=int, default=1)
     parser.add_argument("--diagnostic-energy-bin-width", type=float, default=0.1)
     parser.add_argument("--diagnostic-min-bin-count", type=int, default=20)
+    parser.add_argument(
+        "--split-test-by-train-source-group",
+        action="store_true",
+        help="testをtrainと同じsource groupを持つeventと、持たないeventに分けて追加評価する",
+    )
+    parser.add_argument(
+        "--source-group-mode",
+        choices=["dat", "raw"],
+        default="dat",
+        help="leakage判定に使うsource group。datはDAT??????_gea_trg_XXXをDAT??????へ畳む",
+    )
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args()
 
@@ -508,6 +799,45 @@ def main() -> None:
             if mass_logit_test is not None and mass_label_test is not None
             else None
         )
+        source_overlap_metrics = None
+        if args.split_test_by_train_source_group:
+            graph_paths = _expand_h5_graph_paths(args.graphs)
+            if not graph_paths:
+                raise SystemExit("--split-test-by-train-source-group requires --graphs even when using prediction cache")
+            lookup = _SourcePathLookup(graph_paths)
+            try:
+                train_indices = _index_list(ckpt.get("train_indices"), name="train_indices")
+                test_indices = _index_list(ckpt.get("test_indices"), name="test_indices")
+                seen_indices, unseen_indices, source_overlap_summary = _test_seen_unseen_split(
+                    lookup,
+                    train_indices=train_indices,
+                    test_indices=test_indices,
+                    source_group_mode=args.source_group_mode,
+                )
+            finally:
+                lookup.close()
+            source_overlap_metrics = _source_overlap_metrics_from_test_predictions(
+                test_indices=test_indices,
+                seen_indices=seen_indices,
+                unseen_indices=unseen_indices,
+                training_task=training_task,
+                pred_test=pred_test,
+                target_test=target_test,
+                mass_logit_test=mass_logit_test,
+                mass_label_test=mass_label_test,
+                quality_test=quality_test,
+                predicted_error_test=predicted_error_test,
+                mass_threshold=mass_threshold,
+                tuned_mass_threshold=tuned_mass_threshold,
+                energy_bin_width=float(runtime.get("energy_bias_bin_width", args.diagnostic_energy_bin_width)),
+                min_bin_count=int(runtime.get("energy_bias_min_bin_count", args.diagnostic_min_bin_count)),
+            )
+            _write_source_overlap_outputs(
+                diagnostics_dir=_default_diagnostics_dir(output_path),
+                summary=source_overlap_summary,
+                metrics=source_overlap_metrics,
+            )
+            print("source leakage metrics:", json.dumps(source_overlap_metrics, sort_keys=True), flush=True)
         diagnostics = save_training_diagnostics(
             output_path,
             history=ckpt["history"],
@@ -538,6 +868,8 @@ def main() -> None:
             "validation_mass_tuned": val_mass_tuned_metrics,
             "test_mass_tuned": test_mass_tuned_metrics,
         }
+        if source_overlap_metrics is not None:
+            metrics["source_overlap_test"] = source_overlap_metrics
         if output_path == checkpoint_path:
             _update_metrics_json(checkpoint_path, diagnostics, metrics, elapsed)
         _print_diagnostics_paths(diagnostics)
@@ -552,6 +884,8 @@ def main() -> None:
         )
 
     if _is_hetero_checkpoint(ckpt):
+        if args.split_test_by_train_source_group:
+            raise SystemExit("--split-test-by-train-source-group currently supports homogeneous checkpoints")
         _run_hetero_reprediction(
             ckpt=ckpt,
             checkpoint_path=checkpoint_path,
@@ -575,8 +909,9 @@ def main() -> None:
         load_detector_lids=load_detector_lids,
     )
     try:
-        val_indices = list(ckpt["val_indices"])
-        test_indices = list(ckpt["test_indices"])
+        train_indices = _index_list(ckpt.get("train_indices"), name="train_indices")
+        val_indices = _index_list(ckpt.get("val_indices"), name="val_indices")
+        test_indices = _index_list(ckpt.get("test_indices"), name="test_indices")
         scalers = {name: StandardScaler.from_dict(data) for name, data in ckpt["scalers"].items()}
         device = resolve_device(args.device)
         num_workers = _auto_workers(len(dataset), int(args.num_workers))
@@ -715,6 +1050,36 @@ def main() -> None:
             print("test mass metrics:", json.dumps(test_mass_metrics, sort_keys=True), flush=True)
         if test_mass_tuned_metrics is not None:
             print("test mass tuned metrics:", json.dumps(test_mass_tuned_metrics, sort_keys=True), flush=True)
+        source_overlap_metrics = None
+        if args.split_test_by_train_source_group:
+            seen_indices, unseen_indices, source_overlap_summary = _test_seen_unseen_split(
+                dataset,
+                train_indices=train_indices,
+                test_indices=test_indices,
+                source_group_mode=args.source_group_mode,
+            )
+            source_overlap_metrics = _source_overlap_metrics_from_test_predictions(
+                test_indices=test_indices,
+                seen_indices=seen_indices,
+                unseen_indices=unseen_indices,
+                training_task=training_task,
+                pred_test=pred_test,
+                target_test=target_test,
+                mass_logit_test=mass_logit_test,
+                mass_label_test=mass_label_test,
+                quality_test=quality_test,
+                predicted_error_test=predicted_error_test,
+                mass_threshold=mass_threshold,
+                tuned_mass_threshold=tuned_mass_threshold,
+                energy_bin_width=float(runtime.get("energy_bias_bin_width", args.diagnostic_energy_bin_width)),
+                min_bin_count=int(runtime.get("energy_bias_min_bin_count", args.diagnostic_min_bin_count)),
+            )
+            _write_source_overlap_outputs(
+                diagnostics_dir=_default_diagnostics_dir(output_path),
+                summary=source_overlap_summary,
+                metrics=source_overlap_metrics,
+            )
+            print("source leakage metrics:", json.dumps(source_overlap_metrics, sort_keys=True), flush=True)
         if not args.no_prediction_cache:
             _save_prediction_cache(
                 cache_path,
@@ -763,6 +1128,8 @@ def main() -> None:
             "validation_mass_tuned": val_mass_tuned_metrics,
             "test_mass_tuned": test_mass_tuned_metrics,
         }
+        if source_overlap_metrics is not None:
+            metrics["source_overlap_test"] = source_overlap_metrics
         if output_path == checkpoint_path:
             _update_metrics_json(checkpoint_path, diagnostics, metrics, elapsed)
         _print_diagnostics_paths(diagnostics)
