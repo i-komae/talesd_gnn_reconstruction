@@ -4704,6 +4704,7 @@ def _cmd_train(args: argparse.Namespace) -> None:
         best_diagnostic_max_graphs=args.best_diagnostic_max_graphs,
         diagnostic_energy_bin_width=args.diagnostic_energy_bin_width,
         diagnostic_min_bin_count=args.diagnostic_min_bin_count,
+        homogeneous_schema=args.homogeneous_schema,
     )
     print(f"checkpoint: {result['checkpoint']}")
     if result.get("metrics_json"):
@@ -5458,6 +5459,12 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--best-diagnostic-max-graphs", type=int, default=20000, help="最良更新時の診断に使うvalidation graph数の上限。0ならvalidation全件")
     train.add_argument("--diagnostic-energy-bin-width", type=float, default=0.1, help="診断図で使うtrue log10(E/eV) bin幅")
     train.add_argument("--diagnostic-min-bin-count", type=int, default=20, help="energy bin別診断に使う最小event数")
+    train.add_argument(
+        "--homogeneous-schema",
+        choices=["current", "legacy_flat50000"],
+        default="current",
+        help="homogeneous HDF5 schema。旧flat50000再現runでは legacy_flat50000 を明示し、列/target/waveformが合わなければ学習前に停止する",
+    )
     train.set_defaults(func=_cmd_train)
 
     train_hetero = sub.add_parser(

@@ -21,6 +21,16 @@ if [[ -z "${HETERO_GRAPH_INPUT}" ]]; then
 fi
 
 PULSE_MASK="${PULSE_MASK:-ising_kept}"
+HOMOGENEOUS_SCHEMA="${HOMOGENEOUS_SCHEMA:-current}"
+if [[ "${HOMOGENEOUS_SCHEMA}" == "legacy_flat50000" ]]; then
+  cat >&2 <<'EOF'
+ERROR: HOMOGENEOUS_SCHEMA=legacy_flat50000 is not supported by hetero-to-homogeneous conversion.
+The hetero H5 path has already changed pulse selection, pulse feature columns, target dimensionality,
+and waveform mask/gapped-channel semantics. Reproducing the flat50000 best run requires a direct
+legacy homogeneous export from DST, not conversion from hetero H5.
+EOF
+  exit 2
+fi
 CONVERT_RUN_NAME="${CONVERT_RUN_NAME:-hetero_to_homogeneous_${PULSE_MASK}_${RUN_ID}}"
 CONVERT_RUN_DIR="${CONVERT_RUN_DIR:-${OUTPUT_ROOT}/runs/${CONVERT_RUN_NAME}}"
 HOMOGENEOUS_GRAPH_OUTPUT="${HOMOGENEOUS_GRAPH_OUTPUT:-${GRAPH_ROOT}/${CONVERT_RUN_NAME}}"
@@ -97,6 +107,7 @@ echo "run_name=${CONVERT_RUN_NAME}"
 echo "hetero_graph_input=${HETERO_GRAPH_INPUT}"
 echo "homogeneous_graph_output=${HOMOGENEOUS_GRAPH_OUTPUT}"
 echo "pulse_mask=${PULSE_MASK}"
+echo "homogeneous_schema=${HOMOGENEOUS_SCHEMA}"
 echo "shard_size=${CONVERT_SHARD_SIZE}"
 echo "input_shards=${CONVERT_INPUT_SHARDS}"
 echo "workers=${CONVERT_WORKERS}"
@@ -134,6 +145,7 @@ convert_job_log: ${CONVERT_LOG_DIR}/${CONVERT_RUN_NAME}.job.log
 hetero_graph_input: ${HETERO_GRAPH_INPUT}
 homogeneous_graph_output: ${HOMOGENEOUS_GRAPH_OUTPUT}
 pulse_mask: ${PULSE_MASK}
+homogeneous_schema: ${HOMOGENEOUS_SCHEMA}
 convert_workers: ${CONVERT_WORKERS}
 convert_sbatch_dependency: ${CONVERT_SBATCH_DEPENDENCY:-none}
 submit_training: ${SUBMIT_TRAINING}
@@ -193,6 +205,7 @@ DEVICE="${DEVICE:-cuda}" \
 SOURCE_FRACTION_MODE="${SOURCE_FRACTION_MODE:-explicit}" \
 SOURCE_VAL_FRACTION="${SOURCE_VAL_FRACTION:-0.10}" \
 SOURCE_TEST_FRACTION="${SOURCE_TEST_FRACTION:-0.20}" \
+HOMOGENEOUS_SCHEMA="${HOMOGENEOUS_SCHEMA}" \
 RUN_UV_SYNC="${RUN_UV_SYNC}" \
 "${SCRIPT_DIR}/submit_server_reco_mass_training.sh"
 

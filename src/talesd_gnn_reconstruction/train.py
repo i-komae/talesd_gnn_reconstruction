@@ -26,6 +26,13 @@ from .metrics import (
     energy_particle_bias_metrics,
     reconstruction_metrics,
 )
+from .homogeneous_schema import (
+    LEGACY_FLAT50000_NODE_FEATURE_COLUMNS,
+    LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS,
+    LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS,
+    homogeneous_dataset_kwargs_for_schema,
+    normalize_homogeneous_schema,
+)
 from .progress import progress as _progress
 from .progress import progress_bar as _progress_bar
 from .progress import progress_interval_seconds as _progress_interval_seconds
@@ -1592,6 +1599,7 @@ def train_model(
     best_diagnostic_max_graphs: int = 20000,
     diagnostic_energy_bin_width: float = 0.1,
     diagnostic_min_bin_count: int = 20,
+    homogeneous_schema: str = "current",
     epoch_callback: Callable[[list[dict[str, Any]], Path], None] | None = None,
 ) -> dict[str, Any]:
     stage_started = time.perf_counter()
@@ -1668,6 +1676,8 @@ def train_model(
         _progress_write("stage=skip latex_check save_diagnostics=0")
     stage_started = time.perf_counter()
     _progress_write("stage=start dataset_init")
+    homogeneous_schema = normalize_homogeneous_schema(homogeneous_schema)
+    dataset_kwargs = homogeneous_dataset_kwargs_for_schema(homogeneous_schema)
     dataset = H5GraphDataset(
         graphs_path,
         require_target=True,
@@ -1680,11 +1690,13 @@ def train_model(
         max_graphs=max_graphs,
         particle_filter=particle_filter,
         show_progress=show_progress,
+        **dataset_kwargs,
     )
     stage_seconds["dataset_init"] = time.perf_counter() - stage_started
     _progress_write(
         f"stage=done dataset_init graphs={len(dataset)} shards={len(dataset.paths)} "
-        f"h5_max_open_files={dataset.max_open_files} elapsed={stage_seconds['dataset_init']:.1f}s"
+        f"h5_max_open_files={dataset.max_open_files} homogeneous_schema={homogeneous_schema} "
+        f"elapsed={stage_seconds['dataset_init']:.1f}s"
     )
     if len(dataset) < 2:
         raise ValueError("training needs at least two graphs with MC targets")
@@ -1759,6 +1771,36 @@ def train_model(
     first = dataset[train_indices[0]]
     graph_target_dim = int(first["target"].shape[0])
     model_target_dim = 0 if training_task == "mass" else graph_target_dim
+    if homogeneous_schema == "legacy_flat50000":
+        node_dim = int(first["node_features"].shape[1])
+        pulse_feature_dim = int(first["pulse_features"].shape[1])
+        waveform_channels = (
+            int(first["waveform_features"].shape[1])
+            if first.get("waveform_features") is not None and first["waveform_features"].ndim == 3
+            else 0
+        )
+        expected = {
+            "node_dim": len(LEGACY_FLAT50000_NODE_FEATURE_COLUMNS),
+            "pulse_feature_dim": len(LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS),
+            "target_dim": 7,
+            "waveform_channels": len(LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS),
+        }
+        actual = {
+            "node_dim": node_dim,
+            "pulse_feature_dim": pulse_feature_dim,
+            "target_dim": graph_target_dim,
+            "waveform_channels": waveform_channels,
+        }
+        if actual != expected:
+            raise ValueError(
+                "legacy_flat50000 homogeneous schema preflight failed: "
+                f"actual={actual!r}, expected={expected!r}. "
+                "This graph cannot be used as a same-condition reproduction of the flat50000 best run."
+            )
+        _progress_write(
+            "homogeneous_schema_preflight "
+            "mode=legacy_flat50000 node_dim=27 pulse_dim=6 target_dim=7 waveform_channels=4"
+        )
     model_kwargs = {
         "node_dim": first["node_features"].shape[1],
         "edge_dim": first["edge_features"].shape[1],
@@ -1991,6 +2033,7 @@ def train_model(
             "prefetch_factor": prefetch_factor,
             "persistent_workers": persistent_workers,
             "h5_max_open_files": dataset.max_open_files,
+            "homogeneous_schema": homogeneous_schema,
             "pin_memory": pin_memory,
             "collate_backend": collate_backend,
             "requested_collate_backend": requested_collate_backend,
@@ -2084,9 +2127,11 @@ def train_model(
         tuned_mass_threshold: float | None = None,
         checkpoint_complete: bool = False,
     ) -> dict[str, Any]:
+        model_config = dict(model.config)
+        model_config["homogeneous_schema"] = homogeneous_schema
         return {
             "model_state": model_state,
-            "model_config": model.config,
+            "model_config": model_config,
             "scalers": {name: scaler.to_dict() for name, scaler in scalers.items()},
             "history": history,
             "metrics": empty_metrics if metrics is None else metrics,

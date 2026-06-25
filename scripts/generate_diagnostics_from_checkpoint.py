@@ -22,6 +22,14 @@ from talesd_gnn_reconstruction.metrics import (
     energy_particle_bias_metrics,
     reconstruction_metrics,
 )
+from talesd_gnn_reconstruction.homogeneous_schema import (
+    LEGACY_FLAT50000_DROPPED_NODE_FEATURE_COLUMNS as _LEGACY_FLAT50000_DROPPED_NODE_FEATURE_COLUMNS,
+    LEGACY_FLAT50000_NODE_FEATURE_COLUMNS as _LEGACY_FLAT50000_NODE_FEATURE_COLUMNS,
+    LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS as _LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS,
+    LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS as _LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS,
+    LEGACY_FLAT50000_WAVEFORM_SCHEMA as _LEGACY_FLAT50000_WAVEFORM_SCHEMA,
+    homogeneous_dataset_kwargs_from_checkpoint,
+)
 from talesd_gnn_reconstruction.model import build_model_from_config
 from talesd_gnn_reconstruction.train import (
     _make_graph_loader,
@@ -33,56 +41,6 @@ from talesd_gnn_reconstruction.train import (
 
 
 _HETERO_ARCHITECTURES = {"minimal_hetero", "hetero_attention"}
-
-_LEGACY_FLAT50000_NODE_FEATURE_COLUMNS = [
-    "x_km",
-    "y_km",
-    "z_km",
-    "nearest_detector_distance_km",
-    "mean3_detector_distance_km",
-    "neighbor_count_1p5km",
-    "local_detector_density_1p5km2",
-    "dx_from_bary_km",
-    "dy_from_bary_km",
-    "dz_from_bary_km",
-    "r_from_bary_km",
-    "first_arrival_usec_rel",
-    "trig_usec_rel",
-    "log10_first_rho",
-    "sqrt_first_rho",
-    "log10_max_rho",
-    "n_pulses",
-    "pulse_time_span_usec",
-    "n_wf_segments",
-    "wf_length_usec",
-    "log10_fadc_peak",
-    "upper_ped",
-    "lower_ped",
-    "upper_ped_sigma",
-    "lower_ped_sigma",
-    "detector_pulse_order",
-    "is_first_detector_pulse",
-]
-_LEGACY_FLAT50000_DROPPED_NODE_FEATURE_COLUMNS = (
-    "log10_total_rho",
-    "sqrt_total_rho",
-)
-_LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS = [
-    "node_index",
-    "arrival_usec_rel",
-    "dt_from_first_usec",
-    "log10_rho",
-    "sqrt_rho",
-    "pulse_order",
-    "is_first_pulse",
-]
-_LEGACY_FLAT50000_WAVEFORM_SCHEMA = "rise_aligned_raw_plus_accepted_gapped_v1"
-_LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS = [
-    "upper_raw_window_vem",
-    "lower_raw_window_vem",
-    "upper_accepted_gapped_vem",
-    "lower_accepted_gapped_vem",
-]
 
 
 class _SourcePathLookup:
@@ -409,14 +367,8 @@ def _homogeneous_dataset_kwargs_from_checkpoint(ckpt: dict[str, Any]) -> dict[st
     waveform_schema = str(model_config.get("waveform_schema", "")).strip()
     waveform_channels = int(model_config.get("waveform_channels", 0) or 0)
 
-    legacy_matches = (
-        node_dim == len(_LEGACY_FLAT50000_NODE_FEATURE_COLUMNS)
-        and pulse_dim == len(_LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS) - 1
-        and target_dim == 7
-        and (not waveform_schema or waveform_schema == _LEGACY_FLAT50000_WAVEFORM_SCHEMA)
-        and waveform_channels == len(_LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS)
-    )
-    if not legacy_matches:
+    schema, kwargs = homogeneous_dataset_kwargs_from_checkpoint(ckpt)
+    if schema != "legacy_flat50000":
         print(
             "homogeneous_diagnostics_schema mode=current "
             f"node_dim={node_dim} pulse_dim={pulse_dim} target_dim={target_dim} "
@@ -432,14 +384,7 @@ def _homogeneous_dataset_kwargs_from_checkpoint(ckpt: dict[str, Any]) -> dict[st
         f"waveform_channels={len(_LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS)}",
         flush=True,
     )
-    return {
-        "expected_node_feature_columns": _LEGACY_FLAT50000_NODE_FEATURE_COLUMNS,
-        "dropped_node_feature_columns": _LEGACY_FLAT50000_DROPPED_NODE_FEATURE_COLUMNS,
-        "expected_pulse_feature_columns": _LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS,
-        "dropped_pulse_feature_columns": (),
-        "allowed_waveform_schemas": (_LEGACY_FLAT50000_WAVEFORM_SCHEMA,),
-        "expected_waveform_feature_channels": _LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS,
-    }
+    return kwargs
 
 
 def _reconstruction_metrics_for_task(
