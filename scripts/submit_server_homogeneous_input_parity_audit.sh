@@ -16,7 +16,7 @@ DRY_RUN="${DRY_RUN:-0}"
 
 REFERENCE_GRAPH="${REFERENCE_GRAPH:-/dicos_ui_home/ikomae/work/gnn/graphs/flat50000}"
 CANDIDATE_GRAPH="${CANDIDATE_GRAPH:-/dicos_ui_home/ikomae/work/gnn/graphs/hetero_to_homogeneous_ising_kept_homogeneous_from_allsrc_samescale_sourcebalanced_50000_fix_20260624_042552}"
-MATCH_KEY="${MATCH_KEY:-source_group_index}"
+MATCH_KEY="${MATCH_KEY:-event_id}"
 SAMPLE_SIZE="${SAMPLE_SIZE:-1000}"
 SEED="${SEED:-12345}"
 SKIP_WAVEFORMS="${SKIP_WAVEFORMS:-0}"
