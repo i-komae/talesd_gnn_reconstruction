@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
 RUN_ID="${RUN_ID:-input_parity_$(date +%Y%m%d_%H%M%S)}"
-PARTITION="${PARTITION:-edr1-al9}"
+PARTITION="${PARTITION:-edr1-al9_large}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-4}"
 MEM="${MEM:-64G}"
 TIME_LIMIT="${TIME_LIMIT:-04:00:00}"
