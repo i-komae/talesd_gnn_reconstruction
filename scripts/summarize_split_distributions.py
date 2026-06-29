@@ -19,6 +19,8 @@ from talesd_gnn_reconstruction.hetero_graph_io import EDGE_RELATIONS
 from talesd_gnn_reconstruction.hetero_graph_io import H5FlatHeteroGraphDataset
 from talesd_gnn_reconstruction.hetero_graph_io import H5HeteroGraphDataset
 from talesd_gnn_reconstruction.hetero_graph_io import hetero_dataset_class_for_paths
+from talesd_gnn_reconstruction.homogeneous_schema import homogeneous_dataset_kwargs_for_schema
+from talesd_gnn_reconstruction.homogeneous_schema import normalize_homogeneous_schema
 from talesd_gnn_reconstruction.metrics import direction_columns_for_dim, direction_to_angles
 from talesd_gnn_reconstruction.progress import progress
 from talesd_gnn_reconstruction.progress import write as progress_write
@@ -644,9 +646,12 @@ def main() -> None:
     with h5py.File(paths[0], "r") as handle:
         first_format = str(handle.attrs.get("format", ""))
         is_hetero = first_format in {HETERO_FORMAT_NAME, HETERO_FLAT_FORMAT_NAME}
+        homogeneous_schema = normalize_homogeneous_schema(
+            str(handle.attrs.get("homogeneous_schema", "current"))
+        )
     progress_write(
         "stage=done split_distribution_summary detect_format "
-        f"hetero={int(is_hetero)} format={first_format}"
+        f"hetero={int(is_hetero)} format={first_format} homogeneous_schema={homogeneous_schema}"
     )
     progress_write("stage=start split_distribution_summary dataset_init")
     if is_hetero:
@@ -658,6 +663,7 @@ def main() -> None:
             load_attrs=False,
         )
     else:
+        homogeneous_kwargs = homogeneous_dataset_kwargs_for_schema(homogeneous_schema)
         dataset = H5GraphDataset(
             paths,
             require_target=True,
@@ -666,6 +672,7 @@ def main() -> None:
             load_attrs=False,
             load_particle_label=True,
             show_progress=not args.no_progress,
+            **homogeneous_kwargs,
         )
     progress_write(
         "stage=done split_distribution_summary dataset_init "

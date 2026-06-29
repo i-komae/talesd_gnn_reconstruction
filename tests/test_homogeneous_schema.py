@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -25,6 +26,7 @@ from talesd_gnn_reconstruction.homogeneous_schema import (
     legacy_flat50000_checkpoint_matches,
     normalize_homogeneous_schema,
 )
+from scripts import summarize_split_distributions
 
 
 class HomogeneousSchemaTest(unittest.TestCase):
@@ -181,6 +183,56 @@ class HomogeneousSchemaTest(unittest.TestCase):
             self.assertEqual(sample["node_features"].shape[1], len(LEGACY_FLAT50000_NODE_FEATURE_COLUMNS))
             self.assertEqual(sample["pulse_features"].shape[1], len(LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS))
             self.assertEqual(sample["target"].shape[0], len(LEGACY_FLAT50000_TARGET_COLUMNS))
+
+    def test_split_summary_auto_detects_legacy_flat50000_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            h5_path = tmp_path / "legacy.h5"
+            output_path = tmp_path / "summary.json"
+            with create_graph_file(h5_path, config={"homogeneous_schema": "legacy_flat50000"}) as handle:
+                for index in range(30):
+                    graph = GraphEvent(
+                        event_id=f"event{index}",
+                        node_features=np.zeros((4, len(LEGACY_FLAT50000_NODE_FEATURE_COLUMNS)), dtype=np.float32),
+                        node_positions_km=np.zeros((4, 3), dtype=np.float32),
+                        node_lids=np.arange(4, dtype=np.int64),
+                        edge_index=np.zeros((2, 0), dtype=np.int64),
+                        edge_features=np.zeros((0, len(LEGACY_FLAT50000_EDGE_FEATURE_COLUMNS)), dtype=np.float32),
+                        pulse_features=np.zeros((4, len(LEGACY_FLAT50000_PULSE_FEATURE_COLUMNS)), dtype=np.float32),
+                        waveform_features=np.zeros(
+                            (4, len(LEGACY_FLAT50000_WAVEFORM_FEATURE_CHANNELS), 128),
+                            dtype=np.float32,
+                        ),
+                        target=np.array([18.0, 0.1, 0.2, 0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                        particle_label=float(index % 2),
+                        metadata={
+                            "source_path": f"/mc/proton/DAT{index:04d}16_gea_trg_001.dst.gz",
+                            "source_index": index,
+                        },
+                    )
+                    write_graph(handle, index, graph)
+
+            argv = [
+                "summarize_split_distributions.py",
+                str(h5_path),
+                "-o",
+                str(output_path),
+                "--val-fraction",
+                "0.2",
+                "--test-fraction",
+                "0.2",
+                "--source-val-fraction",
+                "0.2",
+                "--source-test-fraction",
+                "0.2",
+                "--split-workers",
+                "0",
+                "--no-progress",
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                summarize_split_distributions.main()
+
+            self.assertTrue(output_path.exists())
 
 
 if __name__ == "__main__":
